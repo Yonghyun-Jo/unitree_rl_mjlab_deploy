@@ -9,7 +9,10 @@ else()
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -O3 -DNDEBUG -fPIC")
 endif()
 
-list(APPEND CMAKE_PREFIX_PATH "/opt/unitree_robotics/lib/cmake")
+# Local isolated dependency prefix (see deploy/robots/g1/CMakeLists.txt). Avoids /opt + sudo.
+get_filename_component(DEPS_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../.deps" ABSOLUTE)
+list(APPEND CMAKE_PREFIX_PATH "${DEPS_PREFIX}")
+link_directories(${DEPS_PREFIX}/lib)
 find_package(unitree_sdk2 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS program_options)
 
@@ -43,4 +46,7 @@ link_libraries(
 
 add_executable(unitree_mujoco ${SIM_SRC} src/main.cc)
 
-add_executable(jstest src/joystick/jstest.cc src/joystick/joystick.cc)
+# jstest: standalone joystick diagnostic. Disabled — its xKeySwitchUnion field names
+# (right/down/left/value) don't match the bundled unitree_sdk2 version. Not needed for
+# sim2sim (the simulator is unitree_mujoco). Re-enable only if the SDK struct matches.
+# add_executable(jstest src/joystick/jstest.cc src/joystick/joystick.cc)

@@ -2,9 +2,66 @@
 #include "unitree_articulation.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
+#include <algorithm>   // std::clamp
+#include <string>
+#include <cstdio>      // printf (base_vel command readout)
 
 static Eigen::Quaternionf init_quat;
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion = nullptr;
+
+// ===== Masked-3mode student (mjlab_g1_motion stage2_masked) =====
+// cmd_mode in {1,2,3}: 1=full-auto(0,0) 2=upper-teleop(1,0) 3=full-teleop(1,1).
+// mask_upper = cmd_mode>=2 (upper joints/anchor tracked); mask_lower = cmd_mode>=3 (lower tracked).
+// N_LOWER=12 (both legs). Default 1 = full-auto locomotion: fully observable on hardware
+// (no global position needed), the safe deploy default. mode3 needs global position -> sim only.
+static int g_cmd_mode = 1;
+static constexpr int G1_N_LOWER = 12;
+static inline bool g_mask_upper() { return g_cmd_mode >= 2; }
+static inline bool g_mask_lower() { return g_cmd_mode >= 3; }
+
+// Accumulated keyboard velocity command (walker_teleop.py style: each keypress ±STEP, space=reset).
+// Coexists with the joystick stick (base_vel_command sums them). Edge-triggered so one tap = one step.
+static float g_kb_vx = 0.0f, g_kb_vy = 0.0f, g_kb_wz = 0.0f;
+static std::string g_kb_last = "";
+static constexpr float KB_STEP = 0.1f, KB_MAXV = 1.0f, KB_MAXW = 0.6f;
+
+// Poll joystick d-pad + keyboard for mode switch (1/2/3) and keyboard velocity accumulation.
+// Called every policy step (same thread as obs). Both input modes are always live.
+static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
+{
+    // --- joystick d-pad -> mode (avoids A/B used by FSM transitions) ---
+    if (auto joy = env->robot->data.joystick) {
+        if      (joy->left.on_pressed)  g_cmd_mode = 1;
+        else if (joy->up.on_pressed)    g_cmd_mode = 2;
+        else if (joy->right.on_pressed) g_cmd_mode = 3;
+    }
+    // --- keyboard (edge-triggered: act once per key change) ---
+    if (!FSMState::keyboard) return;
+    std::string k = FSMState::keyboard->key();
+    if (k == g_kb_last) return;
+    g_kb_last = k;
+    if (k.empty()) return;
+    bool vel_changed = false;
+    if      (k == "w") { g_kb_vx = std::clamp(g_kb_vx + KB_STEP, -KB_MAXV, KB_MAXV); vel_changed = true; }  // forward
+    else if (k == "s") { g_kb_vx = std::clamp(g_kb_vx - KB_STEP, -KB_MAXV, KB_MAXV); vel_changed = true; }  // backward
+    else if (k == "a") { g_kb_vy = std::clamp(g_kb_vy + KB_STEP, -KB_MAXV, KB_MAXV); vel_changed = true; }  // strafe left
+    else if (k == "d") { g_kb_vy = std::clamp(g_kb_vy - KB_STEP, -KB_MAXV, KB_MAXV); vel_changed = true; }  // strafe right
+    else if (k == "q") { g_kb_wz = std::clamp(g_kb_wz + KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CCW (반시계)
+    else if (k == "e") { g_kb_wz = std::clamp(g_kb_wz - KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CW  (시계)
+    else if (k == " ") { g_kb_vx = g_kb_vy = g_kb_wz = 0.0f;                          vel_changed = true; }  // stop
+    else if (k == "1") { g_cmd_mode = 1; printf("\r\n[cmd_mode] -> 1 (full-auto)\r\n");      fflush(stdout); }
+    else if (k == "2") { g_cmd_mode = 2; printf("\r\n[cmd_mode] -> 2 (upper-teleop)\r\n");    fflush(stdout); }
+    else if (k == "3") { g_cmd_mode = 3; printf("\r\n[cmd_mode] -> 3 (full-track/sim)\r\n");  fflush(stdout); }
+
+    // Print the base_vel command ONLY when a velocity key changed it (not every frame).
+    // mode3 zeroes base_vel downstream, so show that; modes 1/2 use it as-is.
+    if (vel_changed) {
+        bool active = !g_mask_lower();   // base_vel applied only in modes 1,2
+        printf("\r\n[base_vel cmd] vx=%+.2f  vy=%+.2f  wz=%+.2f   (mode %d%s)\r\n",
+               g_kb_vx, g_kb_vy, g_kb_wz, g_cmd_mode, active ? "" : ", base_vel=0 in mode3");
+        fflush(stdout);
+    }
+}
 
 
 Eigen::Quaternionf robot_quat_w(isaaclab::ManagerBasedRLEnv* env)
@@ -74,6 +131,84 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
     Eigen::Matrix<float, 6, 1> data;
     data << rot(0, 0), rot(0, 1), rot(1, 0), rot(1, 1), rot(2, 0), rot(2, 1);
     return std::vector<float>(data.data(), data.data() + data.size());
+}
+
+// ---- Masked-3mode obs (mirror mjlab_g1_motion g1_mimic_env.calc_masked_*) ----
+
+// q_ref(29)+q̇_ref(29) = 58, lower[:12]/upper[12:] groups zeroed per cmd_mode (mode3 = no mask).
+REGISTER_OBSERVATION(masked_joint_command)
+{
+    auto loader = State_Mimic::motion;
+    auto q  = loader->joint_pos();
+    auto qd = loader->joint_vel();
+    const bool mu = g_mask_upper(), ml = g_mask_lower();
+    std::vector<float> data;
+    data.reserve(q.size() + qd.size());
+    for (const Eigen::VectorXf* v : {&q, &qd}) {
+        for (int i = 0; i < v->size(); ++i) {
+            float x = (*v)[i];
+            if (i <  G1_N_LOWER && !ml) x = 0.0f;   // lower group generated -> 0
+            if (i >= G1_N_LOWER && !mu) x = 0.0f;   // upper group generated -> 0
+            data.push_back(x);
+        }
+    }
+    return data;
+}
+
+// [mask_upper, mask_lower] as float.
+REGISTER_OBSERVATION(command_mask)
+{
+    return std::vector<float>{ g_mask_upper() ? 1.0f : 0.0f, g_mask_lower() ? 1.0f : 0.0f };
+}
+
+// yaw-local base velocity command [vx, vy, wz]. Deploy source = joystick. Zeroed in mode3
+// (mask_lower: legs tracked via q_ref -> velocity implied). ⚠ V_LIN/V_ANG scale must match the
+// training base_vel distribution (clip pelvis velocity, ~m/s) — tune in sim2sim.
+REGISTER_OBSERVATION(base_vel_command)
+{
+    std::vector<float> bv(3, 0.0f);
+    if (!g_mask_lower()) {
+        // keyboard accumulator (g_poll_inputs) + joystick stick — both modes coexist.
+        // ⚠ V_LIN/V_ANG (joystick) and KB_MAXV/W (keyboard) should match the training base_vel
+        // distribution (clip pelvis velocity, ~m/s); tune in sim2sim.
+        float jx = 0.0f, jy = 0.0f, jw = 0.0f;
+        if (auto joy = env->robot->data.joystick) {
+            constexpr float V_LIN = 1.0f, V_ANG = 1.0f;
+            jx =  V_LIN * joy->ly();
+            jy = -V_LIN * joy->lx();
+            jw = -V_ANG * joy->rx();
+        }
+        bv[0] = std::clamp(g_kb_vx + jx, -KB_MAXV, KB_MAXV);
+        bv[1] = std::clamp(g_kb_vy + jy, -KB_MAXV, KB_MAXV);
+        bv[2] = std::clamp(g_kb_wz + jw, -KB_MAXW, KB_MAXW);
+    }
+    return bv;
+}
+
+// pelvis anchor orientation error as Rot6D in robot base frame. mjlab anchor = PELVIS (=root),
+// NOT torso (so no waist-joint offset, unlike motion_anchor_ori_b). Masked to 0 in mode1.
+REGISTER_OBSERVATION(masked_root_ori_b)
+{
+    std::vector<float> out(6, 0.0f);
+    if (g_mask_upper()) {
+        auto loader = State_Mimic::motion;
+        Eigen::Quaternionf real_quat_w = env->robot->data.root_quat_w;   // pelvis (IMU)
+        Eigen::Quaternionf ref_quat_w  = loader->root_quaternion();      // pelvis ref
+        auto rot_ = (init_quat * ref_quat_w).conjugate() * real_quat_w;
+        auto rot  = rot_.toRotationMatrix().transpose();
+        out = { rot(0,0), rot(0,1), rot(1,0), rot(1,1), rot(2,0), rot(2,1) };
+    }
+    return out;
+}
+
+// pelvis anchor POSITION error in robot base frame. x,y kept only in mode3 (mask_lower),
+// z kept in modes 2,3 (mask_upper).
+// ⚠ SIM2REAL OBSERVABILITY: real G1 LowState has NO global position (only IMU orientation).
+// mode1 -> [0,0,0] EXACT (matches training, all generated). mode2 z (height) and mode3 x,y need
+// odometry/height estimation not yet wired -> currently 0 (placeholder). See plan Phase 3b.
+REGISTER_OBSERVATION(masked_root_pos_b)
+{
+    return std::vector<float>(3, 0.0f);
 }
 
 }
@@ -168,6 +303,7 @@ void State_Mimic::enter()
         while (policy_thread_running)
         {
             env->robot->update();
+            g_poll_inputs(env.get());   // joystick d-pad + keyboard (mode 1/2/3 + WASD/QE vel)
             motion->update(env->episode_length * env->step_dt + time_range_[0]);
             env->step();
 

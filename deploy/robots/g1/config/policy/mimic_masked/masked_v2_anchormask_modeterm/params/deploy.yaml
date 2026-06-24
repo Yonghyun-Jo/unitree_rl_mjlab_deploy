@@ -1,0 +1,106 @@
+# mjlab_g1_motion — masked-3mode flow student (stage2_masked), G1 29-DOF.
+# Source checkpoint: logs/rsl_rl/g1_student/2026-06-22_03-14-26_masked_v2_anchormask_modeterm
+# Policy ONNX: obs[1,1650] -> actions[1,29].  obs = 10 terms (165D single frame) x history 10.
+#
+# ⚠ HISTORY LAYOUT = TERM-MAJOR (must match mjlab ObservationManager):
+#   each term keeps its own history(10), flattened oldest->newest, then terms concatenated:
+#   [base_ang_vel x10 | projected_gravity x10 | command x10 | ... | command_mask x10] = 1650.
+#   The C++ ObservationManager produces this when `use_gym_history` is unset/false (default).
+#   DO NOT set use_gym_history: true (that gives frame-major -> wrong order).
+#
+# ⚠ 5 obs terms below need C++ REGISTER_OBSERVATION (not in upstream): masked_joint_command,
+#   masked_root_pos_b, masked_root_ori_b, base_vel_command, command_mask. See Phase 3.
+#   The other 5 (base_ang_vel, projected_gravity, joint_pos_rel, joint_vel_rel, last_action)
+#   already exist in deploy/include/isaaclab/envs/mdp/observations/observations.h.
+
+joint_ids_map: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28]
+step_dt: 0.02
+
+# beyondmimic recipe gains (kp=armature*(2*pi*10)^2, kd=2*zeta*armature*(2*pi*10), zeta=2).
+# JOINT_ORDER: leg_L[0:6] leg_R[6:12] waist[12:15] arm_L[15:22] arm_R[22:29].
+stiffness: [40.179, 99.098, 40.179, 99.098, 28.501, 28.501, 40.179, 99.098, 40.179, 99.098, 28.501, 28.501,
+            40.179, 28.501, 28.501,
+            14.251, 14.251, 14.251, 14.251, 14.251, 16.778, 16.778, 14.251, 14.251, 14.251, 14.251, 14.251, 16.778, 16.778]
+damping: [2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144, 2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
+          2.5579, 1.8144, 1.8144,
+          0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681, 0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681]
+
+# KNEES_BENT_KEYFRAME (NOT unitree's stock mimic default). Also the action offset below.
+default_joint_pos: [-0.312, 0.0, 0.0, 0.669, -0.363, 0.0, -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0, 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+
+commands: {}
+
+actions:
+  JointPositionAction:
+    clip: null
+    joint_names: [.*]
+    # G1_ACTION_SCALE = 0.25 * effort_limit / stiffness (beyondmimic, per-joint).
+    scale: [0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386, 0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
+            0.5475, 0.4386, 0.4386,
+            0.4386, 0.4386, 0.4386, 0.4386, 0.4386, 0.0745, 0.0745, 0.4386, 0.4386, 0.4386, 0.4386, 0.4386, 0.0745, 0.0745]
+    offset: [-0.312, 0.0, 0.0, 0.669, -0.363, 0.0, -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
+             0.0, 0.0, 0.0,
+             0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0, 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+    joint_ids: null
+
+# ── observations: EXACT order + dims must match StudentPolicyCfg (165D single frame) ──
+# all history_length: 10, all scale 1.0 (policy group has no per-term scale in training).
+observations:
+  base_ang_vel:           # 3
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  projected_gravity:      # 3
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  masked_joint_command:   # 58  (q_ref+q̇_ref, lower[:12]/upper[12:] zeroed per cmd_mode)
+    params: {command_name: motion}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,   # q_ref 29
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]   # q̇_ref 29
+    history_length: 10
+  masked_root_pos_b:      # 3  (pelvis anchor pos err in base frame; x,y zeroed ~mode3, z zeroed mode1)
+    params: {command_name: motion}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  masked_root_ori_b:      # 6  (anchor ori Rot6D; all zeroed in mode1)
+    params: {command_name: motion}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  joint_pos_rel:          # 29
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  joint_vel_rel:          # 29
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  last_action:            # 29
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  base_vel_command:       # 3  (yaw-local [vx,vy,wz]; zeroed in mode3; joystick source)
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  command_mask:           # 2  ([mask_upper, mask_lower])
+    params: {}
+    clip: null
+    scale: [1.0, 1.0]
+    history_length: 10

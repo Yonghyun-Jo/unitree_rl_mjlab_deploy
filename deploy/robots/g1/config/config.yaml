@@ -12,10 +12,16 @@ FSM:
       id: 5
       type: Mimic
 
+    Mimic_Masked:        # mjlab_g1_motion stage2_masked flow student (3-mode teleop)
+      id: 6
+      type: Mimic
+
 
   Passive:
-    transitions: 
+    transitions:
       FixStand: LT + up.on_pressed
+    keyboard_transitions:   # gamepad-free: press f to stand
+      FixStand: f
     mode: [
       1,1,1,1,1,1,
       1,1,1,1,1,1,
@@ -33,9 +39,13 @@ FSM:
 
 
   FixStand:
-    transitions: 
+    transitions:
       Passive: LT + B.on_pressed
       Velocity: RT + A.on_pressed
+    keyboard_transitions:   # p=passive(stop)  v=velocity  m=mimic_masked(직행)
+      Passive: p
+      Velocity: v
+      Mimic_Masked: m
 
     kp: [
       100,100,100,150,40,40,
@@ -64,9 +74,13 @@ FSM:
 
 
   Velocity:
-    transitions: 
+    transitions:
       Passive: LT + B.on_pressed
       Mimic_Dance1_subject2: RB + A.on_pressed
+      Mimic_Masked: RB + B.on_pressed
+    keyboard_transitions:   # p=passive(stop)  m=mimic_masked
+      Passive: p
+      Mimic_Masked: m
 
     policy_dir: config/policy/velocity
 
@@ -78,5 +92,19 @@ FSM:
 
     motion_file: config/policy/mimic/dance1_subject2/params/dance1_subject2.npz
     policy_dir: config/policy/mimic/dance1_subject2/
+    time_start: 0.0
+    time_end: 1000.0
+
+
+  Mimic_Masked:        # masked-3mode flow student. keyboard: 1/2/3=mode, WASD/QE=vel, p=stop.
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RT + A.on_pressed
+    keyboard_transitions:   # p=passive(stop)  v=velocity
+      Passive: p
+      Velocity: v
+
+    motion_file: config/policy/mimic_masked/masked_v2_anchormask_modeterm/params/g1_dance1_subject2.npz
+    policy_dir: config/policy/mimic_masked/masked_v2_anchormask_modeterm/
     time_start: 0.0
     time_end: 1000.0

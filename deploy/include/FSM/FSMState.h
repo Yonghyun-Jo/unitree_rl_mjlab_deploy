@@ -44,6 +44,32 @@ public:
             }
         }
 
+        // Keyboard-based transitions (gamepad-free). config: `keyboard_transitions: {Target: key}`.
+        // Edge-triggered (keyboard->on_pressed) so one keypress = one transition. Coexists with the
+        // joystick `transitions` above (both are registered; without a pad the joystick checks stay false).
+        auto kbd_transitions = param::config["FSM"][state_string]["keyboard_transitions"];
+        if(kbd_transitions)
+        {
+            auto kmap = kbd_transitions.as<std::map<std::string, std::string>>();
+            for(auto it = kmap.begin(); it != kmap.end(); ++it)
+            {
+                std::string target_fsm = it->first;
+                if(!FSMStringMap.right.count(target_fsm))
+                {
+                    spdlog::warn("FSM State_'{}' not found in FSMStringMap!", target_fsm);
+                    continue;
+                }
+                int fsm_id = FSMStringMap.right.at(target_fsm);
+                std::string key = it->second;
+                registered_checks.emplace_back(
+                    std::make_pair(
+                        [key]()->bool{ return keyboard && keyboard->on_pressed && keyboard->key() == key; },
+                        fsm_id
+                    )
+                );
+            }
+        }
+
         // register for all states
         registered_checks.emplace_back(
             std::make_pair(

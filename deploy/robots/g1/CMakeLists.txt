@@ -3,6 +3,12 @@ project(g1_controller)
 
 set(CMAKE_CXX_STANDARD 17)
 
+# Local isolated dependency prefix (unitree_sdk2 + bundled cyclonedds, installed via
+# .deps/src/unitree_sdk2 -> make install -DCMAKE_INSTALL_PREFIX). Avoids /usr/local + sudo.
+get_filename_component(DEPS_PREFIX "${CMAKE_CURRENT_LIST_DIR}/../../../.deps" ABSOLUTE)
+link_directories(${DEPS_PREFIX}/lib)
+list(APPEND CMAKE_PREFIX_PATH ${DEPS_PREFIX})
+
 find_package(Boost REQUIRED COMPONENTS program_options)
 find_package(yaml-cpp REQUIRED)
 find_package(ZLIB REQUIRED)
@@ -15,8 +21,8 @@ endif()
 
 include_directories(
   /usr/include/eigen3
-  /usr/local/include/ddscxx
-  /usr/local/include/iceoryx/v2.0.2
+  ${DEPS_PREFIX}/include
+  ${DEPS_PREFIX}/include/ddscxx
   include
   ${ONNXRUNTIME_DIR}/include
   ${PROJECT_SOURCE_DIR}/../../include/
