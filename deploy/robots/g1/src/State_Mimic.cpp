@@ -65,6 +65,12 @@ static void g_poll_gui()
     if (g.period_steps > 0)  g_loco.period_steps = g.period_steps;
     if (g.height_scale > 0)  g_loco.height_scale = g.height_scale;
     g_loco.turn_k = g.turn_k;
+    // verify commands land (printed once per GUI change, not per step): if mode flaps or
+    // base_vel oscillates here, the GUI is fighting the keyboard/joystick.
+    printf("\r\n[gui seq=%u] mode=%d base_vel=[%+.2f %+.2f %+.2f] foot{period=%d hscale=%.2f turnk=%.2f}\r\n",
+           g.seq, g_cmd_mode, g_kb_vx, g_kb_vy, g_kb_wz,
+           g_loco.period_steps, g_loco.height_scale, g_loco.turn_k);
+    fflush(stdout);
 }
 
 // Poll joystick d-pad + keyboard for mode switch (1/2/3) and keyboard velocity accumulation.
@@ -115,10 +121,13 @@ static std::array<float, 3> g_joystick_base_vel(isaaclab::ManagerBasedRLEnv* env
 {
     float jx = 0.0f, jy = 0.0f, jw = 0.0f;
     if (auto joy = env->robot->data.joystick) {
-        constexpr float V_LIN = 1.0f, V_ANG = 1.0f;
-        jx =  V_LIN * joy->ly();
-        jy = -V_LIN * joy->lx();
-        jw = -V_ANG * joy->rx();
+        constexpr float V_LIN = 1.0f, V_ANG = 1.0f, DEAD = 0.08f;
+        // deadzone: a real pad always exists (data.joystick != null); centered-stick drift
+        // would otherwise ADD to the GUI/keyboard command and make the robot judder.
+        auto dz = [](float v, float d) { return std::abs(v) < d ? 0.0f : v; };
+        jx =  V_LIN * dz(joy->ly(), DEAD);
+        jy = -V_LIN * dz(joy->lx(), DEAD);
+        jw = -V_ANG * dz(joy->rx(), DEAD);
     }
     return { std::clamp(g_kb_vx + jx, -KB_MAXV, KB_MAXV),
              std::clamp(g_kb_vy + jy, -KB_MAXV, KB_MAXV),
@@ -363,7 +372,15 @@ void State_Mimic::enter()
                 g_loco.notify_mode_switch(g_cmd_mode);
                 g_prev_cmd_mode = g_cmd_mode;
             }
-            g_loco.update(g_joystick_base_vel(env.get()), g_cmd_mode);
+            // Low-pass the base_vel target (deploy-side; controller unchanged) so abrupt
+            // GUI/keyboard command changes don't jerk the gait. ~A=0.25 -> ~0.2s settle.
+            {
+                static std::array<float, 3> bv_s = {0.f, 0.f, 0.f};
+                const float A = 0.25f;
+                auto bv = g_joystick_base_vel(env.get());
+                for (int i = 0; i < 3; ++i) bv_s[i] += A * (bv[i] - bv_s[i]);
+                g_loco.update(bv_s, g_cmd_mode);
+            }
             motion->update(env->episode_length * env->step_dt + time_range_[0]);
             env->step();
 

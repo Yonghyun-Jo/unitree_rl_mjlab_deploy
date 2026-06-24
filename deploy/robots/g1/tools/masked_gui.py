@@ -54,6 +54,7 @@ def _write() -> None:
 def main() -> None:
     srv = viser.ViserServer()
     g = srv.gui
+    _suppress = [False]   # guard: programmatic slider updates (set_vel) must not re-write
 
     status = g.add_markdown("")
 
@@ -76,6 +77,8 @@ def main() -> None:
         wz = g.add_slider("wz (turn)", -WCAP, WCAP, 0.01, 0.0)
 
         def _v(_=None) -> None:
+            if _suppress[0]:   # programmatic slider update from set_vel -> don't re-write
+                return
             state["vx"], state["vy"], state["wz"] = vx.value, vy.value, wz.value
             _write(); refresh()
         for w in (vx, vy, wz):
@@ -117,8 +120,10 @@ def main() -> None:
     def set_vel(nx, ny, nw) -> None:
         nx = _clamp(nx, -VCAP, VCAP); ny = _clamp(ny, -VCAP, VCAP); nw = _clamp(nw, -WCAP, WCAP)
         state["vx"], state["vy"], state["wz"] = nx, ny, nw
+        _suppress[0] = True                         # slider .value sets below won't re-write
         vx.value, vy.value, wz.value = nx, ny, nw   # reflect in sliders (visual)
-        _write(); refresh()                         # authoritative publish (don't rely on slider cb)
+        _suppress[0] = False
+        _write(); refresh()                         # single authoritative publish
 
     def set_mode(m) -> None:
         state["cmd_mode"] = m
