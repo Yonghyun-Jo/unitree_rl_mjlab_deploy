@@ -19,36 +19,25 @@ If the GUI is not running, keyboard (terminal) + joystick still drive the robot.
 """
 from __future__ import annotations
 
-import struct
-import os
 import time
 
 import viser
 
-SHM_PATH = "/dev/shm/g1_masked_gui"
-MAGIC = 0x6701
-FMT = "<iIifffiff"  # magic seq mode vx vy wz period hscale turnk  (little-endian, packed)
+import gui_shm  # shared /dev/shm struct contract (also used by pico_control_bridge.py)
 
 KB_STEP = 0.1
-VCAP, WCAP = 1.0, 0.6   # deploy caps (match C++ KB_MAXV / KB_MAXW)
+VCAP, WCAP = gui_shm.VCAP, gui_shm.WCAP   # deploy caps (match C++ KB_MAXV / KB_MAXW)
 
 state = dict(seq=0, cmd_mode=1, vx=0.0, vy=0.0, wz=0.0,
              period_steps=43, height_scale=1.0, turn_k=0.3)
 
 
 def _clamp(x, lo, hi):
-    return max(lo, min(hi, x))
+    return gui_shm.clamp(x, lo, hi)
 
 
 def _write() -> None:
-    state["seq"] += 1
-    buf = struct.pack(FMT, MAGIC, state["seq"], state["cmd_mode"],
-                      state["vx"], state["vy"], state["wz"],
-                      state["period_steps"], state["height_scale"], state["turn_k"])
-    tmp = SHM_PATH + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(buf)
-    os.replace(tmp, SHM_PATH)  # atomic publish
+    gui_shm.write(state)
 
 
 def main() -> None:
@@ -146,7 +135,7 @@ def main() -> None:
     cmd("mode 3",         "3", lambda: set_mode(3))
 
     _write(); refresh()
-    print(f"[masked_gui] writing {SHM_PATH}; open the viser URL above. Ctrl-C to quit.")
+    print(f"[masked_gui] writing {gui_shm.SHM_PATH}; open the viser URL above. Ctrl-C to quit.")
     while True:
         time.sleep(1.0)
 
