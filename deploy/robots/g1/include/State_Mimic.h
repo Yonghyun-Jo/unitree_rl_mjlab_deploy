@@ -108,18 +108,33 @@ public:
         world_to_init_ = world_to_anchor * init_to_anchor.transpose();
     }
 
+    // ── VR teleop override (variant B) ──────────────────────────────────────────
+    // When a VR provider is active, the masked obs read the VR reference instead of the
+    // clip frame. Fed by g_poll_vr (State_Mimic.cpp) from /dev/shm/g1_vr_ref. obs terms
+    // are unchanged — they just call joint_pos()/joint_vel()/root_quaternion().
+    void set_vr(const Eigen::VectorXf& dof_pos, const Eigen::VectorXf& dof_vel,
+                const Eigen::Quaternionf& root_quat) {
+        vr_dof_pos = dof_pos; vr_dof_vel = dof_vel; vr_root_quat = root_quat;
+        vr_override = true;
+    }
+    void clear_vr() { vr_override = false; }
+
     Eigen::VectorXf root_position() {
-        return root_positions[frame];
+        return root_positions[frame];   // global root pos: clip only (mode3 sim; VR later)
     }
     Eigen::Quaternionf root_quaternion() {
-        return root_quaternions[frame];
+        return vr_override ? vr_root_quat : root_quaternions[frame];
     }
     Eigen::VectorXf joint_pos() {
-        return dof_positions[frame];
+        return vr_override ? vr_dof_pos : dof_positions[frame];
     }
     Eigen::VectorXf joint_vel() {
-        return dof_velocities[frame];
+        return vr_override ? vr_dof_vel : dof_velocities[frame];
     }
+
+    bool vr_override = false;
+    Eigen::VectorXf vr_dof_pos, vr_dof_vel;
+    Eigen::Quaternionf vr_root_quat = Eigen::Quaternionf::Identity();
 
     float dt;
     int num_frames;

@@ -76,6 +76,46 @@ static void g_poll_gui()
     fflush(stdout);
 }
 
+// ── VR teleop reference channel (variant B) ──────────────────────────────────────
+// A com1-local bridge (teleop/zmq_to_vr_bridge.py from ZMQ+GMR, or teleop/vr_replay.py for
+// a recorded clip) writes this to /dev/shm/g1_vr_ref. g_poll_vr() feeds it into the
+// MotionLoader so the masked obs (masked_joint_command / masked_root_ori_b) read the VR
+// reference instead of the clip. base_vel/mode come from the VR thumbstick/buttons.
+// valid=0 -> clear override (back to clip). ⚠ root_quat is wxyz (= GMR qpos[3:7]).
+#pragma pack(push, 1)
+struct VrRef {
+    int32_t  magic;        // 0x6702
+    uint32_t seq;
+    int32_t  valid;
+    int32_t  cmd_mode;     // 2 or 3
+    float    base_vel[3];  // [vx,vy,wz] yaw-local thumbstick
+    float    root_quat[4]; // pelvis wxyz
+    float    dof_pos[29];  // = GMR qpos[7:36]
+    float    dof_vel[29];  // finite-diff + EMA
+};
+#pragma pack(pop)
+static uint32_t g_vr_last_seq = 0;
+
+static void g_poll_vr()
+{
+    FILE* f = std::fopen("/dev/shm/g1_vr_ref", "rb");
+    if (!f) return;
+    VrRef v{};
+    size_t n = std::fread(&v, sizeof(v), 1, f);
+    std::fclose(f);
+    if (n != 1 || v.magic != 0x6702 || v.seq == g_vr_last_seq) return;
+    g_vr_last_seq = v.seq;
+    if (!v.valid) { if (State_Mimic::motion) State_Mimic::motion->clear_vr(); return; }
+    if (v.cmd_mode >= 1 && v.cmd_mode <= 3) g_cmd_mode = v.cmd_mode;
+    g_kb_vx = v.base_vel[0]; g_kb_vy = v.base_vel[1]; g_kb_wz = v.base_vel[2];
+    if (State_Mimic::motion) {
+        Eigen::VectorXf dp = Eigen::VectorXf::Map(v.dof_pos, 29);
+        Eigen::VectorXf dv = Eigen::VectorXf::Map(v.dof_vel, 29);
+        Eigen::Quaternionf rq(v.root_quat[0], v.root_quat[1], v.root_quat[2], v.root_quat[3]);  // wxyz
+        State_Mimic::motion->set_vr(dp, dv, rq);
+    }
+}
+
 // Poll joystick d-pad + keyboard for mode switch (1/2/3) and keyboard velocity accumulation.
 // Called every policy step (same thread as obs). Both input modes are always live.
 static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
@@ -370,6 +410,7 @@ void State_Mimic::enter()
         {
             env->robot->update();
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (mode 1/2/3 + WASD/QE vel)
+            g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
             // Controller: detect a mode switch (spline base_vel + mode1 arm-blend), then advance
             // one step so the obs (base_vel_command / ref_foot_height) see fresh values.
             if (g_cmd_mode != g_prev_cmd_mode) {
