@@ -57,8 +57,8 @@ def main() -> None:
         la = xrt.get_left_axis()    # [x, y] in [-1,1]
         ra = xrt.get_right_axis()
         # base_vel — TWIST2 mapping, scaled to deploy caps (left stick xy, right stick x yaw).
-        vx =  _dz(la[1]) * gui_shm.VCAP
-        vy = -_dz(la[0]) * gui_shm.VCAP
+        vx =  _dz(la[1]) * gui_shm.VXCAP
+        vy = -_dz(la[0]) * gui_shm.VYCAP
         wz = -_dz(ra[0]) * gui_shm.WCAP
         # buttons -> mode (edge-triggered: switch once per press)
         X, Y, A, B = xrt.get_X_button(), xrt.get_Y_button(), xrt.get_A_button(), xrt.get_B_button()

@@ -16,8 +16,9 @@ MAGIC = 0x6701
 #   magic  seq  cmd_mode  vx  vy  wz  period_steps  height_scale  turn_k
 FMT = "<iIifffiff"
 
-# Deploy velocity caps (match C++ KB_MAXV / KB_MAXW). Inputs are clamped again in C++.
-VCAP, WCAP = 1.0, 0.6
+# Deploy velocity caps = TRAINING base_vel range (match C++ KB_MAXVX/VY/W). Clamped again in C++.
+#   vx p99=3.10 → 3.0 (running);  vy |.|p99=1.88 (lateral sparse) → 1.5;  wz → 0.6 (conservative).
+VXCAP, VYCAP, WCAP = 3.0, 1.5, 0.6
 
 
 def clamp(x: float, lo: float, hi: float) -> float:

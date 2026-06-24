@@ -26,7 +26,7 @@ import viser
 import gui_shm  # shared /dev/shm struct contract (also used by pico_control_bridge.py)
 
 KB_STEP = 0.1
-VCAP, WCAP = gui_shm.VCAP, gui_shm.WCAP   # deploy caps (match C++ KB_MAXV / KB_MAXW)
+VXCAP, VYCAP, WCAP = gui_shm.VXCAP, gui_shm.VYCAP, gui_shm.WCAP   # deploy caps (match C++)
 
 state = dict(seq=0, cmd_mode=1, vx=0.0, vy=0.0, wz=0.0,
              period_steps=43, height_scale=1.0, turn_k=0.3)
@@ -61,8 +61,8 @@ def main() -> None:
             set_mode(int(ev.target.value[0]))
 
     with g.add_folder("base_vel (yaw-local)"):
-        vx = g.add_slider("vx", -VCAP, VCAP, 0.01, 0.0)
-        vy = g.add_slider("vy", -VCAP, VCAP, 0.01, 0.0)
+        vx = g.add_slider("vx", -VXCAP, VXCAP, 0.01, 0.0)
+        vy = g.add_slider("vy", -VYCAP, VYCAP, 0.01, 0.0)
         wz = g.add_slider("wz (turn)", -WCAP, WCAP, 0.01, 0.0)
 
         def _v(_=None) -> None:
@@ -107,7 +107,7 @@ def main() -> None:
 
     # ---- shared setters (sliders + hotkeys both call these) ----
     def set_vel(nx, ny, nw) -> None:
-        nx = _clamp(nx, -VCAP, VCAP); ny = _clamp(ny, -VCAP, VCAP); nw = _clamp(nw, -WCAP, WCAP)
+        nx = _clamp(nx, -VXCAP, VXCAP); ny = _clamp(ny, -VYCAP, VYCAP); nw = _clamp(nw, -WCAP, WCAP)
         state["vx"], state["vy"], state["wz"] = nx, ny, nw
         _suppress[0] = True                         # slider .value sets below won't re-write
         vx.value, vy.value, wz.value = nx, ny, nw   # reflect in sliders (visual)

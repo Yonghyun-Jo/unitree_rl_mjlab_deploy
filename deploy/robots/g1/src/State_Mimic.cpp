@@ -32,7 +32,10 @@ static int g_prev_cmd_mode = 1;
 // Coexists with the joystick stick (base_vel_command sums them). Edge-triggered so one tap = one step.
 static float g_kb_vx = 0.0f, g_kb_vy = 0.0f, g_kb_wz = 0.0f;
 static std::string g_kb_last = "";
-static constexpr float KB_STEP = 0.1f, KB_MAXV = 1.0f, KB_MAXW = 0.6f;
+// deploy base_vel caps — set to the TRAINING base_vel range (20-motion manifest, yaw-local):
+//   vx p99=3.10 (max 5.4) → 3.0 (running OK);  vy |.|p99=1.88 (lateral sparse) → 1.5;
+//   wz |.|p99=4.88 but kept conservative at 0.6 (raise if faster turning is wanted).
+static constexpr float KB_STEP = 0.1f, KB_MAXVX = 3.0f, KB_MAXVY = 1.5f, KB_MAXW = 0.6f;
 
 // ── Optional browser-GUI control channel (mjlab-style viser GUI -> shared memory) ──
 // A Python viser GUI (deploy/robots/g1/tools/masked_gui.py) writes this packed struct to
@@ -91,10 +94,10 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     g_kb_last = k;
     if (k.empty()) return;
     bool vel_changed = false;
-    if      (k == "w") { g_kb_vx = std::clamp(g_kb_vx + KB_STEP, -KB_MAXV, KB_MAXV); vel_changed = true; }  // forward
-    else if (k == "s") { g_kb_vx = std::clamp(g_kb_vx - KB_STEP, -KB_MAXV, KB_MAXV); vel_changed = true; }  // backward
-    else if (k == "a") { g_kb_vy = std::clamp(g_kb_vy + KB_STEP, -KB_MAXV, KB_MAXV); vel_changed = true; }  // strafe left
-    else if (k == "d") { g_kb_vy = std::clamp(g_kb_vy - KB_STEP, -KB_MAXV, KB_MAXV); vel_changed = true; }  // strafe right
+    if      (k == "w") { g_kb_vx = std::clamp(g_kb_vx + KB_STEP, -KB_MAXVX, KB_MAXVX); vel_changed = true; }  // forward
+    else if (k == "s") { g_kb_vx = std::clamp(g_kb_vx - KB_STEP, -KB_MAXVX, KB_MAXVX); vel_changed = true; }  // backward
+    else if (k == "a") { g_kb_vy = std::clamp(g_kb_vy + KB_STEP, -KB_MAXVY, KB_MAXVY); vel_changed = true; }  // strafe left
+    else if (k == "d") { g_kb_vy = std::clamp(g_kb_vy - KB_STEP, -KB_MAXVY, KB_MAXVY); vel_changed = true; }  // strafe right
     else if (k == "q") { g_kb_wz = std::clamp(g_kb_wz + KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CCW (반시계)
     else if (k == "e") { g_kb_wz = std::clamp(g_kb_wz - KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CW  (시계)
     else if (k == " ") { g_kb_vx = g_kb_vy = g_kb_wz = 0.0f;                          vel_changed = true; }  // stop
@@ -121,16 +124,17 @@ static std::array<float, 3> g_joystick_base_vel(isaaclab::ManagerBasedRLEnv* env
 {
     float jx = 0.0f, jy = 0.0f, jw = 0.0f;
     if (auto joy = env->robot->data.joystick) {
-        constexpr float V_LIN = 1.0f, V_ANG = 1.0f, DEAD = 0.08f;
+        // full-stick = the deploy cap (training range), consistent with GUI/PICO.
+        constexpr float V_LIN_X = 3.0f, V_LIN_Y = 1.5f, V_ANG = 0.6f, DEAD = 0.08f;
         // deadzone: a real pad always exists (data.joystick != null); centered-stick drift
         // would otherwise ADD to the GUI/keyboard command and make the robot judder.
         auto dz = [](float v, float d) { return std::abs(v) < d ? 0.0f : v; };
-        jx =  V_LIN * dz(joy->ly(), DEAD);
-        jy = -V_LIN * dz(joy->lx(), DEAD);
-        jw = -V_ANG * dz(joy->rx(), DEAD);
+        jx =  V_LIN_X * dz(joy->ly(), DEAD);
+        jy = -V_LIN_Y * dz(joy->lx(), DEAD);
+        jw = -V_ANG   * dz(joy->rx(), DEAD);
     }
-    return { std::clamp(g_kb_vx + jx, -KB_MAXV, KB_MAXV),
-             std::clamp(g_kb_vy + jy, -KB_MAXV, KB_MAXV),
+    return { std::clamp(g_kb_vx + jx, -KB_MAXVX, KB_MAXVX),
+             std::clamp(g_kb_vy + jy, -KB_MAXVY, KB_MAXVY),
              std::clamp(g_kb_wz + jw, -KB_MAXW, KB_MAXW) };
 }
 
