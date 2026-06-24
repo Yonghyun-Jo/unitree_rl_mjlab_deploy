@@ -6,6 +6,7 @@
 #include <algorithm>   // std::clamp
 #include <array>
 #include <string>
+#include <cstdint>     // GUI shared-memory struct
 #include <cstdio>      // printf (base_vel command readout)
 
 static Eigen::Quaternionf init_quat;
@@ -33,10 +34,44 @@ static float g_kb_vx = 0.0f, g_kb_vy = 0.0f, g_kb_wz = 0.0f;
 static std::string g_kb_last = "";
 static constexpr float KB_STEP = 0.1f, KB_MAXV = 1.0f, KB_MAXW = 0.6f;
 
+// ── Optional browser-GUI control channel (mjlab-style viser GUI -> shared memory) ──
+// A Python viser GUI (deploy/robots/g1/tools/masked_gui.py) writes this packed struct to
+// /dev/shm/g1_masked_gui; g_poll_gui() reads it each step and overrides mode / base_vel /
+// foot-gen params. Optional: if the file is absent, keyboard + joystick drive everything.
+#pragma pack(push, 1)
+struct GuiCtrl {
+    int32_t  magic;          // 0x6701 validity tag
+    uint32_t seq;            // increments on each GUI change (edge-triggered apply)
+    int32_t  cmd_mode;       // 1/2/3
+    float    vx, vy, wz;     // base_vel command (deploy velocity caps still apply)
+    int32_t  period_steps;   // foot-gen gait period
+    float    height_scale;   // foot-gen swing-height multiplier
+    float    turn_k;         // foot-gen |wz|->step gain
+};
+#pragma pack(pop)
+static uint32_t g_gui_last_seq = 0;
+
+static void g_poll_gui()
+{
+    FILE* f = std::fopen("/dev/shm/g1_masked_gui", "rb");
+    if (!f) return;
+    GuiCtrl g{};
+    size_t n = std::fread(&g, sizeof(g), 1, f);
+    std::fclose(f);
+    if (n != 1 || g.magic != 0x6701 || g.seq == g_gui_last_seq) return;
+    g_gui_last_seq = g.seq;
+    if (g.cmd_mode >= 1 && g.cmd_mode <= 3) g_cmd_mode = g.cmd_mode;  // mode-switch detected in loop
+    g_kb_vx = g.vx; g_kb_vy = g.vy; g_kb_wz = g.wz;                   // clamped in g_joystick_base_vel
+    if (g.period_steps > 0)  g_loco.period_steps = g.period_steps;
+    if (g.height_scale > 0)  g_loco.height_scale = g.height_scale;
+    g_loco.turn_k = g.turn_k;
+}
+
 // Poll joystick d-pad + keyboard for mode switch (1/2/3) and keyboard velocity accumulation.
 // Called every policy step (same thread as obs). Both input modes are always live.
 static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
 {
+    g_poll_gui();   // browser GUI (shared memory) overrides; no-op if the file is absent
     // --- joystick d-pad -> mode (avoids A/B used by FSM transitions) ---
     if (auto joy = env->robot->data.joystick) {
         if      (joy->left.on_pressed)  g_cmd_mode = 1;

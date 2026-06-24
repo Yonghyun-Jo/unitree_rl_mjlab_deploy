@@ -104,7 +104,7 @@ FSM:
       Passive: p
       Velocity: v
 
-    motion_file: config/policy/mimic_masked/masked_v2_anchormask_modeterm/params/g1_dance1_subject2.npz
-    policy_dir: config/policy/mimic_masked/masked_v2_anchormask_modeterm/
+    motion_file: config/policy/mimic_masked/masked_footz_v0/params/g1_dance1_subject2.npz
+    policy_dir: config/policy/mimic_masked/masked_footz_v0/
     time_start: 0.0
     time_end: 1000.0
