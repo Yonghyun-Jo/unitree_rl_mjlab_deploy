@@ -17,8 +17,8 @@ MAGIC = 0x6701
 FMT = "<iIifffiff"
 
 # Deploy velocity caps = TRAINING base_vel range (match C++ KB_MAXVX/VY/W). Clamped again in C++.
-#   vx p99=3.10 → 3.0 (running);  vy |.|p99=1.88 (lateral sparse) → 1.5;  wz → 0.6 (conservative).
-VXCAP, VYCAP, WCAP = 3.0, 1.5, 0.6
+#   vx p99=3.10 → 3.0 (running);  vy |.|p99=1.88 (lateral sparse) → 1.5;  wz |.|p99=4.88 → 2.0.
+VXCAP, VYCAP, WCAP = 3.0, 1.5, 2.0
 
 
 def clamp(x: float, lo: float, hi: float) -> float:

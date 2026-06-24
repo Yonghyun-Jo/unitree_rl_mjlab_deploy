@@ -34,8 +34,8 @@ static float g_kb_vx = 0.0f, g_kb_vy = 0.0f, g_kb_wz = 0.0f;
 static std::string g_kb_last = "";
 // deploy base_vel caps — set to the TRAINING base_vel range (20-motion manifest, yaw-local):
 //   vx p99=3.10 (max 5.4) → 3.0 (running OK);  vy |.|p99=1.88 (lateral sparse) → 1.5;
-//   wz |.|p99=4.88 but kept conservative at 0.6 (raise if faster turning is wanted).
-static constexpr float KB_STEP = 0.1f, KB_MAXVX = 3.0f, KB_MAXVY = 1.5f, KB_MAXW = 0.6f;
+//   wz |.|p99=4.88 → 2.0 (turning).
+static constexpr float KB_STEP = 0.1f, KB_MAXVX = 3.0f, KB_MAXVY = 1.5f, KB_MAXW = 2.0f;
 
 // ── Optional browser-GUI control channel (mjlab-style viser GUI -> shared memory) ──
 // A Python viser GUI (deploy/robots/g1/tools/masked_gui.py) writes this packed struct to
@@ -125,7 +125,7 @@ static std::array<float, 3> g_joystick_base_vel(isaaclab::ManagerBasedRLEnv* env
     float jx = 0.0f, jy = 0.0f, jw = 0.0f;
     if (auto joy = env->robot->data.joystick) {
         // full-stick = the deploy cap (training range), consistent with GUI/PICO.
-        constexpr float V_LIN_X = 3.0f, V_LIN_Y = 1.5f, V_ANG = 0.6f, DEAD = 0.08f;
+        constexpr float V_LIN_X = 3.0f, V_LIN_Y = 1.5f, V_ANG = 2.0f, DEAD = 0.08f;
         // deadzone: a real pad always exists (data.joystick != null); centered-stick drift
         // would otherwise ADD to the GUI/keyboard command and make the robot judder.
         auto dz = [](float v, float d) { return std::abs(v) < d ? 0.0f : v; };
