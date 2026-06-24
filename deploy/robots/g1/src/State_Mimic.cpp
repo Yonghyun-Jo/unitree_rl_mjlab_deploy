@@ -1,8 +1,10 @@
 #include "State_Mimic.h"
 #include "unitree_articulation.h"
+#include "MaskedLocoController.h"   // deploy-clean foot_z gen + base_vel spline + arm-blend
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include <algorithm>   // std::clamp
+#include <array>
 #include <string>
 #include <cstdio>      // printf (base_vel command readout)
 
@@ -18,6 +20,12 @@ static int g_cmd_mode = 1;
 static constexpr int G1_N_LOWER = 12;
 static inline bool g_mask_upper() { return g_cmd_mode >= 2; }
 static inline bool g_mask_lower() { return g_cmd_mode >= 3; }
+
+// Deploy-clean controller (1:1 with mjlab_g1_motion loco_controller.py; golden-verified).
+// Updated once per policy step (see policy_thread) BEFORE obs are computed; obs terms +
+// run() read its cached base_vel / foot_z / arm_scale. ⚠ params assume 50 Hz control.
+static MaskedLocoController g_loco;
+static int g_prev_cmd_mode = 1;
 
 // Accumulated keyboard velocity command (walker_teleop.py style: each keypress ±STEP, space=reset).
 // Coexists with the joystick stick (base_vel_command sums them). Edge-triggered so one tap = one step.
@@ -63,6 +71,24 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     }
 }
 
+
+// Raw joystick + keyboard base_vel target [vx,vy,wz] (UNmasked; the controller masks mode3).
+// Fed to g_loco.update() each step; base_vel_command obs returns the controller's splined value.
+// ⚠ V_LIN/V_ANG (joystick) and KB_MAXV/W (keyboard) should match the training base_vel
+// distribution (clip pelvis velocity, ~m/s); tune in sim2sim.
+static std::array<float, 3> g_joystick_base_vel(isaaclab::ManagerBasedRLEnv* env)
+{
+    float jx = 0.0f, jy = 0.0f, jw = 0.0f;
+    if (auto joy = env->robot->data.joystick) {
+        constexpr float V_LIN = 1.0f, V_ANG = 1.0f;
+        jx =  V_LIN * joy->ly();
+        jy = -V_LIN * joy->lx();
+        jw = -V_ANG * joy->rx();
+    }
+    return { std::clamp(g_kb_vx + jx, -KB_MAXV, KB_MAXV),
+             std::clamp(g_kb_vy + jy, -KB_MAXV, KB_MAXV),
+             std::clamp(g_kb_wz + jw, -KB_MAXW, KB_MAXW) };
+}
 
 Eigen::Quaternionf robot_quat_w(isaaclab::ManagerBasedRLEnv* env)
 {
@@ -161,28 +187,20 @@ REGISTER_OBSERVATION(command_mask)
     return std::vector<float>{ g_mask_upper() ? 1.0f : 0.0f, g_mask_lower() ? 1.0f : 0.0f };
 }
 
-// yaw-local base velocity command [vx, vy, wz]. Deploy source = joystick. Zeroed in mode3
-// (mask_lower: legs tracked via q_ref -> velocity implied). ⚠ V_LIN/V_ANG scale must match the
-// training base_vel distribution (clip pelvis velocity, ~m/s) — tune in sim2sim.
+// yaw-local base velocity command [vx, vy, wz]. The controller (g_loco, updated once per
+// step) splines this across mode switches and zeroes it in mode3 (mask_lower). Raw joystick
+// target is computed by g_joystick_base_vel() and fed to g_loco.update() in policy_thread.
 REGISTER_OBSERVATION(base_vel_command)
 {
-    std::vector<float> bv(3, 0.0f);
-    if (!g_mask_lower()) {
-        // keyboard accumulator (g_poll_inputs) + joystick stick — both modes coexist.
-        // ⚠ V_LIN/V_ANG (joystick) and KB_MAXV/W (keyboard) should match the training base_vel
-        // distribution (clip pelvis velocity, ~m/s); tune in sim2sim.
-        float jx = 0.0f, jy = 0.0f, jw = 0.0f;
-        if (auto joy = env->robot->data.joystick) {
-            constexpr float V_LIN = 1.0f, V_ANG = 1.0f;
-            jx =  V_LIN * joy->ly();
-            jy = -V_LIN * joy->lx();
-            jw = -V_ANG * joy->rx();
-        }
-        bv[0] = std::clamp(g_kb_vx + jx, -KB_MAXV, KB_MAXV);
-        bv[1] = std::clamp(g_kb_vy + jy, -KB_MAXV, KB_MAXV);
-        bv[2] = std::clamp(g_kb_wz + jw, -KB_MAXW, KB_MAXW);
-    }
-    return bv;
+    return std::vector<float>(g_loco.base_vel.begin(), g_loco.base_vel.end());
+}
+
+// Reference foot height [z_L, z_R] — foot-trajectory command (deploy source = controller's
+// spline generator). Mirrors mjlab_g1_motion g1_mimic_env.calc_ref_foot_height. MUST be the
+// LAST policy obs term (after base_vel + mask), matching the trained obs order.
+REGISTER_OBSERVATION(ref_foot_height)
+{
+    return std::vector<float>(g_loco.foot_z.begin(), g_loco.foot_z.end());
 }
 
 // pelvis anchor orientation error as Rot6D in robot base frame. mjlab anchor = PELVIS (=root),
@@ -304,6 +322,13 @@ void State_Mimic::enter()
         {
             env->robot->update();
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (mode 1/2/3 + WASD/QE vel)
+            // Controller: detect a mode switch (spline base_vel + mode1 arm-blend), then advance
+            // one step so the obs (base_vel_command / ref_foot_height) see fresh values.
+            if (g_cmd_mode != g_prev_cmd_mode) {
+                g_loco.notify_mode_switch(g_cmd_mode);
+                g_prev_cmd_mode = g_cmd_mode;
+            }
+            g_loco.update(g_joystick_base_vel(env.get()), g_cmd_mode);
             motion->update(env->episode_length * env->step_dt + time_range_[0]);
             env->step();
 
@@ -317,7 +342,12 @@ void State_Mimic::enter()
 
 void State_Mimic::run()
 {
-    auto action = env->action_manager->processed_actions();
+    auto action = env->action_manager->processed_actions();   // = raw*scale + offset (target q)
+    // mode1 arm-blend: ease the upper-joint TARGETS toward the default pose, then release.
+    // Interpolate toward default_joint_pos (= the action offset; joint_names=[.*] so action
+    // index == robot joint index). arm_scale is 1.0 except during a mode1 transition.
+    g_loco.apply_arm_blend(action.data(), env->robot->data.default_joint_pos.data(),
+                           static_cast<int>(action.size()));
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
