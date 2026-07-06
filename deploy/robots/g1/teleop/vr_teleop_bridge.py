@@ -47,6 +47,12 @@ BODY_JOINT_NAMES = [
 
 IDENTITY_QUAT = [1.0, 0.0, 0.0, 0.0]
 ZERO29 = [0.0] * 29
+# deploy.yaml default_joint_pos (KNEES_BENT). Held (valid=1) when body tracking drops, so the
+# robot stands instead of playing the advancing motion_file clip (which g_poll_vr reverts to on
+# valid=0 — a DANCE clip => "춤"). Teleop must never fall back to the clip.
+DEFAULT_STAND = [-0.312, 0.0, 0.0, 0.669, -0.363, 0.0, -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0, 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
 
 # Unity -> right-hand transform that GMR's XRobotStreamer.get_processed_body_data applies
 # (xrobot_utils.py:175-190). The PICO stream carries RAW get_body_joints_pose per joint:
@@ -124,9 +130,16 @@ def main() -> None:
     t_report = time.monotonic()
     proc = 0
 
-    def revert():
+    last_root_quat = list(IDENTITY_QUAT)
+
+    def hold():
+        """body 끊김/종료 시: clip(dance) 복귀 대신 마지막 자세(없으면 stand) 유지 (valid=1).
+        g_poll_vr가 valid=0이면 advancing dance clip으로 revert하므로, 텔레옵 중엔 절대 valid=0을
+        쓰지 않는다."""
         nonlocal seq_out
-        vr_shm.write(seq_out, 0, cmd_mode, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)
+        dof = prev_dof.tolist() if prev_dof is not None else list(DEFAULT_STAND)
+        quat = last_root_quat if prev_dof is not None else list(IDENTITY_QUAT)
+        vr_shm.write(seq_out, 1, cmd_mode, [0.0, 0.0, 0.0], quat, dof, ZERO29)
         seq_out += 1
 
     try:
@@ -137,14 +150,13 @@ def main() -> None:
                     msg = sub.recv_multipart()          # block (with RCVTIMEO)
                 except zmq.Again:
                     print("[bridge] no data (publisher off? PICO Send ON?)")
-                    prev_dof = None
+                    hold()
                     continue
             _, payload = msg
             f = json.loads(payload.decode())
 
             if not f.get("streaming") or not f.get("body", {}).get("available"):
-                revert()                                # body 없음 -> clip 복귀
-                prev_dof = None
+                hold()                                  # body 없음: clip(dance) 대신 정지자세 유지
                 continue
 
             # --- controllers -> base_vel, cmd_mode, enable ---
@@ -163,6 +175,7 @@ def main() -> None:
             human = _msg_body_to_human(j, transform=not args.no_body_transform)
             qpos = gmr.retarget(human, offset_to_ground=True)   # [36]
             root_quat = [float(x) for x in qpos[3:7]]           # wxyz
+            last_root_quat = root_quat
             dof_pos = np.asarray(qpos[7:36], dtype=np.float32)  # 29, == deploy JOINT_ORDER
 
             # --- dof_vel = finite-diff + EMA (policy's q̇_ref) ---
@@ -189,9 +202,9 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        revert()                                        # valid=0 -> C++ reverts to clip
+        hold()                                          # 종료: 정지자세 유지(clip dance 방지)
         sub.close(0)
-        print(f"\n[bridge] stopped (valid=0). total {n} frames retargeted.")
+        print(f"\n[bridge] stopped (hold pose). total {n} frames retargeted.")
 
 
 if __name__ == "__main__":
