@@ -26,13 +26,16 @@ import time
 
 import numpy as np
 import zmq
+from scipy.spatial.transform import Rotation
+
+import vr_shm  # same teleop/ dir
+from general_motion_retargeting import GeneralMotionRetargeting
+from general_motion_retargeting.rot_utils import quat_mul_np
 
 
 def _sigterm(*_):
     raise KeyboardInterrupt  # SIGTERM/timeout -> clean finally (valid=0 revert)
 
-import vr_shm  # same teleop/ dir
-from general_motion_retargeting import GeneralMotionRetargeting
 
 # SMPL 24-joint order the PICO body stream uses (GMR xrobot_utils.body_joint_names).
 BODY_JOINT_NAMES = [
@@ -44,6 +47,32 @@ BODY_JOINT_NAMES = [
 
 IDENTITY_QUAT = [1.0, 0.0, 0.0, 0.0]
 ZERO29 = [0.0] * 29
+
+# Unity -> right-hand transform that GMR's XRobotStreamer.get_processed_body_data applies
+# (xrobot_utils.py:175-190). The PICO stream carries RAW get_body_joints_pose per joint:
+#   [x, y, z, qx, qy, qz, qw]  (position + quaternion, SCALAR-LAST xyzw).
+# The bridge must (1) reorder quat -> wxyz, (2) apply this transform, else GMR retargets garbage.
+_R_UNITY2RH = np.array([[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]])
+_ROT_QUAT = Rotation.from_matrix(_R_UNITY2RH).as_quat(scalar_first=True)  # wxyz
+
+
+def _msg_body_to_human(joints, transform: bool = True) -> dict:
+    """PICO body.joints [24][7] (raw [x,y,z,qx,qy,qz,qw]) -> GMR human_data {name:[pos,quat_wxyz]}.
+
+    transform=True replicates get_processed_body_data (reorder xyzw->wxyz + Unity->RH). Set False
+    only if the publisher already sends processed (wxyz + RH) data.
+    """
+    human = {}
+    for i, name in enumerate(BODY_JOINT_NAMES):
+        j = joints[i]
+        if transform:
+            qx, qy, qz, qw = j[3], j[4], j[5], j[6]
+            quat = quat_mul_np(_ROT_QUAT, np.array([qw, qx, qy, qz]), scalar_first=True)
+            pos = np.array(j[0:3]) @ _R_UNITY2RH.T
+            human[name] = [pos.tolist(), quat.tolist()]
+        else:
+            human[name] = [list(j[0:3]), list(j[3:7])]
+    return human
 
 
 def _drain_latest(sub):
@@ -65,6 +94,8 @@ def main() -> None:
     ap.add_argument("--vx", type=float, default=1.5, help="base_vel vx cap (m/s) at full stick")
     ap.add_argument("--vy", type=float, default=0.8, help="base_vel vy cap")
     ap.add_argument("--wz", type=float, default=1.5, help="base_vel wz cap (rad/s)")
+    ap.add_argument("--no-body-transform", action="store_true",
+                    help="skip Unity->RH + quat reorder (only if publisher already sends processed body)")
     ap.add_argument("--grip-enable", action="store_true",
                     help="only teleop while a grip is held (valid=0 otherwise). default: always on.")
     ap.add_argument("--height", type=float, default=None, help="operator height (m) for GMR scaling")
@@ -128,8 +159,8 @@ def main() -> None:
             enabled = (not args.grip_enable) or (L["grip"] > 0.5 or R["grip"] > 0.5)
 
             # --- body[24] -> GMR human_data dict -> qpos ---
-            j = f["body"]["joints"]                     # [24][7] = [px,py,pz, qw,qx,qy,qz]
-            human = {name: [j[i][0:3], j[i][3:7]] for i, name in enumerate(BODY_JOINT_NAMES)}
+            j = f["body"]["joints"]                     # [24][7] = raw [x,y,z, qx,qy,qz,qw]
+            human = _msg_body_to_human(j, transform=not args.no_body_transform)
             qpos = gmr.retarget(human, offset_to_ground=True)   # [36]
             root_quat = [float(x) for x in qpos[3:7]]           # wxyz
             dof_pos = np.asarray(qpos[7:36], dtype=np.float32)  # 29, == deploy JOINT_ORDER
