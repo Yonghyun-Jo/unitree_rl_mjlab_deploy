@@ -97,7 +97,9 @@ def main() -> None:
     ap.add_argument("--no-body-transform", action="store_true",
                     help="skip Unity->RH + quat reorder (only if publisher already sends processed body)")
     ap.add_argument("--grip-enable", action="store_true",
-                    help="only teleop while a grip is held (valid=0 otherwise). default: always on.")
+                    help="deadman: grip 눌러야 텔레옵 활성. 놓으면 안전 mode1 복귀. 실제/deploy 권장.")
+    ap.add_argument("--fallback-clip", action="store_true",
+                    help="VR 끊김 시 clip 재생(valid=0, 테스트/데모용). 기본=안전 mode1 fallback(clip 무시).")
     ap.add_argument("--height", type=float, default=None, help="operator height (m) for GMR scaling")
     args = ap.parse_args()
     signal.signal(signal.SIGTERM, _sigterm)
@@ -116,7 +118,7 @@ def main() -> None:
 
     prev_dof = None
     dof_vel = np.zeros(29, dtype=np.float32)
-    cmd_mode = args.mode
+    user_mode = args.mode                 # 유저 의도 teleop 모드(2/3, 버튼으로 변경). 출력 mode와 분리.
     seq_out = 0
     last_t = None
     # status
@@ -124,10 +126,23 @@ def main() -> None:
     t_report = time.monotonic()
     proc = 0
 
-    def revert():
+    def fallback():
+        """VR 비활성(body 끊김/미착용/grip 놓음/종료): 기본=안전 mode1 자동복귀.
+        valid=1 + cmd_mode=1 + base_vel=0 → 정책이 레퍼런스(clip/VR)를 masking으로 무시하고
+        full-auto mode1로 정지 → clip이 흐르지 않음. --fallback-clip이면 valid=0(clip 재생, 데모)."""
         nonlocal seq_out
-        vr_shm.write(seq_out, 0, cmd_mode, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)
+        if args.fallback_clip:
+            vr_shm.write(seq_out, 0, user_mode, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)
+        else:
+            vr_shm.write(seq_out, 1, 1, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)  # cmd_mode=1 safe
         seq_out += 1
+
+    def report(now, tag):
+        nonlocal proc, t_report
+        if now - t_report >= 1.0:
+            print(f"[bridge] {proc / max(now - t_report, 1e-6):4.0f}Hz  {tag}")
+            proc = 0
+            t_report = now
 
     try:
         while True:
@@ -136,37 +151,46 @@ def main() -> None:
                 try:
                     msg = sub.recv_multipart()          # block (with RCVTIMEO)
                 except zmq.Again:
-                    print("[bridge] no data (publisher off? PICO Send ON?)")
+                    print("[bridge] no data (publisher off?) -> safe fallback")
+                    fallback()
                     prev_dof = None
                     continue
             _, payload = msg
             f = json.loads(payload.decode())
+            proc += 1
+            now = time.monotonic()
 
-            if not f.get("streaming") or not f.get("body", {}).get("available"):
-                revert()                                # body 없음 -> clip 복귀
+            # --- controllers: 버튼->user_mode, grip->deadman, 썸스틱->base_vel (body와 무관) ---
+            ctrl = f.get("controllers")
+            if ctrl:
+                L, R = ctrl["left"], ctrl["right"]
+                if L["primary"] or R["primary"]:
+                    user_mode = 2
+                if L["secondary"] or R["secondary"]:
+                    user_mode = 3
+                if L["menu"] or R["menu"]:
+                    user_mode = 1
+                grip_held = L["grip"] > 0.5 or R["grip"] > 0.5
+                stick = [L["axis"][1] * args.vx, -L["axis"][0] * args.vy, -R["axis"][0] * args.wz]
+            else:
+                grip_held, stick = False, [0.0, 0.0, 0.0]
+
+            body_ok = bool(f.get("streaming")) and bool(f.get("body", {}).get("available"))
+            active = body_ok and (not args.grip_enable or grip_held)
+
+            if not active:
+                fallback()                              # 안전 mode1 (또는 clip) — VR 미적용
                 prev_dof = None
+                report(now, f"INACTIVE -> {'clip' if args.fallback_clip else 'mode1 safe'}"
+                            f"  (body_ok={body_ok} grip={grip_held})")
                 continue
 
-            # --- controllers -> base_vel, cmd_mode, enable ---
-            L, R = f["controllers"]["left"], f["controllers"]["right"]
-            base_vel = [L["axis"][1] * args.vx, -L["axis"][0] * args.vy, -R["axis"][0] * args.wz]
-            if L["primary"] or R["primary"]:
-                cmd_mode = 2
-            if L["secondary"] or R["secondary"]:
-                cmd_mode = 3
-            if L["menu"] or R["menu"]:
-                cmd_mode = 1
-            enabled = (not args.grip_enable) or (L["grip"] > 0.5 or R["grip"] > 0.5)
-
-            # --- body[24] -> GMR human_data dict -> qpos ---
+            # --- active: body[24] -> GMR -> qpos -> VrRef (VR 텔레옵) ---
             j = f["body"]["joints"]                     # [24][7] = raw [x,y,z, qx,qy,qz,qw]
             human = _msg_body_to_human(j, transform=not args.no_body_transform)
             qpos = gmr.retarget(human, offset_to_ground=True)   # [36]
             root_quat = [float(x) for x in qpos[3:7]]           # wxyz
             dof_pos = np.asarray(qpos[7:36], dtype=np.float32)  # 29, == deploy JOINT_ORDER
-
-            # --- dof_vel = finite-diff + EMA (policy's q̇_ref) ---
-            now = time.monotonic()
             if prev_dof is not None and last_t is not None:
                 dt = max(now - last_t, 1e-3)
                 raw = (dof_pos - prev_dof) / dt
@@ -174,24 +198,17 @@ def main() -> None:
             prev_dof = dof_pos.copy()
             last_t = now
 
-            vr_shm.write(seq_out, 1 if enabled else 0, cmd_mode, base_vel, root_quat,
-                         dof_pos.tolist(), dof_vel.tolist())
+            vr_shm.write(seq_out, 1, user_mode, stick, root_quat, dof_pos.tolist(), dof_vel.tolist())
             seq_out += 1
             n += 1
-            proc += 1
-            if now - t_report >= 1.0:
-                hz = proc / (now - t_report)
-                print(f"[bridge] {hz:5.1f}Hz  mode={cmd_mode}  valid={1 if enabled else 0}  "
-                      f"base_vel=({base_vel[0]:+.2f},{base_vel[1]:+.2f},{base_vel[2]:+.2f})  "
-                      f"arm(L_sho_pitch idx15)={dof_pos[15]:+.2f}")
-                proc = 0
-                t_report = now
+            report(now, f"TELEOP mode={user_mode}  base_vel=({stick[0]:+.2f},{stick[1]:+.2f},"
+                        f"{stick[2]:+.2f})  arm(L_sho_pitch)={dof_pos[15]:+.2f}")
     except KeyboardInterrupt:
         pass
     finally:
-        revert()                                        # valid=0 -> C++ reverts to clip
+        fallback()                                      # 종료: 안전 mode1 (또는 clip)
         sub.close(0)
-        print(f"\n[bridge] stopped (valid=0). total {n} frames retargeted.")
+        print(f"\n[bridge] stopped (safe fallback). total {n} teleop frames.")
 
 
 if __name__ == "__main__":
