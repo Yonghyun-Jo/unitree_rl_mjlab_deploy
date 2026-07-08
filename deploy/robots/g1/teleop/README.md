@@ -1,0 +1,58 @@
+# G1 VR Teleop — setup
+
+이 repo를 `git clone`한 뒤 **독립적으로** VR 텔레옵을 세팅하는 절차. 두 호스트로 나뉜다:
+
+```
+[laptop / PC] vr_teleop_bridge.py (GMR retarget)  ──/dev/shm──►  [robot/onboard] g1_ctrl (C++)
+   .venv-teleop (setup_teleop.sh)                                 .deps (build_deps.sh)
+```
+
+> **왜 나뉘나:** GMR IK(~15ms)는 50Hz 제어 루프와 CPU 경합하므로 **제어 호스트에서 뺀다.**
+> 로봇 온보드(Jetson)는 `g1_ctrl`만 돌고, bridge는 laptop/별도 PC에서 돌며 `/dev/shm/g1_vr_ref`로 ref만 넘긴다.
+
+---
+
+## A. 로봇 온보드 (C++ g1_ctrl) — clone-to-build
+
+```bash
+# 1) 시스템 deps
+sudo apt install cmake build-essential libboost-all-dev libyaml-cpp-dev zlib1g-dev libfmt-dev libeigen3-dev
+# 2) unitree_sdk2 + CycloneDDS를 repo-local .deps/ 로 빌드 (gitignore라 clone엔 없음 → 1회 실행)
+bash deploy/scripts/build_deps.sh
+# 3) g1_ctrl 빌드 (onnxruntime aarch64는 vendored, 자동 선택)
+cd deploy/robots/g1 && mkdir -p build && cd build && cmake .. && make -j4
+# 4) 실행
+./g1_ctrl --network=<robot_iface>     # 실로봇 예: enp5s0 / sim2sim: lo
+```
+ONNX 정책·모션 npz·deploy.yaml·onnxruntime는 **이미 커밋**되어 clone에 포함. 경로는 바이너리 기준 상대(`/proc/self/exe`)라 어디에 두든 동작.
+
+## B. laptop (VR bridge + GMR) — 1-command 세팅
+
+```bash
+# venv + GMR clone + g1 mesh 복구(upstream GMR엔 STL 없음 → repo STL 복사) + editable install + smoke test
+bash deploy/robots/g1/teleop/setup_teleop.sh
+# 실행 (repo root에서)
+.venv-teleop/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py --mode 1
+```
+> com1에는 기존 `gmr` conda env가 이미 있으므로 그걸 써도 된다(`setup_teleop.sh`는 새 머신용).
+> `general_motion_retargeting`은 PyPI에 없어 GitHub(YanjieZe/GMR)에서 clone하며, g1 mesh 35개는 이 repo의 `src/assets/robots/unitree_g1/xmls/assets/*.STL`로 복구된다.
+
+### bridge 컨트롤 매핑 (PICO)
+| 입력 | 동작 |
+|---|---|
+| 왼쪽 스틱 | base_vel vx(앞뒤)/vy(좌우) — mode1·2 |
+| 오른쪽 스틱 좌우 | 회전 wz |
+| 왼쪽 X / Y | mode1(자율보행) / mode2(상체 teleop) |
+| 오른쪽 B | mode3(전신, sim 전용) |
+| grip (`--grip-enable`) | 데드맨: 놓으면 mode1 안전 복귀 |
+
+주요 플래그: `--mode`(기본 cmd_mode) · `--gmr-iter`(IK 반복 상한, 기본 10=TWIST2 스톡; warm-start라 저렴) · `--grip-enable` · `--fallback-clip`(끊김 시 clip, 데모용) · `--vx/--vy/--wz`(속도 cap).
+
+> 실시간 성능은 iter가 아니라 **GMR을 sim/제어와 별도 프로세스로 분리**하는 게 핵심(TWIST2 레시피). 실로봇에선 GMR=laptop / g1_ctrl=Jetson이라 VrRef를 `/dev/shm`이 아닌 **네트워크(ZMQ/Redis)로** 넘겨야 한다.
+
+---
+
+## 자립성 메모
+- 로봇 clone-to-build의 유일한 선행 = `build_deps.sh`(`.deps`는 gitignore).
+- bridge/GMR은 laptop 사정 — `.venv-teleop`·`.gmr`는 gitignore, `setup_teleop.sh`로 재현.
+- 완전 오프라인 재현(네트워크 없이 clone만)이 필요하면 GMR을 repo에 vendoring(Option 2)으로 승격.

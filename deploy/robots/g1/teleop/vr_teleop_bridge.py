@@ -12,9 +12,11 @@ Replaces vr_replay.py's clip source with the LIVE PICO stream:
 
 cmd_mode masks in C++: mode2=상체(팔·waist), mode3=전신(다리 포함). ONE bridge, full VrRef.
 
-⚠ RUN with the gmr env's python (VIRTUAL_ENV in the profile hijacks conda run):
-    /home/piene/miniconda3/envs/gmr/bin/python \
-        /home/piene/unitree_rl_mjlab/deploy/robots/g1/teleop/vr_teleop_bridge.py --mode 2
+⚠ Runs on the LAPTOP / a Linux PC near com1 (NOT the robot onboard — GMR stays off the
+  control host). Set up the env ONCE, then run from the repo root:
+    bash deploy/robots/g1/teleop/setup_teleop.sh          # venv + GMR + g1 meshes
+    .venv-teleop/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py --mode 1
+  (on com1 the existing `gmr` conda env also works.)
   (run alongside: unitree_mujoco  +  g1_ctrl --network=lo  [f->stand, m->policy])
 """
 from __future__ import annotations
@@ -101,12 +103,18 @@ def main() -> None:
     ap.add_argument("--fallback-clip", action="store_true",
                     help="VR 끊김 시 clip 재생(valid=0, 테스트/데모용). 기본=안전 mode1 fallback(clip 무시).")
     ap.add_argument("--height", type=float, default=None, help="operator height (m) for GMR scaling")
+    ap.add_argument("--gmr-iter", type=int, default=10,
+                    help="GMR IK max iterations per stage (TWIST2 스톡=10). warm-start(mink.Configuration "
+                         "프레임간 유지)+0.001 조기수렴이라 대부분 몇 iter만 씀 → 10이어도 저렴. "
+                         "지연은 iter가 아니라 GMR 프로세스 분리로 잡는다(TWIST2 레시피).")
     args = ap.parse_args()
     signal.signal(signal.SIGTERM, _sigterm)
 
     print("[bridge] loading GMR (xrobot -> unitree_g1) ...")
     gmr = GeneralMotionRetargeting("xrobot", "unitree_g1", actual_human_height=args.height)
-    print("[bridge] GMR ready.")
+    gmr.max_iter = args.gmr_iter   # TWIST2 스톡=10. warm-start(mink.Configuration 프레임간 유지)+0.001
+                                   # 조기수렴 → 상한 10이어도 실사용 iter 적음. CPU 경합은 프로세스 분리로.
+    print(f"[bridge] GMR ready. (IK max_iter={gmr.max_iter})")
 
     ctx = zmq.Context.instance()
     sub = ctx.socket(zmq.SUB)
@@ -164,13 +172,10 @@ def main() -> None:
             ctrl = f.get("controllers")
             if ctrl:
                 L, R = ctrl["left"], ctrl["right"]
-                if L["primary"] or R["primary"]:
-                    user_mode = 2
-                if L["secondary"] or R["secondary"]:
-                    user_mode = 3
-                if L["menu"] or R["menu"]:
-                    user_mode = 1
-                grip_held = L["grip"] > 0.5 or R["grip"] > 0.5
+                if L.get("primary"):    user_mode = 1   # 왼쪽 X → mode1 자율보행
+                if L.get("secondary"):  user_mode = 2   # 왼쪽 Y → mode2 상체 teleop
+                if R.get("secondary"):  user_mode = 3   # 오른쪽 B → mode3 전신 teleop
+                grip_held = L.get("grip", 0.0) > 0.5 or R.get("grip", 0.0) > 0.5
                 stick = [L["axis"][1] * args.vx, -L["axis"][0] * args.vy, -R["axis"][0] * args.wz]
             else:
                 grip_held, stick = False, [0.0, 0.0, 0.0]

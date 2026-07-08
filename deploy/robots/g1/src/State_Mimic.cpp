@@ -362,12 +362,16 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
 
     const auto & joy = FSMState::lowstate->joystick;
-    this->registered_checks.emplace_back(
-        std::make_pair(
-            [&]()->bool{ return (env->episode_length * env->step_dt) > time_range_[1]; }, // time out
-            FSMStringMap.right.at(end_state)
-        )
-    );
+    // end_state가 자기자신이면(=masked/teleop) 클립 끝이 무의미 → 타임아웃 체크 미등록 = 무한 실행.
+    // (Dance1 등 데모 clip은 end_state 기본값 "Velocity" != 자기이름 → 등록되어 1회 재생 후 복귀 유지.)
+    if (end_state != state_string) {
+        this->registered_checks.emplace_back(
+            std::make_pair(
+                [&]()->bool{ return (env->episode_length * env->step_dt) > time_range_[1]; }, // time out
+                FSMStringMap.right.at(end_state)
+            )
+        );
+    }
     this->registered_checks.emplace_back(
         std::make_pair(
             [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); }, // bad orientation

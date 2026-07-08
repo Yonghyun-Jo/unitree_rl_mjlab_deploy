@@ -108,3 +108,4 @@ FSM:
     policy_dir: config/policy/mimic_masked/gmt_multihead_v0/
     time_start: 0.0
     time_end: 1000.0
+    end_state: Mimic_Masked   # 타임아웃 없음(무한 실행) — p/v 누를 때까지 유지. 낙상→Passive는 그대로.
