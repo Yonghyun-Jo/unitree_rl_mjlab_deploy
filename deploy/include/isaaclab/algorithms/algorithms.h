@@ -34,6 +34,12 @@ public:
         // Init Model
         env = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "onnx_model");
         session_options.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
+        // Deploy control models are tiny (e.g. 1670->29) and run at 50 Hz. ONNX Runtime's default
+        // intra-op pool (= all cores) SPIN-WAITS between inferences and burns ~10 cores, starving the
+        // sim / other work. Pin to 1 thread + disable spinning -> ~1 core, no latency cost (<1ms/infer).
+        session_options.SetIntraOpNumThreads(1);
+        session_options.SetInterOpNumThreads(1);
+        session_options.AddConfigEntry("session.intra_op.allow_spinning", "0");
 
         session = std::make_unique<Ort::Session>(env, model_path.c_str(), session_options);
 
