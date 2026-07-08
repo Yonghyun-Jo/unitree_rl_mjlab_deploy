@@ -1,15 +1,19 @@
 # mjlab_g1_motion — masked-3mode flow student + foot_z (stage2_masked, masked_footz_v0), G1 29-DOF.
 # Source checkpoint: logs/rsl_rl/g1_student/2026-06-23_16-44-46_masked_footz_v0/model_29999.pt
-# Policy ONNX: obs[1,1670] -> actions[1,29].  obs = 11 terms (167D single frame) x history 10.
+# Policy ONNX: obs[1,1640] -> actions[1,29].  obs = 10 terms (164D single frame) x history 10.
+# ⚠ WOSE branch: masked_root_pos_b(3) DROPPED (privileged true pelvis pos, unobservable on real G1).
+#   This yaml is 164D; exported/policy.onnx here is still the OLD 1670D — REPLACE it with the new
+#   1640D ONNX from the wose_obs retrain (mjlab_g1_motion) before running, else the policy won't load.
 #
 # ⚠ HISTORY LAYOUT = TERM-MAJOR (must match mjlab ObservationManager):
 #   each term keeps its own history(10), flattened oldest->newest, then terms concatenated:
-#   [base_ang_vel x10 | projected_gravity x10 | command x10 | ... | command_mask x10 | ref_foot_height x10] = 1670.
+#   [base_ang_vel x10 | projected_gravity x10 | command x10 | ... | command_mask x10 | ref_foot_height x10] = 1640.
 #   The C++ ObservationManager produces this when `use_gym_history` is unset/false (default).
 #   DO NOT set use_gym_history: true (that gives frame-major -> wrong order).
 #
-# ⚠ 6 obs terms below need C++ REGISTER_OBSERVATION (not in upstream): masked_joint_command,
-#   masked_root_pos_b, masked_root_ori_b, base_vel_command, command_mask, ref_foot_height.
+# ⚠ 5 obs terms below need C++ REGISTER_OBSERVATION (not in upstream): masked_joint_command,
+#   masked_root_ori_b, base_vel_command, command_mask, ref_foot_height.
+#   (wose: masked_root_pos_b dropped from the actor — its REGISTER_OBSERVATION may stay unused in C++.)
 #   base_vel_command + ref_foot_height are produced by MaskedLocoController (State_Mimic.cpp).
 #   The other 5 (base_ang_vel, projected_gravity, joint_pos_rel, joint_vel_rel, last_action)
 #   already exist in deploy/include/isaaclab/envs/mdp/observations/observations.h.
@@ -46,7 +50,7 @@ actions:
              0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0, 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
     joint_ids: null
 
-# ── observations: EXACT order + dims must match StudentPolicyCfg (165D single frame) ──
+# ── observations: EXACT order + dims must match StudentPolicyCfg (164D single frame; wose) ──
 # all history_length: 10, all scale 1.0 (policy group has no per-term scale in training).
 observations:
   base_ang_vel:           # 3
@@ -66,11 +70,6 @@ observations:
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,   # q_ref 29
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]   # q̇_ref 29
-    history_length: 10
-  masked_root_pos_b:      # 3  (pelvis anchor pos err in base frame; x,y zeroed ~mode3, z zeroed mode1)
-    params: {command_name: motion}
-    clip: null
-    scale: [1.0, 1.0, 1.0]
     history_length: 10
   masked_root_ori_b:      # 6  (anchor ori Rot6D; all zeroed in mode1)
     params: {command_name: motion}
