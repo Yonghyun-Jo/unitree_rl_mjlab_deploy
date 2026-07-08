@@ -95,16 +95,27 @@ struct VrRef {
 };
 #pragma pack(pop)
 static uint32_t g_vr_last_seq = 0;
+static int g_vr_stale = 0;                      // polls since seq last advanced
+static constexpr int VR_STALE_MAX = 25;         // ~0.5s @50Hz: writer stalled/dead -> release to clip
 
 static void g_poll_vr()
 {
     FILE* f = std::fopen("/dev/shm/g1_vr_ref", "rb");
-    if (!f) return;
+    if (!f) {   // no VR channel -> release any active override (back to clip)
+        if (State_Mimic::motion && State_Mimic::motion->vr_override) State_Mimic::motion->clear_vr();
+        return;
+    }
     VrRef v{};
     size_t n = std::fread(&v, sizeof(v), 1, f);
     std::fclose(f);
-    if (n != 1 || v.magic != 0x6702 || v.seq == g_vr_last_seq) return;
+    if (n != 1 || v.magic != 0x6702) return;
+    if (v.seq == g_vr_last_seq) {   // LIVENESS: seq frozen -> writer stalled/dead (or stale zombie)
+        if (State_Mimic::motion && State_Mimic::motion->vr_override && ++g_vr_stale > VR_STALE_MAX)
+            State_Mimic::motion->clear_vr();     // auto-return to clip (VR 끊김 안전, c00ac28 의도)
+        return;
+    }
     g_vr_last_seq = v.seq;
+    g_vr_stale = 0;
     if (!v.valid) { if (State_Mimic::motion) State_Mimic::motion->clear_vr(); return; }
     if (v.cmd_mode >= 1 && v.cmd_mode <= 3) g_cmd_mode = v.cmd_mode;
     g_kb_vx = v.base_vel[0]; g_kb_vy = v.base_vel[1]; g_kb_wz = v.base_vel[2];
@@ -144,6 +155,7 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     else if (k == "1") { g_cmd_mode = 1; printf("\r\n[cmd_mode] -> 1 (full-auto)\r\n");      fflush(stdout); }
     else if (k == "2") { g_cmd_mode = 2; printf("\r\n[cmd_mode] -> 2 (upper-teleop)\r\n");    fflush(stdout); }
     else if (k == "3") { g_cmd_mode = 3; printf("\r\n[cmd_mode] -> 3 (full-track/sim)\r\n");  fflush(stdout); }
+    else if (k == "4") { g_cmd_mode = 4; printf("\r\n[cmd_mode] -> 4 (dance demo: clip full-track, VR 무시)\r\n"); fflush(stdout); }
 
     // Print the base_vel command ONLY when a velocity key changed it (not every frame).
     // mode3 zeroes base_vel downstream, so show that; modes 1/2 use it as-is.
@@ -253,8 +265,9 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
 REGISTER_OBSERVATION(masked_joint_command)
 {
     auto loader = State_Mimic::motion;
-    auto q  = loader->joint_pos();
-    auto qd = loader->joint_vel();
+    const bool demo = (g_cmd_mode == 4);   // mode4 = dance demo (clip); mode1/2/3 = VR buffer (never clip)
+    auto q  = demo ? loader->joint_pos_clip() : loader->joint_pos_vr();
+    auto qd = demo ? loader->joint_vel_clip() : loader->joint_vel_vr();
     const bool mu = g_mask_upper(), ml = g_mask_lower();
     std::vector<float> data;
     data.reserve(q.size() + qd.size());
@@ -299,8 +312,19 @@ REGISTER_OBSERVATION(masked_root_ori_b)
     if (g_mask_upper()) {
         auto loader = State_Mimic::motion;
         Eigen::Quaternionf real_quat_w = env->robot->data.root_quat_w;   // pelvis (IMU)
-        Eigen::Quaternionf ref_quat_w  = loader->root_quaternion();      // pelvis ref
-        auto rot_ = (init_quat * ref_quat_w).conjugate() * real_quat_w;
+        Eigen::Quaternionf aligned;
+        if (g_cmd_mode == 4) {                       // mode4 dance: clip pelvis ori (enter-aligned)
+            aligned = init_quat * loader->root_quaternion_clip();
+        } else if (loader->vr_override) {            // VR live: VR pelvis ori (enter-aligned)
+            aligned = init_quat * loader->root_quaternion_vr();
+        } else {
+            // standby (mode2/3, no VR): reference = upright at the robot's CURRENT heading.
+            // Bypass init_quat (which is pinned to the ENTER heading) so mode2/3 HOLD the current
+            // heading instead of snapping back to where Mimic_Masked was entered. Keeps pitch/roll
+            // feedback (only yaw is canceled) -> balance preserved, heading free.
+            aligned = isaaclab::yawQuaternion(real_quat_w);
+        }
+        auto rot_ = aligned.conjugate() * real_quat_w;
         auto rot  = rot_.toRotationMatrix().transpose();
         out = { rot(0,0), rot(0,1), rot(1,0), rot(1,1), rot(2,0), rot(2,1) };
     }
@@ -392,6 +416,14 @@ void State_Mimic::enter()
     }
 
     motion = motion_; // set for specific motion
+    std::remove("/dev/shm/g1_vr_ref");   // clear any stale VR ref so it can't hijack on entry
+                                         // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
+    { // mode2/3 hold this neutral pose (robot default) until VR provides a reference — never the clip
+        const auto& dj = env->robot->data.default_joint_pos;
+        Eigen::VectorXf dpos((int)dj.size());
+        for (int i = 0; i < (int)dj.size(); ++i) dpos[i] = dj[i];
+        motion->set_standby(dpos);
+    }
     env->reset();
     // Start policy thread
     policy_thread_running = true;
@@ -419,6 +451,18 @@ void State_Mimic::enter()
             // one step so the obs (base_vel_command / ref_foot_height) see fresh values.
             if (g_cmd_mode != g_prev_cmd_mode) {
                 g_loco.notify_mode_switch(g_cmd_mode);
+                // RE-ANCHOR at mode change: pin the reference heading to the robot's CURRENT heading
+                // so a referenced motion (mode4 clip / live VR) STARTS from where the robot faces now
+                // — no heading snap/turn before it begins. The motion's OWN internal turning is kept
+                // (only the start is re-aligned). init_quat was otherwise frozen at FSM enter, which
+                // made the robot jump to the enter-heading. (mode1 / mode2-3 standby don't use init_quat.)
+                if (motion && (g_cmd_mode == 4 || motion->vr_override)) {
+                    Eigen::Quaternionf ref_now = (g_cmd_mode == 4) ? motion->root_quaternion_clip()
+                                                                   : motion->root_quaternion_vr();
+                    auto ry = isaaclab::yawQuaternion(ref_now).toRotationMatrix();
+                    auto rr = isaaclab::yawQuaternion(robot_quat_w(env.get())).toRotationMatrix();
+                    init_quat = rr * ry.transpose();
+                }
                 g_prev_cmd_mode = g_cmd_mode;
             }
             // Low-pass the base_vel target (deploy-side; controller unchanged) so abrupt

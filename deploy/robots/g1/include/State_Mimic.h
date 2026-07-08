@@ -94,10 +94,12 @@ public:
 
     void update(float time)
     {
-        float phase = std::clamp(time, 0.0f, duration);
-        float f = phase / dt;
-        frame = static_cast<int>(std::floor(f));
-        frame = std::min(frame, num_frames - 1);
+        // LOOP the clip so the masked/demo reference plays continuously (infinite run) —
+        // e.g. mode4 dance demo keeps dancing instead of freezing at the last frame after
+        // one pass. (VR override bypasses this: accessors return the VR buffer when active.)
+        float t = std::max(time, 0.0f);
+        int f = static_cast<int>(std::floor(t / dt));
+        frame = (num_frames > 0) ? (((f % num_frames) + num_frames) % num_frames) : 0;
     }
 
     void reset(const isaaclab::ArticulationData & data, float t = 0.0f)
@@ -117,7 +119,24 @@ public:
         vr_dof_pos = dof_pos; vr_dof_vel = dof_vel; vr_root_quat = root_quat;
         vr_override = true;
     }
-    void clear_vr() { vr_override = false; }
+    // Neutral standby (= robot default pose). mode2/3 are a pure VR structure: they read the VR
+    // buffer, which holds VR when live or this neutral pose when not — NEVER the dance clip.
+    // (Only mode4 replays the clip.) Set once at enter() via set_standby().
+    void set_standby(const Eigen::VectorXf& default_dof) {
+        vr_standby_dof = default_dof;
+        vr_dof_pos = default_dof;
+        vr_dof_vel = Eigen::VectorXf::Zero(default_dof.size());
+        vr_root_quat = Eigen::Quaternionf::Identity();
+        vr_override = false;
+    }
+    void clear_vr() {   // VR dropped -> reset buffer to neutral standby (NOT the clip)
+        vr_override = false;
+        if (vr_standby_dof.size() > 0) {
+            vr_dof_pos = vr_standby_dof;
+            vr_dof_vel = Eigen::VectorXf::Zero(vr_standby_dof.size());
+            vr_root_quat = Eigen::Quaternionf::Identity();
+        }
+    }
 
     Eigen::VectorXf root_position() {
         return root_positions[frame];   // global root pos: clip only (mode3 sim; VR later)
@@ -132,8 +151,21 @@ public:
         return vr_override ? vr_dof_vel : dof_velocities[frame];
     }
 
+    // Clip-forced accessors: ALWAYS return the clip frame, ignoring any VR override.
+    // mode4 (dance demo) uses these so it replays the motion ref regardless of VR state.
+    Eigen::Quaternionf root_quaternion_clip() { return root_quaternions[frame]; }
+    Eigen::VectorXf joint_pos_clip() { return dof_positions[frame]; }
+    Eigen::VectorXf joint_vel_clip() { return dof_velocities[frame]; }
+
+    // VR-buffer accessors: ALWAYS return the VR/standby buffer, NEVER the clip.
+    // mode1/2/3 use these (mode1's values are masked to zero anyway). This is what makes
+    // mode2/3 a VR-only structure: no VR -> neutral standby, VR live -> tracks VR, never dances.
+    Eigen::Quaternionf root_quaternion_vr() { return vr_root_quat; }
+    Eigen::VectorXf joint_pos_vr() { return vr_dof_pos; }
+    Eigen::VectorXf joint_vel_vr() { return vr_dof_vel; }
+
     bool vr_override = false;
-    Eigen::VectorXf vr_dof_pos, vr_dof_vel;
+    Eigen::VectorXf vr_dof_pos, vr_dof_vel, vr_standby_dof;
     Eigen::Quaternionf vr_root_quat = Eigen::Quaternionf::Identity();
 
     float dt;
