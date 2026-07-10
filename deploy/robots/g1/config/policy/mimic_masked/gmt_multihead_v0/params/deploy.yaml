@@ -1,9 +1,9 @@
 # mjlab_g1_motion — masked-3mode flow student + foot_z (stage2_masked, masked_footz_v0), G1 29-DOF.
 # Source checkpoint: logs/rsl_rl/g1_student/2026-06-23_16-44-46_masked_footz_v0/model_29999.pt
 # Policy ONNX: obs[1,1640] -> actions[1,29].  obs = 10 terms (164D single frame) x history 10.
-# ⚠ WOSE branch: masked_root_pos_b(3) DROPPED (privileged true pelvis pos, unobservable on real G1).
-#   This yaml is 164D; exported/policy.onnx here is still the OLD 1670D — REPLACE it with the new
-#   1640D ONNX from the wose_obs retrain (mjlab_g1_motion) before running, else the policy won't load.
+# WOSE branch: masked_root_pos_b(3) DROPPED (privileged true pelvis pos, unobservable on real G1).
+#   164D yaml + exported/policy.onnx = wose 1640D multihead (flow_44000 + mode1_20000/mode2_18500/
+#   mode3_19500, parity 2.5e-6, 2026-07-10). sim2sim ready — no C++ rebuild needed (obs data-driven).
 #
 # ⚠ HISTORY LAYOUT = TERM-MAJOR (must match mjlab ObservationManager):
 #   each term keeps its own history(10), flattened oldest->newest, then terms concatenated:
