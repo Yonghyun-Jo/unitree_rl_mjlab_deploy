@@ -105,6 +105,7 @@ FSM:
       Velocity: v
 
     motion_file: config/policy/mimic_masked/gmt_multihead_v0/params/g1_dance1_subject2.npz
+    motion_file_light: config/policy/mimic_masked/gmt_multihead_v0/params/g1_aiming_stand10s.npz  # keyboard '5' = 서서 상체만 test demo
     policy_dir: config/policy/mimic_masked/gmt_multihead_v0/
     time_start: 0.0
     time_end: 1000.0

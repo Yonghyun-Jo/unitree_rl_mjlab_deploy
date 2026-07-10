@@ -11,6 +11,7 @@
 
 static Eigen::Quaternionf init_quat;
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion = nullptr;
+std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion_light = nullptr;
 
 // ===== Masked-3mode student (mjlab_g1_motion stage2_masked) =====
 // cmd_mode in {1,2,3}: 1=full-auto(0,0) 2=upper-teleop(1,0) 3=full-teleop(1,1).
@@ -21,6 +22,13 @@ static int g_cmd_mode = 1;
 static constexpr int G1_N_LOWER = 12;
 static inline bool g_mask_upper() { return g_cmd_mode >= 2; }
 static inline bool g_mask_lower() { return g_cmd_mode >= 3; }
+// clip-replay demo modes: 4 = dance (primary clip), 5 = stand + upper-body test clip (motion_light).
+static inline bool g_is_demo() { return g_cmd_mode == 4 || g_cmd_mode == 5; }
+// obs read through this so the correct clip flows: mode5 -> light test clip, else primary loader
+// (which holds the dance clip AND the VR buffer). mode5 masks like mode3 (5>=2,5>=3 -> full-track).
+static inline std::shared_ptr<State_Mimic::MotionLoader_> active_demo_loader() {
+    return (g_cmd_mode == 5 && State_Mimic::motion_light) ? State_Mimic::motion_light : State_Mimic::motion;
+}
 
 // Deploy-clean controller (1:1 with mjlab_g1_motion loco_controller.py; golden-verified).
 // Updated once per policy step (see policy_thread) BEFORE obs are computed; obs terms +
@@ -156,6 +164,11 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     else if (k == "2") { g_cmd_mode = 2; printf("\r\n[cmd_mode] -> 2 (upper-teleop)\r\n");    fflush(stdout); }
     else if (k == "3") { g_cmd_mode = 3; printf("\r\n[cmd_mode] -> 3 (full-track/sim)\r\n");  fflush(stdout); }
     else if (k == "4") { g_cmd_mode = 4; printf("\r\n[cmd_mode] -> 4 (dance demo: clip full-track, VR 무시)\r\n"); fflush(stdout); }
+    else if (k == "5") {
+        if (State_Mimic::motion_light) { g_cmd_mode = 5; printf("\r\n[cmd_mode] -> 5 (stand+상체 test demo: light clip, VR 무시)\r\n"); }
+        else { printf("\r\n[cmd_mode] mode5 비활성 (config에 motion_file_light 없음)\r\n"); }
+        fflush(stdout);
+    }
 
     // Print the base_vel command ONLY when a velocity key changed it (not every frame).
     // mode3 zeroes base_vel downstream, so show that; modes 1/2 use it as-is.
@@ -228,7 +241,7 @@ namespace mdp
 
 REGISTER_OBSERVATION(motion_command)
 {
-    auto loader = State_Mimic::motion;
+    auto loader = active_demo_loader();
     std::vector<float> data;
 
     auto motion_joint_pos = loader->joint_pos();
@@ -245,7 +258,7 @@ REGISTER_OBSERVATION(motion_command)
 
 REGISTER_OBSERVATION(motion_anchor_ori_b)
 {
-    auto loader = State_Mimic::motion;
+    auto loader = active_demo_loader();
     std::vector<float> out;
 
     auto real_quat_w = robot_quat_w(env);
@@ -264,8 +277,8 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
 // q_ref(29)+q̇_ref(29) = 58, lower[:12]/upper[12:] groups zeroed per cmd_mode (mode3 = no mask).
 REGISTER_OBSERVATION(masked_joint_command)
 {
-    auto loader = State_Mimic::motion;
-    const bool demo = (g_cmd_mode == 4);   // mode4 = dance demo (clip); mode1/2/3 = VR buffer (never clip)
+    auto loader = active_demo_loader();
+    const bool demo = g_is_demo();   // mode4 dance / mode5 stand-demo = clip; mode1/2/3 = VR buffer (never clip)
     auto q  = demo ? loader->joint_pos_clip() : loader->joint_pos_vr();
     auto qd = demo ? loader->joint_vel_clip() : loader->joint_vel_vr();
     const bool mu = g_mask_upper(), ml = g_mask_lower();
@@ -310,10 +323,10 @@ REGISTER_OBSERVATION(masked_root_ori_b)
 {
     std::vector<float> out(6, 0.0f);
     if (g_mask_upper()) {
-        auto loader = State_Mimic::motion;
+        auto loader = active_demo_loader();
         Eigen::Quaternionf real_quat_w = env->robot->data.root_quat_w;   // pelvis (IMU)
         Eigen::Quaternionf aligned;
-        if (g_cmd_mode == 4) {                       // mode4 dance: clip pelvis ori (enter-aligned)
+        if (g_is_demo()) {                           // mode4 dance / mode5 stand: clip pelvis ori (enter-aligned)
             aligned = init_quat * loader->root_quaternion_clip();
         } else if (loader->vr_override) {            // VR live: VR pelvis ori (enter-aligned)
             aligned = init_quat * loader->root_quaternion_vr();
@@ -362,6 +375,16 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     motion_ = std::make_shared<MotionLoader_>(motion_file.string());
     spdlog::info("Loaded motion file '{}' with duration {:.2f}s", motion_file.stem().string(), motion_->duration);
     motion = motion_;
+
+    // Optional mode5 light-demo clip (stand + upper-body test). Absent -> mode5 disabled.
+    if (cfg["motion_file_light"]) {
+        std::filesystem::path light_file = cfg["motion_file_light"].as<std::string>();
+        if (!light_file.is_absolute()) light_file = param::proj_dir / light_file;
+        motion_light_ = std::make_shared<MotionLoader_>(light_file.string());
+        motion_light = motion_light_;
+        spdlog::info("Loaded mode5 light-demo '{}' with duration {:.2f}s",
+                     light_file.stem().string(), motion_light_->duration);
+    }
     if(cfg["time_start"]) {
         float time_start = cfg["time_start"].as<float>();
         time_range_[0] = std::clamp(time_start, 0.0f, motion_->duration);
@@ -437,6 +460,7 @@ void State_Mimic::enter()
         auto sleepTill = start + dt;
 
         motion->reset(env->robot->data, time_range_[0]);
+        if (motion_light) motion_light->reset(env->robot->data, 0.0f);  // mode5 clip anchor = enter heading
         auto ref_yaw = isaaclab::yawQuaternion(motion->root_quaternion()).toRotationMatrix();
         auto robot_yaw = isaaclab::yawQuaternion(robot_quat_w(env.get())).toRotationMatrix();
         init_quat = robot_yaw * ref_yaw.transpose();
@@ -456,9 +480,10 @@ void State_Mimic::enter()
                 // — no heading snap/turn before it begins. The motion's OWN internal turning is kept
                 // (only the start is re-aligned). init_quat was otherwise frozen at FSM enter, which
                 // made the robot jump to the enter-heading. (mode1 / mode2-3 standby don't use init_quat.)
-                if (motion && (g_cmd_mode == 4 || motion->vr_override)) {
-                    Eigen::Quaternionf ref_now = (g_cmd_mode == 4) ? motion->root_quaternion_clip()
-                                                                   : motion->root_quaternion_vr();
+                if (motion && (g_is_demo() || motion->vr_override)) {
+                    auto dl = active_demo_loader();   // mode5 -> light clip, else primary
+                    Eigen::Quaternionf ref_now = g_is_demo() ? dl->root_quaternion_clip()
+                                                             : dl->root_quaternion_vr();
                     auto ry = isaaclab::yawQuaternion(ref_now).toRotationMatrix();
                     auto rr = isaaclab::yawQuaternion(robot_quat_w(env.get())).toRotationMatrix();
                     init_quat = rr * ry.transpose();
@@ -475,6 +500,7 @@ void State_Mimic::enter()
                 g_loco.update(bv_s, g_cmd_mode);
             }
             motion->update(env->episode_length * env->step_dt + time_range_[0]);
+            if (motion_light) motion_light->update(env->episode_length * env->step_dt);  // advance mode5 clip
             env->step();
 
             // Sleep

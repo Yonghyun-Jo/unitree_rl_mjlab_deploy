@@ -22,9 +22,11 @@ public:
     class MotionLoader_;
 
     static std::shared_ptr<MotionLoader_> motion; // for obs computation
+    static std::shared_ptr<MotionLoader_> motion_light; // mode5 test-demo clip (stand + upper-body). null if unset.
 private:
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::shared_ptr<MotionLoader_> motion_; // for saving
+    std::shared_ptr<MotionLoader_> motion_light_; // mode5 light-demo loader (owns; motion_light aliases this)
 
     std::thread policy_thread;
     bool policy_thread_running = false;
