@@ -32,6 +32,7 @@ import zmq
 from scipy.spatial.transform import Rotation
 
 import vr_shm  # same teleop/ dir
+from teleop_safety import SafetyMonitor  # watchdog(stale/rate) + E-stop(A latch), same teleop/ dir
 from general_motion_retargeting import GeneralMotionRetargeting
 from general_motion_retargeting.rot_utils import quat_mul_np
 
@@ -86,6 +87,46 @@ def _drain_latest(sub):
             latest = sub.recv_multipart(zmq.NOBLOCK)
         except zmq.Again:
             return latest
+
+
+class ZmqReceiver:
+    """롤백/비교용 ZMQ SUB 래퍼. UdpReceiver와 동일 인터페이스(latest/age_ms/close).
+
+    com1이 bind, 노트북 PUB이 connect(기존 토폴로지). latest()는 NOBLOCK drain으로
+    최신 JSON 프레임 dict 반환(없으면 None) — pace는 호출측 loop sleep이 담당(UDP와 통일).
+    프레임 shape를 pico_wire(UDP)와 맞추기 위해 누락된 컨트롤러 버튼 키를 기본값으로 채운다
+    (구 JSON publisher가 right.primary/menu를 안 보내면 SafetyMonitor 접근이 KeyError 나므로)."""
+
+    def __init__(self, port):
+        ctx = zmq.Context.instance()
+        self.sub = ctx.socket(zmq.SUB)
+        self.sub.setsockopt(zmq.RCVHWM, 4)
+        self.sub.setsockopt_string(zmq.SUBSCRIBE, "")
+        self.sub.bind(f"tcp://*:{port}")
+        self._last_rx = None
+
+    def latest(self):
+        msg = _drain_latest(self.sub)          # NOBLOCK drain → 최신 1개 (or None)
+        if msg is None:
+            return None
+        self._last_rx = time.monotonic()
+        f = json.loads(msg[1].decode())
+        ctrls = f.setdefault("controllers", {})
+        for side in ("left", "right"):
+            c = ctrls.setdefault(side, {})
+            for k in ("primary", "secondary", "menu", "axis_click"):
+                c.setdefault(k, False)
+            c.setdefault("grip", 0.0)
+            c.setdefault("axis", [0.0, 0.0])
+        return f
+
+    def age_ms(self):
+        if self._last_rx is None:
+            return float("inf")
+        return (time.monotonic() - self._last_rx) * 1000.0
+
+    def close(self):
+        self.sub.close(0)
 
 
 def _nlerp(q0, q1, a):
@@ -143,6 +184,8 @@ class _OneEuro:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5556)
+    ap.add_argument("--transport", choices=["udp", "zmq"], default="udp",
+                    help="pose 스트림 transport. udp(기본, WAN/LAN 공통·손실=스킵) / zmq(롤백·비교용).")
     ap.add_argument("--mode", type=int, default=1, choices=[1, 2, 3],
                     help="시작 cmd_mode (기본 1=안전 full-auto). 실행 중 버튼이 override: X→1/Y→2/B→3.")
     ap.add_argument("--ema", type=float, default=0.5, help="dof_vel EMA alpha (0..1, higher=less smoothing)")
@@ -186,13 +229,21 @@ def main() -> None:
                                    # 조기수렴 → 상한 10이어도 실사용 iter 적음. CPU 경합은 프로세스 분리로.
     print(f"[bridge] GMR ready. (IK max_iter={gmr.max_iter})")
 
-    ctx = zmq.Context.instance()
-    sub = ctx.socket(zmq.SUB)
-    sub.setsockopt(zmq.RCVHWM, 4)                 # small queue; _drain_latest keeps freshest
-    sub.setsockopt_string(zmq.SUBSCRIBE, "")
-    sub.setsockopt(zmq.RCVTIMEO, 2000)
-    sub.bind(f"tcp://*:{args.port}")
-    print(f"[bridge] bind tcp://*:{args.port}  default mode={args.mode}  grip_enable={args.grip_enable}")
+    # ── pose 스트림 수신자 (transport 교체 가능). udp=기본(WAN/LAN 공통), zmq=롤백.
+    if args.transport == "udp":
+        from udp_receiver import UdpReceiver
+        rx = UdpReceiver(port=args.port)
+        print(f"[bridge] transport=UDP  bind *:{args.port}/udp  "
+              f"default mode={args.mode}  grip_enable={args.grip_enable}")
+    else:
+        rx = ZmqReceiver(port=args.port)
+        print(f"[bridge] transport=ZMQ  bind tcp://*:{args.port}  "
+              f"default mode={args.mode}  grip_enable={args.grip_enable}")
+
+    # ── 안전 감시: 워치독(stale/저수신 → mode1) + E-stop(우측 A 래치, 우측 menu 1s 홀드 해제).
+    safety = SafetyMonitor(stale_ms=200, min_rate_hz=30)
+    prev_reason = None
+    POLL_DT = 0.003   # latest()가 논블록 → 사이클당 소량 sleep으로 busy-poll(100% CPU) 방지
 
     prev_dof = None
     dof_vel = np.zeros(29, dtype=np.float32)
@@ -309,17 +360,24 @@ def main() -> None:
 
     try:
         while True:
-            msg = _drain_latest(sub)
-            if msg is None:
-                try:
-                    msg = sub.recv_multipart()          # block (with RCVTIMEO)
-                except zmq.Again:
-                    print("[bridge] no data (publisher off?) -> safe fallback")
-                    fallback()
-                    prev_dof = None
-                    continue
-            _, payload = msg
-            f = json.loads(payload.decode())
+            f = rx.latest()                             # UDP/ZMQ 공통: drain-to-latest + dedup (or None)
+            dec = safety.update(f, rx.age_ms())         # 워치독(stale/저수신) + E-stop(우측 A) 래치
+            if dec["mode"] is not None:                 # ESTOP 또는 SAFE(통신불량/스톨) → 안전 개입
+                user_mode = 1                           # 안전 기본모드(복귀 시에도 mode1부터)
+                fallback()                              # 안전 mode1 + base_vel 0 (smooth면 _push_inactive)
+                # 실로봇 Phase2 훅: if dec["estop"]: <Unitree SDK damping/비상정지>. sim은 mode1로 충분.
+                prev_dof = None
+                if dec["reason"] != prev_reason:
+                    print(f"[safety] {dec['reason']}  rate={dec['rate_hz']:.0f}Hz gap={dec['gap_ms']:.0f}ms")
+                    prev_reason = dec["reason"]
+                time.sleep(POLL_DT)
+                continue
+            if prev_reason is not None:                 # 안전상태에서 정상 복귀
+                print("[safety] OK (정상 복귀)")
+                prev_reason = None
+            if f is None:                               # 새 프레임 없음(정상 범위) → 이전상태 유지
+                time.sleep(POLL_DT)                     # (smooth output thread가 gap을 extrapolation)
+                continue
             proc += 1
             now = time.monotonic()
 
@@ -378,7 +436,7 @@ def main() -> None:
             _out_thread.join(timeout=0.5)
         else:
             fallback()                                  # 종료: 안전 mode1 (또는 clip)
-        sub.close(0)
+        rx.close()
         print(f"\n[bridge] stopped (safe fallback). total {n} teleop frames.")
 
 
