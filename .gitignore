@@ -13,7 +13,7 @@ deploy/robots/a2/build
 src/assets/motions/g1/dance1_subject2.npz
 simulate/build
 # local build deps (prebuilt unitree_sdk2 + cyclonedds; rebuild via deploy/scripts/build_deps.sh)
-
+.deps/
 # laptop-side VR teleop env (reproduce via deploy/robots/g1/teleop/setup_teleop.sh)
 .venv-teleop/
 .gmr/
