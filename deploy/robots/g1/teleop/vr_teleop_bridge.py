@@ -15,7 +15,7 @@ cmd_mode masks in C++: mode2=상체(팔·waist), mode3=전신(다리 포함). ON
 ⚠ Runs on the LAPTOP / a Linux PC near com1 (NOT the robot onboard — GMR stays off the
   control host). Set up the env ONCE, then run from the repo root:
     bash deploy/robots/g1/teleop/setup_teleop.sh          # venv + GMR + g1 meshes
-    .venv-teleop/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py --mode 1
+    .venv-teleop/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py   # 기본 mode1(안전) 시작, 버튼 X/Y/B로 승격
   (on com1 the existing `gmr` conda env also works.)
   (run alongside: unitree_mujoco  +  g1_ctrl --network=lo  [f->stand, m->policy])
 """
@@ -143,8 +143,8 @@ class _OneEuro:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5556)
-    ap.add_argument("--mode", type=int, default=2, choices=[1, 2, 3],
-                    help="default cmd_mode (2=upper-teleop, 3=full). buttons override at runtime.")
+    ap.add_argument("--mode", type=int, default=1, choices=[1, 2, 3],
+                    help="시작 cmd_mode (기본 1=안전 full-auto). 실행 중 버튼이 override: X→1/Y→2/B→3.")
     ap.add_argument("--ema", type=float, default=0.5, help="dof_vel EMA alpha (0..1, higher=less smoothing)")
     ap.add_argument("--vx", type=float, default=1.5, help="base_vel vx cap (m/s) at full stick")
     ap.add_argument("--vy", type=float, default=0.8, help="base_vel vy cap")
