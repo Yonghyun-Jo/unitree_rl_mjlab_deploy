@@ -184,8 +184,9 @@ class _OneEuro:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5556)
-    ap.add_argument("--transport", choices=["udp", "zmq"], default="udp",
-                    help="pose 스트림 transport. udp(기본, WAN/LAN 공통·손실=스킵) / zmq(롤백·비교용).")
+    ap.add_argument("--transport", choices=["udp", "zmq"], default="zmq",
+                    help="pose 스트림 transport. zmq(기본, TCP·기존 방식·LAN 매끄러움) / "
+                         "udp(원격 WAN 손실=스킵용; pico_wire/udp_receiver 필요).")
     ap.add_argument("--mode", type=int, default=1, choices=[1, 2, 3],
                     help="시작 cmd_mode (기본 1=안전 full-auto). 실행 중 버튼이 override: X→1/Y→2/B→3.")
     ap.add_argument("--ema", type=float, default=0.5, help="dof_vel EMA alpha (0..1, higher=less smoothing)")
