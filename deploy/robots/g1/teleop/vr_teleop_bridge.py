@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+import threading
 import time
 
 import numpy as np
@@ -87,6 +88,58 @@ def _drain_latest(sub):
             return latest
 
 
+def _nlerp(q0, q1, a):
+    """Normalized-lerp between wxyz quats by fraction a, with hemisphere alignment."""
+    q0 = np.asarray(q0, dtype=np.float32)
+    q1 = np.asarray(q1, dtype=np.float32)
+    if float(np.dot(q0, q1)) < 0.0:
+        q1 = -q1                                       # shortest arc (avoid ±q flip)
+    q = q0 + a * (q1 - q0)
+    n = float(np.linalg.norm(q))
+    return q / n if n > 1e-8 else q0
+
+
+class _OneEuro:
+    """Vector One-Euro filter (Casiez 2012) on a fixed-dt timeline.
+
+    Adaptive low-pass for interactive/mocap signals: heavy smoothing when slow
+    (kills jitter spikes), low lag when fast. Returns (x_hat, dx_hat) where dx_hat
+    is the smoothed velocity (reused for gap extrapolation).
+    """
+
+    def __init__(self, dt, min_cutoff=1.0, beta=0.7, d_cutoff=1.0):
+        self.dt = float(dt)
+        self.min_cutoff = float(min_cutoff)
+        self.beta = float(beta)
+        self.d_cutoff = float(d_cutoff)
+        self.x_prev = None
+        self.dx_prev = None
+
+    def reset(self):
+        self.x_prev = None
+        self.dx_prev = None
+
+    def _alpha(self, cutoff):
+        tau = 1.0 / (2.0 * np.pi * cutoff)
+        return 1.0 / (1.0 + tau / self.dt)
+
+    def __call__(self, x):
+        x = np.asarray(x, dtype=np.float32)
+        if self.x_prev is None:
+            self.x_prev = x.copy()
+            self.dx_prev = np.zeros_like(x)
+            return x, np.zeros_like(x)
+        dx = (x - self.x_prev) / self.dt
+        a_d = self._alpha(self.d_cutoff)                        # scalar
+        dx_hat = a_d * dx + (1.0 - a_d) * self.dx_prev
+        cutoff = self.min_cutoff + self.beta * np.abs(dx_hat)   # per-element
+        a = self._alpha(cutoff)                                 # per-element
+        x_hat = a * x + (1.0 - a) * self.x_prev
+        self.x_prev = x_hat
+        self.dx_prev = dx_hat
+        return x_hat, dx_hat
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5556)
@@ -107,6 +160,23 @@ def main() -> None:
                     help="GMR IK max iterations per stage (TWIST2 스톡=10). warm-start(mink.Configuration "
                          "프레임간 유지)+0.001 조기수렴이라 대부분 몇 iter만 씀 → 10이어도 저렴. "
                          "지연은 iter가 아니라 GMR 프로세스 분리로 잡는다(TWIST2 레시피).")
+    # ── com1 원격테스트(WAN jitter/loss) 전용 예측 스무딩 (opt-in). 기본 off → 실배포(co-located) 무영향.
+    #    고정 rate 출력 루프 + One-Euro(적응형 저역통과) + gap 속도 extrapolation.
+    #    근거: TWIST2(co-locate·hot-loop 무보간), h2_compact(extrapolation for latency jitter), One-Euro(VR/mocap 표준).
+    ap.add_argument("--smooth", action=argparse.BooleanOptionalAction, default=True,
+                    help="예측 스무딩(고정 rate + One-Euro + gap extrapolation + slew-rate limit). "
+                         "기본 ON — 실배포 안전장치(outlier 차단)로도 유용. 끄려면 --no-smooth.")
+    ap.add_argument("--smooth-hz", type=float, default=50.0,
+                    help="스무딩 출력 rate(Hz). 제어 루프(50Hz)에 맞춤.")
+    ap.add_argument("--smooth-mincut", type=float, default=1.0,
+                    help="One-Euro min_cutoff(Hz). 낮을수록 정지 시 강한 스무딩(튐 억제), 높을수록 반응 빠름.")
+    ap.add_argument("--smooth-beta", type=float, default=0.7,
+                    help="One-Euro beta(속도 계수). 높을수록 빠른 모션에서 lag↓.")
+    ap.add_argument("--smooth-maxgap", type=int, default=4,
+                    help="손실 gap에서 속도 extrapolation 최대 tick 수(이후 hold). run-away 방지 상한.")
+    ap.add_argument("--smooth-max-jointvel", type=float, default=12.0,
+                    help="slew-rate limit: reference가 tick당 이동 가능한 최대 관절속도(rad/s). outlier/garbage "
+                         "프레임(트래커 dropout·GMR IK 튐·quat flip)을 물리한계로 clamp → 주기적 엄청난 튐 차단.")
     args = ap.parse_args()
     signal.signal(signal.SIGTERM, _sigterm)
 
@@ -134,11 +204,96 @@ def main() -> None:
     t_report = time.monotonic()
     proc = 0
 
+    # ── 예측 스무딩(opt-in): receiver는 최신 target만 _shared에 갱신, output thread가 고정 rate로
+    #    One-Euro+extrapolation 적용해 shm write. smooth off면 _shared/thread 미사용(기존 경로 그대로).
+    _lock = threading.Lock()
+    _shared = {"seq": 0, "active": False, "cmd_mode": user_mode,
+               "stick": [0.0, 0.0, 0.0], "quat": list(IDENTITY_QUAT), "dof": list(ZERO29)}
+    _stop = threading.Event()
+
+    def _push_target(cmd_mode, stick, quat, dof):
+        with _lock:
+            _shared["seq"] += 1
+            _shared["active"] = True
+            _shared["cmd_mode"] = cmd_mode
+            _shared["stick"] = list(stick)
+            _shared["quat"] = list(quat)
+            _shared["dof"] = dof.tolist() if hasattr(dof, "tolist") else list(dof)
+
+    def _push_inactive(cmd_mode):
+        with _lock:
+            _shared["active"] = False
+            _shared["cmd_mode"] = cmd_mode
+
+    def output_loop():
+        out_dt = 1.0 / args.smooth_hz
+        oe = _OneEuro(out_dt, args.smooth_mincut, args.smooth_beta)
+        cur = None
+        cur_vel = np.zeros(29, dtype=np.float32)
+        cur_quat = np.asarray(IDENTITY_QUAT, dtype=np.float32)
+        quat_a = 1.0 - float(np.exp(-out_dt / 0.05))    # ~50ms 방향 저역통과
+        VMAX, VDECAY = 15.0, 0.85                        # 속도 clamp / gap 감쇠(오래 끊기면 hold)
+        max_step = args.smooth_max_jointvel * out_dt     # slew-rate limit: tick당 최대 관절 이동(rad)
+        seq, last_seen, gap = 0, -1, 0
+        nxt = time.monotonic()
+        while not _stop.is_set():
+            with _lock:
+                s_seq, active, um = _shared["seq"], _shared["active"], _shared["cmd_mode"]
+                st = list(_shared["stick"]); tq = list(_shared["quat"]); tgt = list(_shared["dof"])
+            if not active:
+                if args.fallback_clip:
+                    vr_shm.write(seq, 0, um, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)
+                else:
+                    vr_shm.write(seq, 1, 1, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)
+                seq += 1; oe.reset(); cur = None; cur_vel[:] = 0.0; last_seen = s_seq; gap = 0
+            else:
+                have_new = (s_seq != last_seen)
+                if have_new:
+                    last_seen = s_seq; gap = 0
+                    z_raw = np.asarray(tgt, dtype=np.float32)
+                    if cur is not None:
+                        # slew-rate limit: outlier/garbage(트래커 dropout·GMR IK 튐)를 물리한계로 clamp.
+                        # 실동작은 물리속도 이하라 통과, 단발 garbage는 흡수 → 다음 정상프레임이 되돌림.
+                        z = cur + np.clip(z_raw - cur, -max_step, max_step)
+                    else:
+                        z = z_raw                        # 첫 프레임(active 진입): operator 포즈에 snap
+                elif cur is not None and gap < args.smooth_maxgap:
+                    z = cur + cur_vel * out_dt           # gap: 속도 extrapolation(도착 지연 은폐)
+                    gap += 1
+                else:
+                    z = cur if cur is not None else np.asarray(tgt, dtype=np.float32)   # 상한 초과→hold
+                x_hat, dx_hat = oe(z)
+                cur = x_hat
+                if have_new:
+                    cur_vel = np.clip(dx_hat, -VMAX, VMAX)
+                else:
+                    cur_vel = cur_vel * VDECAY
+                cur_quat = _nlerp(cur_quat, tq, quat_a)
+                vr_shm.write(seq, 1, um, st, cur_quat.tolist(), cur.tolist(), cur_vel.tolist())
+                seq += 1
+            nxt += out_dt
+            slp = nxt - time.monotonic()
+            if slp > 0:
+                time.sleep(slp)
+            else:
+                nxt = time.monotonic()                   # 밀리면 리셋(누적 방지)
+        vr_shm.write(seq, 1, 1, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)  # 종료 안전 write
+
+    _out_thread = None
+    if args.smooth:
+        _out_thread = threading.Thread(target=output_loop, daemon=True)
+        _out_thread.start()
+        print(f"[bridge] smooth ON: {args.smooth_hz:.0f}Hz out, One-Euro(mincut={args.smooth_mincut}, "
+              f"beta={args.smooth_beta}), extrap maxgap={args.smooth_maxgap} ticks.")
+
     def fallback():
         """VR 비활성(body 끊김/미착용/grip 놓음/종료): 기본=안전 mode1 자동복귀.
         valid=1 + cmd_mode=1 + base_vel=0 → 정책이 레퍼런스(clip/VR)를 masking으로 무시하고
         full-auto mode1로 정지 → clip이 흐르지 않음. --fallback-clip이면 valid=0(clip 재생, 데모)."""
         nonlocal seq_out
+        if args.smooth:
+            _push_inactive(user_mode)                    # smooth: output thread가 안전 write 담당
+            return
         if args.fallback_clip:
             vr_shm.write(seq_out, 0, user_mode, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)
         else:
@@ -196,6 +351,13 @@ def main() -> None:
             qpos = gmr.retarget(human, offset_to_ground=True)   # [36]
             root_quat = [float(x) for x in qpos[3:7]]           # wxyz
             dof_pos = np.asarray(qpos[7:36], dtype=np.float32)  # 29, == deploy JOINT_ORDER
+            if args.smooth:
+                # receiver는 최신 target만 갱신 → output thread가 고정 rate로 스무딩/보간해 shm write.
+                _push_target(user_mode, stick, root_quat, dof_pos)
+                n += 1
+                report(now, f"TELEOP(smooth) mode={user_mode}  base_vel=({stick[0]:+.2f},"
+                            f"{stick[1]:+.2f},{stick[2]:+.2f})  arm(L_sho_pitch)={dof_pos[15]:+.2f}")
+                continue
             if prev_dof is not None and last_t is not None:
                 dt = max(now - last_t, 1e-3)
                 raw = (dof_pos - prev_dof) / dt
@@ -211,7 +373,11 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
-        fallback()                                      # 종료: 안전 mode1 (또는 clip)
+        if args.smooth and _out_thread is not None:
+            _stop.set()                                 # output thread가 종료 시 안전 write 후 exit
+            _out_thread.join(timeout=0.5)
+        else:
+            fallback()                                  # 종료: 안전 mode1 (또는 clip)
         sub.close(0)
         print(f"\n[bridge] stopped (safe fallback). total {n} teleop frames.")
 
