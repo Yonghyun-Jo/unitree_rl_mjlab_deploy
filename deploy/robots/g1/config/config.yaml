@@ -110,3 +110,4 @@ FSM:
     time_start: 0.0
     time_end: 1000.0
     end_state: Mimic_Masked   # 타임아웃 없음(무한 실행) — p/v 누를 때까지 유지. 낙상→Passive는 그대로.
+    switch_blend_steps: 50    # mode 전환 crossfade 창(tick @50Hz). 50=1.0s, 25=0.5s, 0=즉시(off). 재컴파일 없이 조절.

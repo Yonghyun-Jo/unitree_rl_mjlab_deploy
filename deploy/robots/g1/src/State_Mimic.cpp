@@ -401,6 +401,13 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     if (cfg["end_state"]) {
         end_state = cfg["end_state"].as<std::string>();
     }
+    // mode-switch crossfade window (ticks @50Hz). Tune on hardware without recompiling: edit
+    // config.yaml + restart g1_ctrl. Default 50 = 1.0s (0=off/instant, 25=0.5s).
+    if (cfg["switch_blend_steps"]) {
+        g_loco.switch_blend_steps = cfg["switch_blend_steps"].as<int>();
+        spdlog::info("mode-switch crossfade window = {} ticks (~{:.2f}s @50Hz)",
+                     g_loco.switch_blend_steps, g_loco.switch_blend_steps / 50.0f);
+    }
 
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
         YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
@@ -519,6 +526,10 @@ void State_Mimic::run()
     // index == robot joint index). arm_scale is 1.0 except during a mode1 transition.
     g_loco.apply_arm_blend(action.data(), env->robot->data.default_joint_pos.data(),
                            static_cast<int>(action.size()));
+    // mode-switch crossfade (+ NaN guard): ease the action from the frozen pre-switch pose to the
+    // live action over the blend window so a mode change never sends a raw joint STEP to the
+    // motors (which trips the onboard velocity/torque protection). No-op outside a switch.
+    g_loco.apply_switch_blend(action.data(), static_cast<int>(action.size()));
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }

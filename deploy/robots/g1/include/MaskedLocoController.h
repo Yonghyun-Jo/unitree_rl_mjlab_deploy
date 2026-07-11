@@ -40,7 +40,22 @@ struct MaskedLocoController {
   int   bv_ramp_rem = 0;
   int   arm_rem = 0;
 
+  // ---- mode-switch crossfade (mode -> {2,3,4,5}) -------------------------------------------
+  // Ease the OUTPUT action from the frozen pre-switch pose to the live action over
+  // switch_blend_steps ticks (smoothstep). Zero effect outside a switch (full-speed response).
+  // Bridges BOTH the reference jump and the ONNX in-graph multihead head-flip a switch produces,
+  // so no raw joint step reaches the motors (onboard velocity/torque protective stop).
+  int   switch_blend_steps = 50;    // 1.0s @ 50Hz. config-tunable (config.yaml: switch_blend_steps).
+  int   switch_blend_rem   = 0;
+  int   switch_new_mode    = 1;
+  float switch_alpha       = 1.0f;  // 0 = hold pre-switch pose, 1 = full live (set in update()).
+  bool  switch_fresh       = false; // notify_mode_switch arms; run() captures a_hold on 1st apply.
+  bool  a_prev_valid       = false;
+  std::array<float, 29> a_hold = {};  // frozen pre-switch target (source pose of the crossfade)
+  std::array<float, 29> a_prev = {};  // last published target (becomes a_hold at the next switch)
+
   static inline float clampf(float x, float lo, float hi) { return std::max(lo, std::min(hi, x)); }
+  static inline float smoothstep01(float s) { s = clampf(s, 0.f, 1.f); return s * s * (3.0f - 2.0f * s); }
 
   // swing_phase in [0,1] -> swing height (m) above stance, quintic peak ~clearance.
   static float swing_z_profile(float swing_phase, float clearance) {
@@ -81,6 +96,11 @@ struct MaskedLocoController {
     bv_ramp_rem  = bv_ramp_steps;
     bv_blend     = 0.0f;
     if (new_mode == 1) arm_rem = arm_blend_in + arm_blend_out;
+    if (new_mode >= 2) {                 // crossfade for mode2/3/4/5 (mode1 handled by arm-blend above)
+      switch_new_mode  = new_mode;
+      switch_blend_rem = switch_blend_steps;
+      switch_fresh     = true;           // run() freezes the pre-switch pose on the next apply
+    }
   }
 
   // Advance one control step; cache base_vel / foot_z / arm_scale. Call ONCE per step pre-obs.
@@ -110,6 +130,14 @@ struct MaskedLocoController {
     } else {
       arm_scale = 1.0f;
     }
+    // 4) mode-switch crossfade weight (0->1 over switch_blend_steps), same timeline as arm_rem.
+    //    Applied to the OUTPUT action in apply_switch_blend (run()).
+    if (switch_blend_rem > 0) {
+      switch_alpha = smoothstep01(1.0f - float(switch_blend_rem) / std::max(1, switch_blend_steps));
+      switch_blend_rem -= 1;
+    } else {
+      switch_alpha = 1.0f;
+    }
   }
 
   // Ease the upper-joint TARGETS toward the default pose during the mode1 blend.
@@ -124,5 +152,30 @@ struct MaskedLocoController {
     if (arm_scale < 1.0f)
       for (int i = n_lower; i < num_dof; ++i)
         action[i] = default_pose[i] + arm_scale * (action[i] - default_pose[i]);
+  }
+
+  // Crossfade the OUTPUT action from the frozen pre-switch pose (a_hold) toward the live action
+  // using switch_alpha (0->1 over the window, computed in update()). Applied ONLY during a
+  // mode -> {2,3,4,5} transition; zero effect otherwise (full-speed response). Upper joints
+  // [n_lower,num_dof) always; lower [0,n_lower) only for full-body target modes (new_mode>=3),
+  // so a mode1->mode2 switch keeps the LEGS live (gait uninterrupted) and only splines the
+  // waist+arms toward the teleop target. Also NaN/Inf-guards (hold last-good target per joint)
+  // and tracks a_prev every call so a_hold captures the true pre-switch pose at the next switch.
+  //   action: processed motor targets (in place), length num_dof.
+  void apply_switch_blend(float* action, int num_dof) {
+    const int n = std::min(num_dof, static_cast<int>(a_prev.size()));
+    if (a_prev_valid)
+      for (int i = 0; i < n; ++i) if (!std::isfinite(action[i])) action[i] = a_prev[i];
+    if (switch_fresh) {                                  // freeze the pre-switch pose once
+      for (int i = 0; i < n; ++i) a_hold[i] = a_prev_valid ? a_prev[i] : action[i];
+      switch_fresh = false;
+    }
+    if (switch_alpha < 1.0f) {
+      const int lo = (switch_new_mode >= 3) ? 0 : n_lower;   // mode2: waist+arms only, legs live
+      for (int i = lo; i < n; ++i)
+        action[i] = (1.0f - switch_alpha) * a_hold[i] + switch_alpha * action[i];
+    }
+    for (int i = 0; i < n; ++i) a_prev[i] = action[i];
+    a_prev_valid = true;
   }
 };
