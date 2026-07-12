@@ -204,5 +204,89 @@ python deploy/robots/g1/teleop/vr_replay.py <motion.npz> --mode 2 # PICO 없이 
 - **xrobotoolkit_sdk 아키텍처**: 로봇 컴퓨터(ARM64 Jetson / x86)용 빌드 필요. `reference_code/.../XRoboToolkit-PC-Service-Pybind_X86_and_ARM64`에 양쪽 빌드 있음. **윈도우용 SDK는 이식 불가.** GMR 자체엔 xrobotoolkit_sdk 불필요(publisher만 필요).
 - **GMR 재현**: 로봇 컴퓨터엔 conda `gmr` env가 없음 → `setup_teleop.sh`가 `.venv-teleop` 생성 + GMR을 **GitHub에서 새로 clone**(현재 com1이 쓰는 `reference_code/GMR` editable은 clone에 없음) + g1 메시 복구. 동작 재현성이 필요하면 `setup_teleop.sh`의 `GMR_COMMIT`을 known-good SHA로 핀.
 - **온보드는 네트워크 홉 불필요**: PICO·publisher·bridge·g1_ctrl이 전부 로컬 → publisher를 `127.0.0.1:5556`으로 쏘거나, 더 단순하게 xrt를 직접 읽어 GMR→`/dev/shm/g1_vr_ref`를 쓰는 **통합 로컬 브릿지**로 합쳐도 됨.
+
+---
+
+## 9. 텔레옵 관절 안전 3층
+
+> `Mimic_Masked`(텔레옵) 정책의 모터 출력 경로에 붙은 joint-space 안전장치. 정책이 OOD(학습
+> 밖 상황)나 발산으로 이상 출력을 내도 로봇을 보호하기 위한 3개의 독립 층.
+
+**철학**: 한계값을 기계한계/in-distribution **밖**에 두어 정상 동작에는 절대 닿지 않고,
+OOD/발산 상황에서만 발동하게 한다 → 학습 parity(관측 `last_action`은 raw 정책 출력, 안전층은
+출력 전용 필터)를 그대로 보존. 세 층 모두 config-gated이고 **커밋 기본값은 셋 다 `enable=false`**
+(배포해도 동작 0 변화). config는 `deploy/robots/g1/config/policy/mimic_masked/gmt_multihead_v0/params/deploy.yaml`의
+`safety:` 블록 + `action.clip`. **fail-safe**: `safety:` 블록이 없거나 배열 길이/파싱이 이상하면
+해당 층은 자동으로 비활성될 뿐, 0으로 clamp하거나 throw하지 않는다(`State_Mimic::load_safety_cfg`).
+
+### Layer 1 — 위치 clamp (passive, 항상 유효 시 gated)
+
+각 관절 목표 q를 기계한계 `[min, max]`(`src/assets/robots/unitree_g1/xmls/g1.xml`의 29개 관절
+range)로 clamp한다. 적용 지점은 2곳:
+1. **`action.clip`** (`process_actions`, `joint_actions.h:54-57`) — deploy.yaml `actions.JointPositionAction.clip`에
+   기계한계 29쌍이 채워져 있어 **항상** 적용된다. `default_joint_pos`/학습 q가 전부 범위 안쪽이라
+   in-distribution에서는 no-op — L1의 1차 방어선.
+2. **C++ 최종 clamp** (`enable_pos_clamp`, `State_Mimic.cpp` `run()`) — `apply_arm_blend`/`apply_switch_blend`
+   이후, `motor_cmd.q()`에 쓰기 직전에 한 번 더 clamp하는 최종 보루. `safety.enable_pos_clamp: true`일
+   때만 동작(기본 false).
+
+### Layer 2 — 속도 rate-limit (passive, `enable_rate_limit`)
+
+motor에 쓰는 q_target의 **per-tick 변화량**을 `vel_max · dt`로 캡한다(`js_rate_limit`, L1 clamp
+직후·모터 쓰기 직전).
+- **`run()`은 CtrlFSM에서 1kHz로 호출**되므로 `dt = 0.001`(`CtrlFSM.h`의 `dt=0.001` tick과 동일 —
+  정책 자체는 `policy_thread`에서 50Hz로 별도 스텝). 즉 `max_step = vel_max * 0.001`이고, 이게 매
+  1kHz tick마다 적용되므로 **effective cap ≈ vel_max rad/s**.
+- `q_prev`(이전 tick 목표 q)는 `State_Mimic::enter()`에서 **측정 pose**(`env->robot->data.joint_pos`)로
+  초기화 — 나중에 이 층을 켜도 첫 틱에서 stale q_prev로 인한 lurch가 나지 않는다.
+- 비활성일 때도 `q_prev`는 계속 추적만 한다(값은 그대로 통과) — 나중에 킬 때 점프 방지.
+
+### Layer 3 — 측정 qd 폭주 → warn/crit (active, `enable_qd_guard`, policy_thread 50Hz)
+
+`policy_thread`(50Hz — `g_cmd_mode`/`notify_mode_switch`와 같은 스레드) 루프에서 측정
+`joint_vel`의 `max|qd|`를 매 틱 감시한다(`js_qd_severity`). **`over_ticks`(기본 5 = 0.1s@50Hz)
+연속 초과** 시:
+- **warn**(`max|qd| > qd_warn`) → **mode1 강제(래치)**. 래치 중엔 매 틱 `g_cmd_mode = 1`로
+  덮어써 mode1을 유지(soft). **수동 복귀**: 조작자가 mode1을 **명시적으로 요청**(X버튼 또는
+  키보드 `'1'`, 내부적으로 `g_req_mode == 1`)해야 래치 해제 — qd가 아직 높으면 다음 sustained
+  구간에서 재래치될 수 있다.
+- **crit**(`max|qd| > qd_crit`) → `js_qd_crit_latched_`(atomic) 래치 → FSM `registered_checks`가
+  이를 읽어 **Passive(damping) 전이**(래치, hard). 복귀: 키보드 `'f'`로 FixStand 재기립 후,
+  `Mimic_Masked`를 **다시 진입**(FSM 재진입, `enter()`에서 warn/crit 래치·카운터 리셋)해야 해제.
+- ⚠ **tilt/낙상 감지는 이 층에 없다.** (기존 `bad_orientation` → Passive 체크는 별도로 이미
+  존재하지만, qd-guard 자체는 tilt를 보지 않는다 — 사용자가 눕는 동작을 위해 확장 예정.)
+
+### config 필드 (`deploy.yaml` `safety:` 블록)
+
+| 필드 | 타입 | 의미 |
+|---|---|---|
+| `enable_pos_clamp` / `enable_rate_limit` / `enable_qd_guard` | bool | 층별 on/off (커밋 기본 전부 false) |
+| `pos_min[29]` / `pos_max[29]` | rad | 기계한계(`action.clip`과 동일 값) |
+| `vel_max` | rad/s (scalar) | rate-limit effective cap |
+| `qd_warn` / `qd_crit` | rad/s | L3 경보/치명 임계 |
+| `over_ticks` | int | 연속 초과 판정 틱 수(@50Hz, 기본 5 = 0.1s) |
+
+전부 **재컴파일 없이** deploy.yaml 값만 바꿔 튜닝 가능.
+
+### 증분 enable 절차 (안전 — 반드시 순서대로, sim2sim 먼저)
+
+1. **코드 배포 시점** = 3층 전부 off. `action.clip`(기계한계)만 항상 유효하지만 in-distribution
+   에선 no-op이므로 실질적으로 동작 무변화.
+2. **sim2sim**(`unitree_mujoco` + `g1_ctrl --network=lo` + 브릿지)에서 `enable_pos_clamp: true` →
+   mode1/2/3 보행이 off일 때와 동일한지 확인.
+3. `enable_rate_limit: true`(`vel_max` 넉넉히) → 보행 lag/이상 없는지 확인 → Task 5(아래)로 측정한
+   in-distribution qd p99로 `vel_max`를 조인다.
+4. `enable_qd_guard: true` → 정상 보행에서 오발동 없는지(`qd_warn`/`qd_crit` ≫ 정상 보행 qd) +
+   인위적으로 빠른 동작/외란을 줬을 때 warn→mode1(X로 복귀), crit→Passive(`f`로 재기립) 폴백이
+   실제로 동작하는지 확인.
+5. **실로봇**: 위 sim 검증을 전부 통과한 뒤, mode1부터 시작하고 사람이 하드웨어 E-stop 옆에 대기.
+
+### in-distribution 임계 측정 (Task 5, 사용자 수행)
+
+sim2sim에서 정상 보행(mode1/2/3, 팔 동작 포함)을 몇 분간 돌리며 관절별 `max|qd|`/p99를 수집한다.
+- `vel_max = p99 × 1.5~2`
+- `qd_warn ≈ vel_max`
+- `qd_crit ≈ 1.5 × vel_max`
+- 위치(`pos_min/max`)는 기계한계 유지 — 이때 q도 한계 안쪽인지 함께 확인.
 </content>
 </invoke>

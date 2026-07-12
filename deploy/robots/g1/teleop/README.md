@@ -65,6 +65,10 @@ XRT_SRC=<.../XRoboToolkit-PC-Service-Pybind_X86_and_ARM64> bash deploy/robots/g1
 .venv-teleop/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py --transport local --grip-enable --mode 1
 ```
 
+> 텔레옵 정책(`Mimic_Masked`) 자체의 관절 안전장치(위치 clamp / 속도 rate-limit / 측정 qd 폭주
+> 감지 3층, 전부 config-gated·기본 off)는 이 E-stop과 별개다 → `rules/SYSTEM_OVERVIEW.md`의
+> "텔레옵 관절 안전 3층" 섹션 참고.
+
 ### 하드 E-stop (`/dev/shm/g1_estop`)
 - **`--transport local`에서만 무장.** sim2sim(`zmq`/`udp`)은 이 채널을 쓰지 않고 기존 soft mode1 fallback(안전모드 자동복귀)만 그대로 유지 — 하드 damping 없음.
 - 우측 A → E-stop 래치(브릿지 SafetyMonitor). 우측 menu 1s 홀드 → 해제 후 `f`로 재기립.
