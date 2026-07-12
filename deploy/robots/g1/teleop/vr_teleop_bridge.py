@@ -28,10 +28,14 @@ import threading
 import time
 
 import numpy as np
-import zmq
+try:
+    import zmq            # zmq transport 전용. 로컬/UDP만 쓰면 미설치여도 됨.
+except ImportError:
+    zmq = None
 from scipy.spatial.transform import Rotation
 
 import vr_shm  # same teleop/ dir
+import estop_shm            # /dev/shm/g1_estop 하트비트 (same teleop/ dir)
 from teleop_safety import SafetyMonitor  # watchdog(stale/rate) + E-stop(A latch), same teleop/ dir
 from general_motion_retargeting import GeneralMotionRetargeting
 from general_motion_retargeting.rot_utils import quat_mul_np
@@ -98,6 +102,8 @@ class ZmqReceiver:
     (구 JSON publisher가 right.primary/menu를 안 보내면 SafetyMonitor 접근이 KeyError 나므로)."""
 
     def __init__(self, port):
+        if zmq is None:
+            raise SystemExit("pyzmq 미설치: --transport zmq 쓰려면 `pip install pyzmq`. (local/udp는 불필요)")
         ctx = zmq.Context.instance()
         self.sub = ctx.socket(zmq.SUB)
         self.sub.setsockopt(zmq.RCVHWM, 4)
@@ -184,9 +190,10 @@ class _OneEuro:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5556)
-    ap.add_argument("--transport", choices=["udp", "zmq"], default="zmq",
+    ap.add_argument("--transport", choices=["udp", "zmq", "local"], default="zmq",
                     help="pose 스트림 transport. zmq(기본, TCP·기존 방식·LAN 매끄러움) / "
-                         "udp(원격 WAN 손실=스킵용; pico_wire/udp_receiver 필요).")
+                         "udp(원격 WAN 손실=스킵용; pico_wire/udp_receiver 필요) / "
+                         "local(온보드 co-located: xrt 직접읽기, 네트워크 없음).")
     ap.add_argument("--mode", type=int, default=1, choices=[1, 2, 3],
                     help="시작 cmd_mode (기본 1=안전 full-auto). 실행 중 버튼이 override: X→1/Y→2/B→3.")
     ap.add_argument("--ema", type=float, default=0.5, help="dof_vel EMA alpha (0..1, higher=less smoothing)")
@@ -236,6 +243,13 @@ def main() -> None:
         rx = UdpReceiver(port=args.port)
         print(f"[bridge] transport=UDP  bind *:{args.port}/udp  "
               f"default mode={args.mode}  grip_enable={args.grip_enable}")
+    elif args.transport == "local":
+        import xrobotoolkit_sdk as xrt        # 온보드 로컬: PC-Service에 붙음(xrt.init 인자없음)
+        from xrt_receiver import XrtReceiver
+        xrt.init()
+        rx = XrtReceiver(xrt)
+        print(f"[bridge] transport=LOCAL  xrt.init() (로컬 PC-Service)  "
+              f"default mode={args.mode}  grip_enable={args.grip_enable}")
     else:
         rx = ZmqReceiver(port=args.port)
         print(f"[bridge] transport=ZMQ  bind tcp://*:{args.port}  "
@@ -250,6 +264,7 @@ def main() -> None:
     dof_vel = np.zeros(29, dtype=np.float32)
     user_mode = args.mode                 # 유저 의도 teleop 모드(2/3, 버튼으로 변경). 출력 mode와 분리.
     seq_out = 0
+    estop_seq = 0
     last_t = None
     # status
     n = 0
@@ -363,6 +378,8 @@ def main() -> None:
         while True:
             f = rx.latest()                             # UDP/ZMQ 공통: drain-to-latest + dedup (or None)
             dec = safety.update(f, rx.age_ms())         # 워치독(stale/저수신) + E-stop(우측 A) 래치
+            estop_seq += 1
+            estop_shm.write(estop_seq, 1 if dec["mode"] is not None else 0)  # 하트비트+flag
             if dec["mode"] is not None:                 # ESTOP 또는 SAFE(통신불량/스톨) → 안전 개입
                 user_mode = 1                           # 안전 기본모드(복귀 시에도 mode1부터)
                 fallback()                              # 안전 mode1 + base_vel 0 (smooth면 _push_inactive)
@@ -437,6 +454,7 @@ def main() -> None:
             _out_thread.join(timeout=0.5)
         else:
             fallback()                                  # 종료: 안전 mode1 (또는 clip)
+        estop_shm.clear()   # 정상 종료 -> disarm(파일 제거). 크래시면 하트비트 stale로 C++가 damping.
         rx.close()
         print(f"\n[bridge] stopped (safe fallback). total {n} teleop frames.")
 
