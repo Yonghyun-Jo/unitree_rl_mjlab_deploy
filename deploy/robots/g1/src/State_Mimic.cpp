@@ -19,6 +19,7 @@ std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion_light = nullptr;
 // N_LOWER=12 (both legs). Default 1 = full-auto locomotion: fully observable on hardware
 // (no global position needed), the safe deploy default. mode3 needs global position -> sim only.
 static int g_cmd_mode = 1;
+static int g_req_mode = 1;   // 조작자가 실제로 요청한 mode (입력핸들러만 세팅; qd-guard는 안 건드림 → 수동복귀 판정용)
 static constexpr int G1_N_LOWER = 12;
 static inline bool g_mask_upper() { return g_cmd_mode >= 2; }
 static inline bool g_mask_lower() { return g_cmd_mode >= 3; }
@@ -71,7 +72,7 @@ static void g_poll_gui()
     std::fclose(f);
     if (n != 1 || g.magic != 0x6701 || g.seq == g_gui_last_seq) return;
     g_gui_last_seq = g.seq;
-    if (g.cmd_mode >= 1 && g.cmd_mode <= 3) g_cmd_mode = g.cmd_mode;  // mode-switch detected in loop
+    if (g.cmd_mode >= 1 && g.cmd_mode <= 3) { g_cmd_mode = g.cmd_mode; g_req_mode = g.cmd_mode; }  // mode-switch detected in loop
     g_kb_vx = g.vx; g_kb_vy = g.vy; g_kb_wz = g.wz;                   // clamped in g_joystick_base_vel
     if (g.period_steps > 0)  g_loco.period_steps = g.period_steps;
     if (g.height_scale > 0)  g_loco.height_scale = g.height_scale;
@@ -125,7 +126,7 @@ static void g_poll_vr()
     g_vr_last_seq = v.seq;
     g_vr_stale = 0;
     if (!v.valid) { if (State_Mimic::motion) State_Mimic::motion->clear_vr(); return; }
-    if (v.cmd_mode >= 1 && v.cmd_mode <= 3) g_cmd_mode = v.cmd_mode;
+    if (v.cmd_mode >= 1 && v.cmd_mode <= 3) { g_cmd_mode = v.cmd_mode; g_req_mode = v.cmd_mode; }
     g_kb_vx = v.base_vel[0]; g_kb_vy = v.base_vel[1]; g_kb_wz = v.base_vel[2];
     if (State_Mimic::motion) {
         Eigen::VectorXf dp = Eigen::VectorXf::Map(v.dof_pos, 29);
@@ -142,9 +143,9 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     g_poll_gui();   // browser GUI (shared memory) overrides; no-op if the file is absent
     // --- joystick d-pad -> mode (avoids A/B used by FSM transitions) ---
     if (auto joy = env->robot->data.joystick) {
-        if      (joy->left.on_pressed)  g_cmd_mode = 1;
-        else if (joy->up.on_pressed)    g_cmd_mode = 2;
-        else if (joy->right.on_pressed) g_cmd_mode = 3;
+        if      (joy->left.on_pressed)  { g_cmd_mode = 1; g_req_mode = 1; }
+        else if (joy->up.on_pressed)    { g_cmd_mode = 2; g_req_mode = 2; }
+        else if (joy->right.on_pressed) { g_cmd_mode = 3; g_req_mode = 3; }
     }
     // --- keyboard (edge-triggered: act once per key change) ---
     if (!FSMState::keyboard) return;
@@ -160,12 +161,12 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     else if (k == "q") { g_kb_wz = std::clamp(g_kb_wz + KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CCW (반시계)
     else if (k == "e") { g_kb_wz = std::clamp(g_kb_wz - KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CW  (시계)
     else if (k == " ") { g_kb_vx = g_kb_vy = g_kb_wz = 0.0f;                          vel_changed = true; }  // stop
-    else if (k == "1") { g_cmd_mode = 1; printf("\r\n[cmd_mode] -> 1 (full-auto)\r\n");      fflush(stdout); }
-    else if (k == "2") { g_cmd_mode = 2; printf("\r\n[cmd_mode] -> 2 (upper-teleop)\r\n");    fflush(stdout); }
-    else if (k == "3") { g_cmd_mode = 3; printf("\r\n[cmd_mode] -> 3 (full-track/sim)\r\n");  fflush(stdout); }
-    else if (k == "4") { g_cmd_mode = 4; printf("\r\n[cmd_mode] -> 4 (dance demo: clip full-track, VR 무시)\r\n"); fflush(stdout); }
+    else if (k == "1") { g_cmd_mode = 1; g_req_mode = 1; printf("\r\n[cmd_mode] -> 1 (full-auto)\r\n");      fflush(stdout); }
+    else if (k == "2") { g_cmd_mode = 2; g_req_mode = 2; printf("\r\n[cmd_mode] -> 2 (upper-teleop)\r\n");    fflush(stdout); }
+    else if (k == "3") { g_cmd_mode = 3; g_req_mode = 3; printf("\r\n[cmd_mode] -> 3 (full-track/sim)\r\n");  fflush(stdout); }
+    else if (k == "4") { g_cmd_mode = 4; g_req_mode = 4; printf("\r\n[cmd_mode] -> 4 (dance demo: clip full-track, VR 무시)\r\n"); fflush(stdout); }
     else if (k == "5") {
-        if (State_Mimic::motion_light) { g_cmd_mode = 5; printf("\r\n[cmd_mode] -> 5 (stand+상체 test demo: light clip, VR 무시)\r\n"); }
+        if (State_Mimic::motion_light) { g_cmd_mode = 5; g_req_mode = 5; printf("\r\n[cmd_mode] -> 5 (stand+상체 test demo: light clip, VR 무시)\r\n"); }
         else { printf("\r\n[cmd_mode] mode5 비활성 (config에 motion_file_light 없음)\r\n"); }
         fflush(stdout);
     }
@@ -545,6 +546,7 @@ void State_Mimic::enter()
     js_qd_crit_latched_ = false;
     js_qd_warn_latched_ = false;
     js_warn_run_ = js_crit_run_ = 0;
+    g_req_mode = g_cmd_mode;   // 진입 시 요청 모드를 현재 모드와 일치시켜 시작(불일치 방지)
     // Start policy thread
     policy_thread_running = true;
     policy_thread = std::thread([this]{
@@ -570,7 +572,7 @@ void State_Mimic::enter()
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
             // ── L3: 측정 qd 폭주 감지 (policy_thread 50Hz — g_cmd_mode/notify_mode_switch 같은 스레드) ──
             if (js_enable_qd_guard_) {
-                const int reqd = g_cmd_mode;   // 조작자 요청 모드(g_poll_vr가 방금 세팅, force 전)
+                const int reqd = g_req_mode;   // 조작자 실제 요청 모드(가드가 강제한 g_cmd_mode와 분리; 입력핸들러만 세팅)
                 int sev = js_qd_severity(env->robot->data.joint_vel.data(),
                                          (int)env->robot->data.joint_vel.size(), js_qd_warn_, js_qd_crit_);
                 if (sev >= 2)      { js_warn_run_ = 0; if (++js_crit_run_ >= js_over_ticks_) js_qd_crit_latched_ = true; }
