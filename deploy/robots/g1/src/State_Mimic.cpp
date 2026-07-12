@@ -282,15 +282,36 @@ REGISTER_OBSERVATION(masked_joint_command)
     auto q  = demo ? loader->joint_pos_clip() : loader->joint_pos_vr();
     auto qd = demo ? loader->joint_vel_clip() : loader->joint_vel_vr();
     const bool mu = g_mask_upper(), ml = g_mask_lower();
+    // Lower-body reference smoothing (mode -> {3,4,5}): ramp the LEG q_ref from the robot's CURRENT
+    // measured pose toward the clip/VR target over the switch window (reuse switch_alpha), so the
+    // policy tracks a smoothly-moving leg target and produces NATURAL STEPPING instead of a
+    // joint-space slide. lb==1.0 outside a switch -> no effect. Upper body uses apply_switch_blend.
+    if (ml && g_loco.leg_fresh) {
+        for (int i = 0; i < G1_N_LOWER; ++i) g_loco.leg_from[i] = env->robot->data.joint_pos[i];
+        g_loco.leg_fresh = false;
+    }
+    const float lb = g_loco.switch_alpha;
     std::vector<float> data;
     data.reserve(q.size() + qd.size());
-    for (const Eigen::VectorXf* v : {&q, &qd}) {
-        for (int i = 0; i < v->size(); ++i) {
-            float x = (*v)[i];
-            if (i <  G1_N_LOWER && !ml) x = 0.0f;   // lower group generated -> 0
-            if (i >= G1_N_LOWER && !mu) x = 0.0f;   // upper group generated -> 0
-            data.push_back(x);
+    for (int i = 0; i < q.size(); ++i) {                 // q_ref (position)
+        float x = q[i];
+        if (i < G1_N_LOWER) {                            // leg
+            if (!ml) x = 0.0f;                           // generated -> 0
+            else if (lb < 1.0f) x = (1.0f - lb) * g_loco.leg_from[i] + lb * x;  // ramp current->target
+        } else if (!mu) {                                // upper generated -> 0
+            x = 0.0f;
         }
+        data.push_back(x);
+    }
+    for (int i = 0; i < qd.size(); ++i) {                // qd_ref (velocity feedforward)
+        float x = qd[i];
+        if (i < G1_N_LOWER) {
+            if (!ml) x = 0.0f;
+            else if (lb < 1.0f) x = lb * x;              // leg feedforward ramps in from 0
+        } else if (!mu) {
+            x = 0.0f;
+        }
+        data.push_back(x);
     }
     return data;
 }

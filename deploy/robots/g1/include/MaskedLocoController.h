@@ -53,6 +53,12 @@ struct MaskedLocoController {
   bool  a_prev_valid       = false;
   std::array<float, 29> a_hold = {};  // frozen pre-switch target (source pose of the crossfade)
   std::array<float, 29> a_prev = {};  // last published target (becomes a_hold at the next switch)
+  // lower-body REFERENCE smoothing (mode -> {3,4,5}): the legs are NOT output-blended (that would
+  // drag the feet along the ground). Instead the LEG q_ref is ramped from the robot's current
+  // measured pose to the clip/VR target (reuses switch_alpha), so the POLICY tracks a smoothly
+  // moving leg target and produces natural stepping. Captured/applied in masked_joint_command.
+  bool  leg_fresh = false;
+  std::array<float, 12> leg_from = {};  // robot leg joint_pos frozen at the switch (obs thread)
 
   static inline float clampf(float x, float lo, float hi) { return std::max(lo, std::min(hi, x)); }
   static inline float smoothstep01(float s) { s = clampf(s, 0.f, 1.f); return s * s * (3.0f - 2.0f * s); }
@@ -101,6 +107,7 @@ struct MaskedLocoController {
       switch_blend_rem = switch_blend_steps;
       switch_fresh     = true;           // run() freezes the pre-switch pose on the next apply
     }
+    if (new_mode >= 3) leg_fresh = true; // full-body: also ramp the LEG reference (masked_joint_command)
   }
 
   // Advance one control step; cache base_vel / foot_z / arm_scale. Call ONCE per step pre-obs.
@@ -156,11 +163,12 @@ struct MaskedLocoController {
 
   // Crossfade the OUTPUT action from the frozen pre-switch pose (a_hold) toward the live action
   // using switch_alpha (0->1 over the window, computed in update()). Applied ONLY during a
-  // mode -> {2,3,4,5} transition; zero effect otherwise (full-speed response). Upper joints
-  // [n_lower,num_dof) always; lower [0,n_lower) only for full-body target modes (new_mode>=3),
-  // so a mode1->mode2 switch keeps the LEGS live (gait uninterrupted) and only splines the
-  // waist+arms toward the teleop target. Also NaN/Inf-guards (hold last-good target per joint)
-  // and tracks a_prev every call so a_hold captures the true pre-switch pose at the next switch.
+  // mode -> {2,3,4,5} transition; zero effect otherwise (full-speed response).
+  // ⚠ UPPER BODY ONLY ([n_lower,num_dof) = waist+arms). The LEGS are NEVER output-blended: a
+  // joint-space blend would drag the feet along the ground (no stepping). Legs are policy-live +
+  // their REFERENCE is ramped in masked_joint_command (mode3/4/5) so the policy steps naturally.
+  // Also NaN/Inf-guards (hold last-good target per joint) and tracks a_prev every call so a_hold
+  // captures the true pre-switch pose at the next switch.
   //   action: processed motor targets (in place), length num_dof.
   void apply_switch_blend(float* action, int num_dof) {
     const int n = std::min(num_dof, static_cast<int>(a_prev.size()));
@@ -170,11 +178,9 @@ struct MaskedLocoController {
       for (int i = 0; i < n; ++i) a_hold[i] = a_prev_valid ? a_prev[i] : action[i];
       switch_fresh = false;
     }
-    if (switch_alpha < 1.0f) {
-      const int lo = (switch_new_mode >= 3) ? 0 : n_lower;   // mode2: waist+arms only, legs live
-      for (int i = lo; i < n; ++i)
+    if (switch_alpha < 1.0f)
+      for (int i = n_lower; i < n; ++i)                  // waist+arms only; legs live (ref-smoothed)
         action[i] = (1.0f - switch_alpha) * a_hold[i] + switch_alpha * action[i];
-    }
     for (int i = 0; i < n; ++i) a_prev[i] = action[i];
     a_prev_valid = true;
   }
