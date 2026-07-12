@@ -1,7 +1,9 @@
 #pragma once
 
 #include "FSM/State_RLBase.h"
+#include "JointSafety.h"
 #include <cnpy.h>
+#include <array>
 
 
 class State_Mimic : public FSMState
@@ -31,6 +33,11 @@ private:
     std::thread policy_thread;
     bool policy_thread_running = false;
     std::array<float, 2> time_range_;
+
+    // ── deploy 안전층 config/state (JointSafety.h) ──
+    void load_safety_cfg(const YAML::Node& s);
+    bool  js_enable_pos_clamp_ = false;
+    std::array<float,29> js_pos_lo_{}, js_pos_hi_{};
 };
 
 

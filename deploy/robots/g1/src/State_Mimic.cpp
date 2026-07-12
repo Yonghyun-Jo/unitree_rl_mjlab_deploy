@@ -430,11 +430,13 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
                      g_loco.switch_blend_steps, g_loco.switch_blend_steps / 50.0f);
     }
 
+    auto dcfg = YAML::LoadFile(policy_dir / "params" / "deploy.yaml");
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
-        YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
+        dcfg,
         articulation
     );
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
+    load_safety_cfg(dcfg["safety"]);   // fail-safe: 없거나/이상하면 전부 비활성 (아래 정의)
 
     const auto & joy = FSMState::lowstate->joystick;
     // end_state가 자기자신이면(=masked/teleop) 클립 끝이 무의미 → 타임아웃 체크 미등록 = 무한 실행.
@@ -453,6 +455,25 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
             FSMStringMap.right.at("Passive")
         )
     );
+}
+
+// deploy.yaml의 safety 블록 로드 (fail-safe): 블록이 없거나, pos_min/pos_max 길이가 29가 아니거나,
+// 파싱 중 예외가 나면 무조건 clamp 비활성. 절대 예외를 밖으로 던지지 않고, 절대 0으로 clamp하지 않는다.
+void State_Mimic::load_safety_cfg(const YAML::Node& s)
+{
+    js_enable_pos_clamp_ = false;
+    if (!s || !s.IsMap()) { spdlog::warn("[safety] no safety block -> disabled"); return; }
+    try {
+        auto lo = s["pos_min"].as<std::vector<float>>();
+        auto hi = s["pos_max"].as<std::vector<float>>();
+        if (lo.size()!=29 || hi.size()!=29) { spdlog::warn("[safety] pos_min/max len!=29 -> clamp disabled"); return; }
+        for (int i=0;i<29;++i){ js_pos_lo_[i]=lo[i]; js_pos_hi_[i]=hi[i]; }
+        js_enable_pos_clamp_ = s["enable_pos_clamp"] && s["enable_pos_clamp"].as<bool>();
+        spdlog::info("[safety] pos_clamp {} (mechanical limits loaded)", js_enable_pos_clamp_?"ON":"OFF");
+    } catch (const std::exception& e) {
+        js_enable_pos_clamp_ = false;
+        spdlog::warn("[safety] parse error -> clamp disabled: {}", e.what());
+    }
 }
 
 void State_Mimic::enter()
@@ -551,6 +572,11 @@ void State_Mimic::run()
     // live action over the blend window so a mode change never sends a raw joint STEP to the
     // motors (which trips the onboard velocity/torque protection). No-op outside a switch.
     g_loco.apply_switch_blend(action.data(), static_cast<int>(action.size()));
+    // L1-2차: C++ 최종 위치 clamp (기계한계, gated). action.clip(process_actions)이 1차 방어이고
+    // 이건 최종 출력 직전 보루 — 기본 off, sim2sim 검증 후 enable_pos_clamp:true로 켠다.
+    if (js_enable_pos_clamp_)
+        js_clamp_position(action.data(), js_pos_lo_.data(), js_pos_hi_.data(),
+                          static_cast<int>(action.size()));
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
