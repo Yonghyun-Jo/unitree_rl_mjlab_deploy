@@ -55,6 +55,44 @@ echo "[setup_teleop] copied $(ls "$MESH_DIR"/*.STL 2>/dev/null | wc -l) STLs -> 
 "$PY" -m pip install -e "$GMR_DIR"
 "$PY" -m pip install -r "$SCRIPT_DIR/requirements.txt"
 
+# 4.5) xrobotoolkit_sdk (pybind/CMake 소스 빌드) — ONE 프로세스에 GMR + xrt 공존시킴.
+#      네트워크 없는 온보드(--transport local)에 필요. XRT_SRC 미존재/실패 시 SKIP(브릿지는 udp/zmq로 동작).
+XRT_SRC="${XRT_SRC:-/home/piene/reference_code/GR00T-WholeBodyControl/external_dependencies/XRoboToolkit-PC-Service-Pybind_X86_and_ARM64}"
+if [ -d "$XRT_SRC" ]; then
+  echo "[setup_teleop] installing xrobotoolkit_sdk from $XRT_SRC ..."
+  ARCH="$(uname -m)"
+  command -v cc >/dev/null || echo "[setup_teleop] WARN: build-essential(C++17) 필요"
+  "$PY" -m pip install -q cmake pybind11 setuptools
+  export CMAKE_PREFIX_PATH="$("$PY" -m pybind11 --cmakedir)"
+  if [ "$ARCH" = "aarch64" ]; then
+    NATIVE="$XRT_SRC/lib/aarch64/libPXREARobotSDK.so"
+    if ! file "$NATIVE" 2>/dev/null | grep -q ELF; then
+      echo "[setup_teleop] building PXREARobotSDK (aarch64, orin branch) ..."
+      T="$XRT_SRC/tmp"; mkdir -p "$T"
+      [ -d "$T/XRoboToolkit-PC-Service" ] || git clone -b orin https://github.com/XR-Robotics/XRoboToolkit-PC-Service.git "$T/XRoboToolkit-PC-Service"
+      ( cd "$T/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK" && bash build.sh )
+      mkdir -p "$XRT_SRC/lib/aarch64" "$XRT_SRC/include/aarch64"
+      cp "$T/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/PXREARobotSDK.h" "$XRT_SRC/include/aarch64/"
+      cp -r "$T/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/nlohmann" "$XRT_SRC/include/aarch64/nlohmann/"
+      cp "$T/XRoboToolkit-PC-Service/RoboticsService/PXREARobotSDK/build/libPXREARobotSDK.so" "$XRT_SRC/lib/aarch64/"
+      rm -rf "$T"
+    fi
+  else   # x86_64
+    NATIVE="$XRT_SRC/lib/libPXREARobotSDK.so"
+    if ! file "$NATIVE" 2>/dev/null | grep -q ELF; then
+      echo "[setup_teleop] ERROR: $NATIVE 가 git-LFS 스텁. 실행: git lfs install && (해당 repo에서) git lfs pull;"
+      echo "                또는 소스 빌드(build.sh, default branch)."
+      echo "[setup_teleop] xrt 스킵하고 계속(로컬 transport 불가, udp/zmq는 동작)."
+    fi
+  fi
+  if file "$NATIVE" 2>/dev/null | grep -q ELF; then
+    "$PY" -m pip install --no-build-isolation -e "$XRT_SRC/"
+    "$PY" -c "import xrobotoolkit_sdk as xrt; print('[setup_teleop] OK: xrobotoolkit_sdk imports')"
+  fi
+else
+  echo "[setup_teleop] SKIP xrt (XRT_SRC 없음); 브릿지는 split/UDP/ZMQ 모드만."
+fi
+
 # 5) smoke test: build the xrobot->unitree_g1 retargeter (loads the mocap model + meshes)
 echo "[setup_teleop] smoke test ..."
 "$PY" - <<'PY'
