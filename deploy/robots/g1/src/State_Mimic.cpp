@@ -479,7 +479,10 @@ void State_Mimic::load_safety_cfg(const YAML::Node& s)
     js_enable_rate_limit_ = false;
     try {
         float vmax = s["vel_max"] ? s["vel_max"].as<float>() : 0.0f;
-        const float dt = 0.02f;                       // 50Hz 제어
+        // run()은 CtrlFSM에서 1kHz로 호출된다(정책 step_dt=0.02는 policy_thread 전용). js_rate_limit이
+        // 매 FSM tick 적용되므로 dt = 1kHz tick = 0.001. (max_step=vel_max*0.001 -> effective cap = vel_max rad/s;
+        // 20ms 정책창당 최대 20*vel_max*0.001 = vel_max*0.02 이동.)
+        const float dt = 0.001f;   // CtrlFSM run() tick (1kHz), NOT the 50Hz policy step_dt
         if (vmax > 0.0f) {
             for (int i=0;i<29;++i) js_max_step_[i] = vmax * dt;
             js_enable_rate_limit_ = s["enable_rate_limit"] && s["enable_rate_limit"].as<bool>();
