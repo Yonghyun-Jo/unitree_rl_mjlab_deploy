@@ -66,11 +66,15 @@ XRT_SRC=<.../XRoboToolkit-PC-Service-Pybind_X86_and_ARM64> bash deploy/robots/g1
 ```
 
 ### 하드 E-stop (`/dev/shm/g1_estop`)
+- **`--transport local`에서만 무장.** sim2sim(`zmq`/`udp`)은 이 채널을 쓰지 않고 기존 soft mode1 fallback(안전모드 자동복귀)만 그대로 유지 — 하드 damping 없음.
 - 우측 A → E-stop 래치(브릿지 SafetyMonitor). 우측 menu 1s 홀드 → 해제 후 `f`로 재기립.
-- 워치독(SDK 스톨) / 브릿지 프로세스 死 → g1_ctrl가 하트비트 stale 감지(~0.5s) → 강제 Passive(damping).
+- **지연**: 버튼 E-stop / 워치독(통신불량)은 flag=1을 라이브로 써서 다음 50Hz 폴(≈즉시)에 Passive. **브릿지 프로세스 死(하트비트 정지)만** ~0.5s stale 감지 후 Passive.
 - 브릿지가 매 사이클 `estop_shm.write(seq++, flag)` 하트비트. 정상 종료 시 파일 제거(disarm).
+- **문제해결**: g1_ctrl이 브릿지 없이 계속 Passive면: 이전 세션의 orphan 파일 → g1_ctrl 재시작(부팅 시 자동 clear) 또는 `rm /dev/shm/g1_estop`.
 
 > sim2sim(노트북→com1)은 기존대로 `--transport zmq`(기본). local은 PICO가 g1_ctrl과 같은 PC일 때만.
+
+---
 
 ## 자립성 메모
 - 로봇 clone-to-build의 유일한 선행 = `build_deps.sh`(`.deps`는 gitignore).

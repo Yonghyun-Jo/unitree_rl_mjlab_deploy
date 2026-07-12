@@ -36,7 +36,7 @@ def main():
     assert f3["controllers"]["left"]["secondary"] is False
     # 5) body raw passthrough(변환 없음): joint i의 값 == i
     assert f3["body"]["available"] is True
-    assert f3["body"]["joints"][5] == [5.0] * 7
+    assert f3["body"]["joints"][5] == [5.0, 5.0, 5.0, 0.0, 0.0, 0.0, 1.0]
     # 6) body 미가용 -> streaming False, joints None
     m.body_ok = False
     f4 = rx.latest()

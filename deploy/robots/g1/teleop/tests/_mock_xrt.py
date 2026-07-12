@@ -14,8 +14,9 @@ class MockXrt:
         return self.body_ok
 
     def get_body_joints_pose(self):
-        # 24관절 × 7 raw [x,y,z,qx,qy,qz,qw] (값은 관절 인덱스로 구분되게)
-        return [[float(i)] * 7 for i in range(24)]
+        # 24관절 × 7 raw [x,y,z,qx,qy,qz,qw] (pos는 관절 인덱스로 구분, quat은 unit(identity)
+        # — zero-norm quat은 GMR retarget()에서 크래시하므로 유효한 quat이어야 함).
+        return [[float(i), float(i), float(i), 0.0, 0.0, 0.0, 1.0] for i in range(24)]
 
     def get_body_timestamp_ns(self):
         return self._bts

@@ -3,6 +3,7 @@
 #include "FSM/State_FixStand.h"
 #include "FSM/State_RLBase.h"
 #include "State_Mimic.h"
+#include <cstdio>
 
 std::unique_ptr<LowCmd_t> FSMState::lowcmd = nullptr;
 std::shared_ptr<LowState_t> FSMState::lowstate = nullptr;
@@ -46,6 +47,7 @@ int main(int argc, char** argv)
 
     // Initialize FSM
     auto fsm = std::make_unique<CtrlFSM>(param::config["FSM"]);
+    std::remove("/dev/shm/g1_estop");   // 부팅 시 orphan estop 파일 제거(크래시로 남은 stale이 무장 상태로 오인되는 것 방지). 라이브 브릿지가 다음 프레임에 재무장.
     fsm->start();
 
     std::cout << "Press [L2 + Up] to enter FixStand mode.\n";

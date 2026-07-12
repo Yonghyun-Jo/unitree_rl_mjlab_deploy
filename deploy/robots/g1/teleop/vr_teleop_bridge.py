@@ -265,6 +265,7 @@ def main() -> None:
     user_mode = args.mode                 # 유저 의도 teleop 모드(2/3, 버튼으로 변경). 출력 mode와 분리.
     seq_out = 0
     estop_seq = 0
+    estop_armed = (args.transport == "local")   # 하드 E-stop은 온보드(local)에서만 무장; sim2sim(zmq/udp)은 기존 soft mode1 유지
     last_t = None
     # status
     n = 0
@@ -378,8 +379,9 @@ def main() -> None:
         while True:
             f = rx.latest()                             # UDP/ZMQ 공통: drain-to-latest + dedup (or None)
             dec = safety.update(f, rx.age_ms())         # 워치독(stale/저수신) + E-stop(우측 A) 래치
-            estop_seq += 1
-            estop_shm.write(estop_seq, 1 if dec["mode"] is not None else 0)  # 하트비트+flag
+            if estop_armed:
+                estop_seq = (estop_seq + 1) & 0xFFFFFFFF   # u32 wrap (하트비트)
+                estop_shm.write(estop_seq, 1 if dec["mode"] is not None else 0)
             if dec["mode"] is not None:                 # ESTOP 또는 SAFE(통신불량/스톨) → 안전 개입
                 user_mode = 1                           # 안전 기본모드(복귀 시에도 mode1부터)
                 fallback()                              # 안전 mode1 + base_vel 0 (smooth면 _push_inactive)
@@ -454,7 +456,8 @@ def main() -> None:
             _out_thread.join(timeout=0.5)
         else:
             fallback()                                  # 종료: 안전 mode1 (또는 clip)
-        estop_shm.clear()   # 정상 종료 -> disarm(파일 제거). 크래시면 하트비트 stale로 C++가 damping.
+        if estop_armed:
+            estop_shm.clear()   # 정상 종료 -> disarm(파일 제거). 크래시면 하트비트 stale로 C++가 damping.
         rx.close()
         print(f"\n[bridge] stopped (safe fallback). total {n} teleop frames.")
 
