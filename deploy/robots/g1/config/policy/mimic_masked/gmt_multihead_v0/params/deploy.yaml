@@ -130,4 +130,3 @@ safety:
   qd_warn: 15.0                 # rad/s
   qd_crit: 25.0                 # rad/s
   over_ticks: 5                 # 연속 초과 틱(0.1s@50Hz)
-  recover_ticks: 25             # 회복 틱(0.5s@50Hz)

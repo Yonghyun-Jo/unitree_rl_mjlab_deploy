@@ -4,6 +4,7 @@
 #include "JointSafety.h"
 #include <cnpy.h>
 #include <array>
+#include <atomic>
 
 
 class State_Mimic : public FSMState
@@ -44,6 +45,14 @@ private:
     std::array<float,29> js_max_step_{};   // = vel_max * dt(0.02)
     std::array<float,29> js_q_prev_{};
     bool js_q_prev_valid_ = false;
+
+    // L3: 측정 qd 폭주 감지 (gated, 기본 off). policy_thread(50Hz)에서 검사 -> warn(mode1 래치)/crit(Passive 래치).
+    bool  js_enable_qd_guard_ = false;
+    float js_qd_warn_ = 0.f, js_qd_crit_ = 0.f;
+    int   js_over_ticks_ = 5;               // @50Hz(policy_thread) => 0.1s sustained
+    int   js_warn_run_ = 0, js_crit_run_ = 0;
+    bool  js_qd_warn_latched_ = false;      // policy_thread 내부 전용
+    std::atomic<bool> js_qd_crit_latched_{false};  // policy_thread set, registered_check(1kHz) read
 };
 
 

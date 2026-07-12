@@ -455,6 +455,12 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
             FSMStringMap.right.at("Passive")
         )
     );
+    this->registered_checks.emplace_back(
+        std::make_pair(
+            [this]()->bool{ return js_enable_qd_guard_ && js_qd_crit_latched_.load(); }, // qd crit -> Passive
+            FSMStringMap.right.at("Passive")
+        )
+    );
 }
 
 // deploy.yaml의 safety 블록 로드 (fail-safe): 블록이 없거나, pos_min/pos_max 길이가 29가 아니거나,
@@ -492,6 +498,22 @@ void State_Mimic::load_safety_cfg(const YAML::Node& s)
         js_enable_rate_limit_ = false;
         spdlog::warn("[safety] rate parse err: {}", e.what());
     }
+
+    // L3: 측정 qd 폭주 가드 파싱 (fail-safe). warn>0 이고 crit>warn 이어야 무장, 그 외엔 비활성.
+    js_enable_qd_guard_ = false;
+    try {
+        js_qd_warn_ = s["qd_warn"] ? s["qd_warn"].as<float>() : 0.f;
+        js_qd_crit_ = s["qd_crit"] ? s["qd_crit"].as<float>() : 0.f;
+        js_over_ticks_ = s["over_ticks"] ? s["over_ticks"].as<int>() : 5;
+        if (js_over_ticks_ < 1) js_over_ticks_ = 1;
+        if (js_qd_warn_ > 0.f && js_qd_crit_ > js_qd_warn_)   // warn>0 이고 crit>warn 이어야 무장
+            js_enable_qd_guard_ = s["enable_qd_guard"] && s["enable_qd_guard"].as<bool>();
+        spdlog::info("[safety] qd_guard {} (warn={} crit={} rad/s, over_ticks={})",
+                     js_enable_qd_guard_?"ON":"OFF", js_qd_warn_, js_qd_crit_, js_over_ticks_);
+    } catch (const std::exception& e) {
+        js_enable_qd_guard_ = false;
+        spdlog::warn("[safety] qd parse err: {}", e.what());
+    }
 }
 
 void State_Mimic::enter()
@@ -519,6 +541,10 @@ void State_Mimic::enter()
     // env->reset() 직후라 joint_pos는 방금 robot->update()로 갱신된 측정값이다.
     for (int i = 0; i < 29; ++i) js_q_prev_[i] = env->robot->data.joint_pos[i];
     js_q_prev_valid_ = true;
+    // L3: qd 가드 래치·카운터 리셋 (재진입 시 깨끗이 시작 — 이전 FSM 체류의 래치가 남지 않도록).
+    js_qd_crit_latched_ = false;
+    js_qd_warn_latched_ = false;
+    js_warn_run_ = js_crit_run_ = 0;
     // Start policy thread
     policy_thread_running = true;
     policy_thread = std::thread([this]{
@@ -542,6 +568,19 @@ void State_Mimic::enter()
             env->robot->update();
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (mode 1/2/3 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
+            // ── L3: 측정 qd 폭주 감지 (policy_thread 50Hz — g_cmd_mode/notify_mode_switch 같은 스레드) ──
+            if (js_enable_qd_guard_) {
+                const int reqd = g_cmd_mode;   // 조작자 요청 모드(g_poll_vr가 방금 세팅, force 전)
+                int sev = js_qd_severity(env->robot->data.joint_vel.data(),
+                                         (int)env->robot->data.joint_vel.size(), js_qd_warn_, js_qd_crit_);
+                if (sev >= 2)      { js_warn_run_ = 0; if (++js_crit_run_ >= js_over_ticks_) js_qd_crit_latched_ = true; }
+                else if (sev == 1) { js_crit_run_ = 0; if (++js_warn_run_ >= js_over_ticks_) js_qd_warn_latched_ = true; }
+                else               { js_warn_run_ = 0; js_crit_run_ = 0; }
+                // warn 수동복귀: 조작자가 mode1(X/'1')을 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
+                if (js_qd_warn_latched_ && reqd == 1) js_qd_warn_latched_ = false;
+                if (js_qd_warn_latched_) g_cmd_mode = 1;   // g_poll_vr 뒤에 덮어써 mode1 유지(soft)
+                // crit은 아래 registered_check가 Passive로 전이시킴(여기선 latch만).
+            }
             // Controller: detect a mode switch (spline base_vel + mode1 arm-blend), then advance
             // one step so the obs (base_vel_command / ref_foot_height) see fresh values.
             if (g_cmd_mode != g_prev_cmd_mode) {
