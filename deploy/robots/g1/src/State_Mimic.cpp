@@ -474,6 +474,21 @@ void State_Mimic::load_safety_cfg(const YAML::Node& s)
         js_enable_pos_clamp_ = false;
         spdlog::warn("[safety] parse error -> clamp disabled: {}", e.what());
     }
+
+    // L2: 속도 rate-limit용 vel_max 파싱 (fail-safe). 없거나/0이하/파싱 오류 -> 비활성.
+    js_enable_rate_limit_ = false;
+    try {
+        float vmax = s["vel_max"] ? s["vel_max"].as<float>() : 0.0f;
+        const float dt = 0.02f;                       // 50Hz 제어
+        if (vmax > 0.0f) {
+            for (int i=0;i<29;++i) js_max_step_[i] = vmax * dt;
+            js_enable_rate_limit_ = s["enable_rate_limit"] && s["enable_rate_limit"].as<bool>();
+        }
+        spdlog::info("[safety] rate_limit {} (vel_max={} rad/s)", js_enable_rate_limit_?"ON":"OFF", vmax);
+    } catch (const std::exception& e) {
+        js_enable_rate_limit_ = false;
+        spdlog::warn("[safety] rate parse err: {}", e.what());
+    }
 }
 
 void State_Mimic::enter()
@@ -497,6 +512,10 @@ void State_Mimic::enter()
         motion->set_standby(dpos);
     }
     env->reset();
+    // L2 rate-limit용 q_prev를 측정 pose로 초기화 (레이어를 나중에 켜도 첫 틱 lurch 방지).
+    // env->reset() 직후라 joint_pos는 방금 robot->update()로 갱신된 측정값이다.
+    for (int i = 0; i < 29; ++i) js_q_prev_[i] = env->robot->data.joint_pos[i];
+    js_q_prev_valid_ = true;
     // Start policy thread
     policy_thread_running = true;
     policy_thread = std::thread([this]{
@@ -577,6 +596,14 @@ void State_Mimic::run()
     if (js_enable_pos_clamp_)
         js_clamp_position(action.data(), js_pos_lo_.data(), js_pos_hi_.data(),
                           static_cast<int>(action.size()));
+    // L2: 관절 속도 rate-limit (gated, 기본 off). 출력 전용 — obs(last_action 등)는 raw action을
+    // 그대로 읽으므로 parity 영향 없음. 비활성일 때도 q_prev는 계속 추적해서, 나중에 켤 때
+    // stale q_prev로 인한 첫 틱 점프가 나지 않게 한다.
+    if (js_enable_rate_limit_ && js_q_prev_valid_)
+        js_rate_limit(action.data(), js_q_prev_.data(), js_max_step_.data(),
+                      static_cast<int>(action.size()));
+    else
+        for (int i = 0; i < (int)action.size(); ++i) js_q_prev_[i] = action[i];
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
