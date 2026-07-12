@@ -52,6 +52,26 @@ bash deploy/robots/g1/teleop/setup_teleop.sh
 
 ---
 
+## C. 온보드 로컬 텔레옵 (`--transport local`, network-free)
+
+로봇 컴퓨터에 PICO를 직접 연결(co-located)한 경우. 네트워크 홉 없이 xrt→GMR→shm.
+
+```bash
+# 0) 1회: GMR + xrt 설치 (xrt는 PC-Service pybind 소스빌드; x86은 git-lfs, Jetson은 orin build.sh)
+XRT_SRC=<.../XRoboToolkit-PC-Service-Pybind_X86_and_ARM64> bash deploy/robots/g1/teleop/setup_teleop.sh
+# 1) XRoboToolkit PC-Service 데몬 실행 + PICO 헤드셋 페어링(body는 트래커 2개 캘리브)
+# 2) 온보드에서 g1_ctrl (실로봇 iface) + 브릿지(로컬)
+./deploy/robots/g1/tools/run_g1_with_gui.sh <robot_iface>
+.venv-teleop/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py --transport local --grip-enable --mode 1
+```
+
+### 하드 E-stop (`/dev/shm/g1_estop`)
+- 우측 A → E-stop 래치(브릿지 SafetyMonitor). 우측 menu 1s 홀드 → 해제 후 `f`로 재기립.
+- 워치독(SDK 스톨) / 브릿지 프로세스 死 → g1_ctrl가 하트비트 stale 감지(~0.5s) → 강제 Passive(damping).
+- 브릿지가 매 사이클 `estop_shm.write(seq++, flag)` 하트비트. 정상 종료 시 파일 제거(disarm).
+
+> sim2sim(노트북→com1)은 기존대로 `--transport zmq`(기본). local은 PICO가 g1_ctrl과 같은 PC일 때만.
+
 ## 자립성 메모
 - 로봇 clone-to-build의 유일한 선행 = `build_deps.sh`(`.deps`는 gitignore).
 - bridge/GMR은 laptop 사정 — `.venv-teleop`·`.gmr`는 gitignore, `setup_teleop.sh`로 재현.
