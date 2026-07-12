@@ -48,6 +48,20 @@ int main() {
     { FILE* f = std::fopen(P, "wb"); int32_t bad[3] = {0x1111, 9, 1}; std::fwrite(bad, sizeof(bad), 1, f); std::fclose(f); }
     chk(fsm_estop_poll(st, P), false, "bad magic");
 
+    // 7) 누적된 stale을 0으로 리셋 (파일 부재 시):
+    //    (a) 신선 seq + 폴링으로 stale 누적 (>0이지만 ≤MAX)
+    write_frame(100, 0);
+    chk(fsm_estop_poll(st, P), false, "setup_fresh");
+    for (int i = 0; i < 3; ++i)
+        chk(fsm_estop_poll(st, P), false, "accumulate_stale");  // stale -> 1,2,3
+    //    (b) 파일 제거
+    std::remove(P);
+    //    (c) 폴링: false 반환 + stale 리셋 확인 (즉시 다시 폴링했을 때 stale이 0이어야 frozen 판정 안 됨)
+    chk(fsm_estop_poll(st, P), false, "absent_resets_stale");
+    //    (d) 신선 seq + 폴링: frozen 판정 안 나야 함 (stale이 리셋되었으므로 stale=1이지만, 이건 새로운 시작)
+    write_frame(101, 0);
+    chk(fsm_estop_poll(st, P), false, "after_reset_fresh");
+
     std::remove(P);
     if (fail) { std::printf("[test_estop_channel] %d FAIL\n", fail); return 1; }
     std::printf("[test_estop_channel] ALL PASS\n");
