@@ -33,3 +33,12 @@ inline int js_qd_severity(const float* qd, int n, float warn, float crit) {
     if (m > warn) return 1;
     return 0;
 }
+
+// L3 qd-guard 상태 스텝(순수·테스트가능). sev(0/1/2, js_qd_severity 반환)로 카운터/래치 갱신.
+// warn은 sev>=1(crit도 warn 포함), crit은 sev>=2로 **독립** 누적 -> 지속 abnormal이 두 경계를 오가도
+// warn은 반드시 걸린다(단조). 래치는 여기서 해제 안 함(호출측이 warn=조작자 mode1, crit=FSM 재진입으로 해제).
+inline void js_qd_step(int sev, int over_ticks, int& warn_run, int& crit_run,
+                       bool& warn_latched, bool& crit_latched) {
+    if (sev >= 2) { if (++crit_run >= over_ticks) crit_latched = true; } else crit_run = 0;
+    if (sev >= 1) { if (++warn_run >= over_ticks) warn_latched = true; } else warn_run = 0;
+}

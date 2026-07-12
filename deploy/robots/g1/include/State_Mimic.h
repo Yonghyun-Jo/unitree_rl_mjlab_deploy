@@ -42,7 +42,7 @@ private:
 
     // L2: 관절 속도 rate-limit (gated, 기본 off)
     bool js_enable_rate_limit_ = false;
-    std::array<float,29> js_max_step_{};   // = vel_max * dt(0.02)
+    std::array<float,29> js_max_step_{};   // = vel_max * dt(0.001)
     std::array<float,29> js_q_prev_{};
     bool js_q_prev_valid_ = false;
 

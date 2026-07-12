@@ -47,6 +47,26 @@ int main() {
     { float q[2]={-1.0f,1.0f}; float lo[2]={-1,-1}, hi[2]={1,1};
       js_clamp_position(q,lo,hi,2); CHK(close(q[0],-1.0f)&&close(q[1],1.0f),"clamp exact boundaries (lo/hi inclusive)"); }
 
+    // js_qd_step: warn/crit 독립 누적 (I1 회귀 방지 — 경계를 오가는 발산이 두 래치를 서로 지우면 안 됨)
+    { // 5연속 sev=1(over_ticks=5) -> warn_latched true, crit_latched false
+      int warn_run=0, crit_run=0; bool warn_l=false, crit_l=false;
+      for (int i=0;i<5;++i) js_qd_step(1,5,warn_run,crit_run,warn_l,crit_l);
+      CHK(warn_l && !crit_l, "qd_step 5x sev1 -> warn latched only"); }
+    { // 5연속 sev=2 -> 둘 다 래치 (crit이 warn을 함의)
+      int warn_run=0, crit_run=0; bool warn_l=false, crit_l=false;
+      for (int i=0;i<5;++i) js_qd_step(2,5,warn_run,crit_run,warn_l,crit_l);
+      CHK(warn_l && crit_l, "qd_step 5x sev2 -> both latched"); }
+    { // 오실레이션 sev=1,2,1,2,1 (5틱) -> warn_latched true(I1 회귀 케이스), crit_latched false(sev=1 틱마다 crit_run 리셋)
+      int warn_run=0, crit_run=0; bool warn_l=false, crit_l=false;
+      int seq[5] = {1,2,1,2,1};
+      for (int i=0;i<5;++i) js_qd_step(seq[i],5,warn_run,crit_run,warn_l,crit_l);
+      CHK(warn_l && !crit_l, "qd_step oscillating sev1/2 -> warn latched, crit not (I1 regression)"); }
+    { // 4x sev=1 후 sev=0 -> warn_run 리셋, 래치 안 됨(디바운스)
+      int warn_run=0, crit_run=0; bool warn_l=false, crit_l=false;
+      for (int i=0;i<4;++i) js_qd_step(1,5,warn_run,crit_run,warn_l,crit_l);
+      js_qd_step(0,5,warn_run,crit_run,warn_l,crit_l);
+      CHK(!warn_l && !crit_l && warn_run==0, "qd_step 4x sev1 then sev0 -> reset, not latched (debounce)"); }
+
     if (fail) { std::printf("[test_joint_safety] %d FAIL\n", fail); return 1; }
     std::printf("[test_joint_safety] ALL PASS\n"); return 0;
 }

@@ -475,6 +475,14 @@ void State_Mimic::load_safety_cfg(const YAML::Node& s)
         auto hi = s["pos_max"].as<std::vector<float>>();
         if (lo.size()!=29 || hi.size()!=29) { spdlog::warn("[safety] pos_min/max len!=29 -> clamp disabled"); return; }
         for (int i=0;i<29;++i){ js_pos_lo_[i]=lo[i]; js_pos_hi_[i]=hi[i]; }
+        // std::clamp(v,lo,hi)는 lo>hi면 UB -> per-joint 순서 검증 없이는 무장 금지 (config 오타 방어).
+        for (int i=0;i<29;++i) {
+            if (js_pos_lo_[i] >= js_pos_hi_[i]) {
+                spdlog::warn("[safety] pos_min[{}]>=pos_max[{}] -> clamp disabled", i, i);
+                js_enable_pos_clamp_ = false;
+                return;
+            }
+        }
         js_enable_pos_clamp_ = s["enable_pos_clamp"] && s["enable_pos_clamp"].as<bool>();
         spdlog::info("[safety] pos_clamp {} (mechanical limits loaded)", js_enable_pos_clamp_?"ON":"OFF");
     } catch (const std::exception& e) {
@@ -575,9 +583,9 @@ void State_Mimic::enter()
                 const int reqd = g_req_mode;   // 조작자 실제 요청 모드(가드가 강제한 g_cmd_mode와 분리; 입력핸들러만 세팅)
                 int sev = js_qd_severity(env->robot->data.joint_vel.data(),
                                          (int)env->robot->data.joint_vel.size(), js_qd_warn_, js_qd_crit_);
-                if (sev >= 2)      { js_warn_run_ = 0; if (++js_crit_run_ >= js_over_ticks_) js_qd_crit_latched_ = true; }
-                else if (sev == 1) { js_crit_run_ = 0; if (++js_warn_run_ >= js_over_ticks_) js_qd_warn_latched_ = true; }
-                else               { js_warn_run_ = 0; js_crit_run_ = 0; }
+                bool crit_l = js_qd_crit_latched_.load();
+                js_qd_step(sev, js_over_ticks_, js_warn_run_, js_crit_run_, js_qd_warn_latched_, crit_l);
+                if (crit_l) js_qd_crit_latched_.store(true);
                 // warn 수동복귀: 조작자가 mode1(X/'1')을 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
                 if (js_qd_warn_latched_ && reqd == 1) js_qd_warn_latched_ = false;
                 if (js_qd_warn_latched_) g_cmd_mode = 1;   // g_poll_vr 뒤에 덮어써 mode1 유지(soft)
