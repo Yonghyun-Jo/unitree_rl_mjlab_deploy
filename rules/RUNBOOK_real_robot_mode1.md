@@ -57,9 +57,55 @@ XRT_SRC=<.../XRoboToolkit-PC-Service-Pybind_X86_and_ARM64> \
 
 ---
 
+## 1.5 PICO 연결 & 전신(body) 트래킹 (매 세션, 헤드셋 안 — **가장 자주 막히는 곳**)
+
+> **핵심 구분**: `streaming`(머리 pose OK) ≠ `body_available`(전신 24관절 OK). 텔레옵은 **body_available=True 여야 활성**.
+> `streaming=True`인데 `body=False`면 → 연결은 됐지만 **전신 트래킹 미활성** → 브릿지가 `INACTIVE(mode1 safe)`로 남고 `total 0 teleop frames`. (이건 로봇이 문제가 아니라 PICO 앱 설정 문제.)
+
+1. **로봇 컴퓨터에서 XRoboToolkit PC-Service 실행** (헤드셋이 붙을 대상 = 로봇 컴퓨터).
+2. **PICO ↔ PC-Service 연결** (헤드셋 착용하고 앱 안에서):
+   - 연결 모드 = **com/USB** (WiFi 아님 — WiFi로 바뀌어 있으면 USB로 안 붙는다). USB 케이블 연결.
+   - PC-Service가 헤드셋 인식 → `server connect` + **device found** 떠야 함.
+   - (안 뜨면) USB 재연결 / PC-Service 재시작 / **adb 서버 내리기**(`adb kill-server` — adb가 USB 채널을 물고 있으면 PC-Service가 못 붙음).
+3. **전신 트래킹 켜기** (헤드셋 안):
+   - **Full Body** 모드 선택 (Head만이 아니라).
+   - **모션 트래커(Pico Swift)** 페어링 + 착용 (전신 24관절의 소스).
+   - **T-pose 캘리브레이션** 수행 ← **이거 안 하면 `body_available=False`**.
+   - **Send ON**.
+4. **확인** (로봇 컴퓨터에서):
+   ```bash
+   .venv-teleop/bin/python $XRT_SRC/examples/example_body_tracking.py
+   #   -> is_body_data_available() True + 24관절 값이 흐르면 성공
+   ```
+   그 다음 브릿지(2-3)를 띄우면 `INACTIVE` → **`TELEOP mode=.. arm(...)=..`** 프레임이 뜬다.
+
+> **실로봇(--transport local)은 별도 publisher 없이 브릿지가 xrt를 직접 읽는다.** 그래서 sim2sim(노트북 publisher)과 달리 "publisher body=True"를 볼 필요 없이, **브릿지 자체 로그에서 `body_ok`가 True→TELEOP** 인지로 확인한다. body 트래킹 요구조건(Full Body+트래커+T-pose+Send)은 sim이든 실로봇이든 **동일**하다.
+
+---
+
+## 1.6 실로봇 하드웨어 준비 (매 세션, `g1_ctrl` **실행 전**)
+
+> **핵심(검증됨)**: `g1_ctrl`은 고수준 서비스를 코드로 release하지 않는다(`main.cpp` = DDS init → FSM Passive/damping → LowCmd). 그런데 이 팀의 실로봇 배포는 **L2+R2 없이 잘 동작해 왔다** = **이 로봇은 clean power-on 상태에서 LowCmd가 그냥 먹는다.** (전원 후 zero-torque에서 리모컨 motion 버튼을 안 누르고 키보드로만 제어하면 내장 sport가 적극 개입 안 함 → g1_ctrl LowCmd가 모터를 가져감. 또는 로봇이 sport off 설정.)
+
+**표준 절차 (이 로봇 = 검증된 방식)**:
+1. **갠트리에 매단 상태로** 로봇 전원 ON → **zero-torque**(관절 전부 힘 빠짐) 도달까지 대기(~1분). **리모컨 motion 버튼(R2+X 등)은 누르지 말 것** — 내장 sport를 깨우지 않기 위해.
+2. **iface 이름 확인** (g1_ctrl `--network=`에 넣을 값):
+   ```bash
+   ip addr        # 192.168.123.x 를 가진 iface (온보드 Jetson은 보통 eth0)
+   ```
+   → 온보드(Jetson)는 로봇 내부망에 **이미 붙어 있음**(공장 설정) — IP 수동 설정 불필요, iface 이름만 확인.
+3. 바로 §2(g1_ctrl → `f` → `m` + 브릿지). **L2+R2 불필요.**
+
+> **fallback — 새 로봇에서 g1_ctrl "Connected"인데 로봇이 안 움직이거나 떨리면(내장 sport가 적극 개입하는 펌웨어)**: zero-torque에서 **`L2+R2`**(debug mode, README §4.2)로 저수준 활성화, 또는 앱 **sport_mode off**, 또는 SDK **MotionSwitcher `ReleaseMode()`**. (기종/펌웨어 따라 이게 필요할 수 있음 — 이 로봇은 필요 없었다.)
+>
+> **sim**이면 이 §1.6 전체 생략, `--network=lo`.
+
+---
+
 ## 2. 매 실행 절차 (bring-up)
 
 윈도우 노트북에서 로봇 컴퓨터로 `ssh`. **터미널 2개**(g1_ctrl, 브릿지) 권장(tmux/screen).
+> ⚠ **실로봇이면 §1.6(전원 ON → `L2+R2` 저수준 활성화)이 먼저.** sim이면 생략하고 `--network=lo`.
 
 ### 2-1. g1_ctrl 실행 (터미널 A)
 ```bash
@@ -143,6 +189,7 @@ cd unitree_rl_mjlab
 
 - [ ] 하드웨어 킬스위치 담당자 대기
 - [ ] 로봇 게이지/안전 환경, 넘어짐 대비
+- [ ] **(실로봇) 전원 ON → zero-torque (리모컨 motion 버튼 안 누름)** — §1.6. 이 로봇은 이 상태에서 LowCmd 바로 먹음(L2+R2 불필요). sim은 생략
 - [ ] `--grip-enable` 플래그 포함했는지
 - [ ] g1_ctrl `--network=<real_iface>` (sim의 `lo` 아님) 확인
 - [ ] 브릿지 로그 `transport=LOCAL` + `TELEOP` 프레임 정상
@@ -157,6 +204,8 @@ cd unitree_rl_mjlab
 |---|---|
 | g1_ctrl이 브릿지 없는데 계속 Passive | 이전 세션 orphan `/dev/shm/g1_estop`. → g1_ctrl 재시작(부팅 시 자동 clear) 또는 `rm /dev/shm/g1_estop` |
 | 브릿지 `[safety] SAFE:STALE` 반복 | PC-Service 미실행 / PICO 미착용 / body tracking off / 트래커 미캘리브. `example_body_tracking.py`로 body 데이터 확인 |
+| **연결·수신은 되는데 `body_ok=False` + `INACTIVE mode1 safe` + `total 0 teleop frames`** | **가장 흔함.** streaming(머리)은 OK인데 전신 트래킹 미활성. → §1.5: **Full Body 선택 + 트래커 착용 + T-pose 재캘리브 + Send ON**. 로봇/브릿지 문제 아님(PICO 앱 설정). |
+| `device found` 안 뜸 / 앱 `IDLE` | 앱↔PC-Service 미연결. 연결 모드 **com/USB** 확인(WiFi 아님), USB 재연결, PC-Service 재시작, `adb kill-server`(USB 채널 충돌 방지). |
 | `xrobotoolkit_sdk not found` | `--transport local` env에 xrt 미설치. `setup_teleop.sh`(XRT_SRC) 재실행. x86은 git-lfs materialize 필요 |
 | 브릿지 뜨는데 로봇 무반응 | (1) FSM이 `Mimic_Masked`인지(터미널 `m`) (2) grip 눌렀는지(데드맨) (3) cmd_mode 2/3 진입했는지 |
 | IsaacLab/sim에선 걷는데 실로봇 못 걸음 | obs/action term 불일치 가능 → `verify-deploy-obs-parity` 절차. deploy.yaml JOINT_ORDER 확인 |
@@ -167,7 +216,13 @@ cd unitree_rl_mjlab
 
 ## 8. sim2sim(사전 검증)과의 차이
 
-- **sim2sim**(개발/검증): 노트북(PICO)→com1(시뮬). `g1_ctrl --network=lo` + `--transport zmq`(기본). **하드 E-stop 무장 안 함**(soft mode1 fallback). 실로봇 전 파이프라인 dry-run용.
-- **실로봇 온보드**(이 문서): 전부 로컬. `--network=<real_iface>` + `--transport local`. **하드 E-stop 무장**.
-- 실로봇 투입 전 반드시 sim2sim으로 정책·obs·조작을 먼저 확인.
+| | sim2sim (개발/검증) | 실로봇 온보드 (이 문서) |
+|---|---|---|
+| **저수준 활성화** | 개념 자체 없음(실물 모터 없음) | 이 로봇은 clean power-on에서 LowCmd 바로 먹음 → **L2+R2 불필요**. 새 로봇이 방해하면 그때만 fallback(§1.6) |
+| g1_ctrl network | `--network=lo` | `--network=<real_iface>` |
+| PICO 데이터 | 노트북(PICO)→com1, `--transport zmq`(기본) | 로봇 직결, `--transport local` |
+| 하드 E-stop | 무장 안 함(soft mode1 fallback) | **무장** |
+| 실물 모터 | 없음(mujoco) | 있음 → 갠트리·킬스위치 필수 |
+
+- **실로봇 투입 전 반드시 sim2sim으로 정책·obs·조작을 먼저 확인.** (당신은 지금까지 이 sim 단계에 있었고, 그래서 L2+R2를 안 해봤다 — 실로봇에서 §1.6이 새로 필요하다.)
 </content>
