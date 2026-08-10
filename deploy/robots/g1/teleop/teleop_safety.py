@@ -113,6 +113,33 @@ class SafetyMonitor:
         return max(gaps) * 1000.0
 
 
+# ---- 하드 E-stop(/dev/shm/g1_estop) 정책 (순수함수 → 브릿지 main()에서 분리, 테스트 가능) ----
+
+def resolve_estop_arming(transport, arm=None, on_watchdog=None):
+    """(armed, estop_on_watchdog) 결정. None = auto = transport가 'local'일 때만 True.
+
+    - armed: 하드 E-stop 채널 자체를 무장할지. 무장하면 A버튼 래치와 '브릿지 死 → 하트비트
+      stale' fail-safe가 g1_ctrl 강제 Passive(damping)로 이어진다(EstopChannel.h).
+      노트북 PICO로 실로봇을 돌리는 토폴로지(publisher=노트북, bridge+g1_ctrl=제어PC)는
+      transport가 udp/zmq라 auto로는 무장되지 않으므로 --arm-estop 으로 명시 무장한다.
+    - estop_on_watchdog: 워치독 안전상태(통신 스톨/저수신)까지 하드 Passive로 올릴지.
+      local(온보드)은 통신 끊김 = 조작 불능이라 True가 맞지만, 네트워크 경로에서는 WiFi
+      hiccup 하나가 곧장 주저앉기(damping)가 되어 오히려 위험 → auto=False(soft mode1 유지).
+    """
+    local = (transport == "local")
+    return (local if arm is None else bool(arm),
+            local if on_watchdog is None else bool(on_watchdog))
+
+
+def estop_flag(dec, on_watchdog):
+    """SafetyMonitor 결정 dict -> /dev/shm/g1_estop 의 flag(0/1).
+
+    A버튼 E-stop 래치는 항상 1. 워치독 안전상태(dec['safe'])는 on_watchdog일 때만 1.
+    (on_watchdog=True면 기존 동작 `dec['mode'] is not None`과 완전히 동일 — estop이 safe를 함의.)
+    """
+    return 1 if (dec.get("estop") or (on_watchdog and dec.get("safe"))) else 0
+
+
 # ---- 자체 테스트 ----
 def _selftest():
     print("[selftest] SafetyMonitor")
@@ -174,6 +201,29 @@ def _selftest():
         d = sm2.update(frame(seq), age_ms=50, now=t)
     print("  저수신율/큰갭:", d["reason"], "-> safe=", d["safe"], "rate=%.0f gap=%.0f" % (d["rate_hz"], d["gap_ms"]))
     assert d["safe"]
+
+    # ---- 하드 E-stop 무장 정책 ----
+    print("[selftest] estop arming/flag")
+    # auto: local만 무장 + 워치독까지 하드 (기존 동작 유지)
+    assert resolve_estop_arming("local") == (True, True)
+    assert resolve_estop_arming("udp") == (False, False)
+    assert resolve_estop_arming("zmq") == (False, False)
+    # 명시 override: 노트북 PICO(udp) + 실로봇 → 무장하되 워치독은 soft 유지(auto)
+    assert resolve_estop_arming("udp", arm=True) == (True, False)
+    assert resolve_estop_arming("udp", arm=True, on_watchdog=True) == (True, True)
+    assert resolve_estop_arming("local", arm=False) == (False, True)   # 무장 해제(테스트용)
+
+    OK = {"estop": False, "safe": False, "mode": None}
+    WD = {"estop": False, "safe": True, "mode": 1}     # 워치독 안전상태
+    ES = {"estop": True, "safe": True, "mode": 1}      # A버튼 래치
+    assert estop_flag(OK, True) == 0 and estop_flag(OK, False) == 0
+    assert estop_flag(ES, True) == 1 and estop_flag(ES, False) == 1    # A는 항상 하드
+    assert estop_flag(WD, True) == 1                                   # 기존(local) 동작
+    assert estop_flag(WD, False) == 0                                   # 네트워크: soft mode1 유지
+    # on_watchdog=True는 기존 `dec["mode"] is not None`과 동치여야 함(회귀 방지)
+    for dec in (OK, WD, ES):
+        assert estop_flag(dec, True) == (1 if dec["mode"] is not None else 0)
+    print("  arming/flag: OK")
 
     print("[selftest] ALL PASS")
 

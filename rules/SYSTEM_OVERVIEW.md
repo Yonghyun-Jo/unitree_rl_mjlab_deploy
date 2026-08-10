@@ -108,6 +108,11 @@ C++ 제어기 **`g1_ctrl`가 "뇌"**이고, PICO VR 입력은 그 뇌에 **`/dev
 
 ## 4. PICO 연결이 안 되는 구조적 갭 (핵심)
 
+> **갱신(2026-08-04)**: 갭 #1의 publisher는 이후 **윈도우 노트북 로컬에 작성되어 사용 중**이다
+> (`pico_publisher.py` ZMQ / `pico_publisher_udp.py` UDP — 패킷 포맷은 `teleop/pico_wire.py`,
+> 통합 메모는 `teleop/UDP_INTEGRATION.md`). **여전히 repo 밖**이라 다른 PC에서 발행하려면 옮겨야
+> 한다는 점만 유효하다. 아래 갭 목록은 당시 진단 기록으로 남긴다.
+
 1. **[치명] 풀바디용 publisher 스크립트가 repo에 없음.**
    `vr_teleop_bridge.py:6` 주석은 `노트북 pico_publisher.py --ZMQ--> :5556`이라 하지만
    **`pico_publisher.py`는 repo에도, git 히스토리에도 존재한 적 없음.** 수신측(`udp_receiver`/`com1_subscriber`/`ZmqReceiver`)과 패킷 포맷(`pico_wire`)만 있고 **송신자가 비어 있음.**
@@ -166,9 +171,13 @@ C++ 제어기 **`g1_ctrl`가 "뇌"**이고, PICO VR 입력은 그 뇌에 **`/dev
 deploy/robots/g1/tools/run_g1_with_gui.sh            # sim2sim(lo). 실로봇: run_g1_with_gui.sh <iface>
 
 # ── PICO 경로 B (풀바디 + base_vel/mode) ──
-#   (com1) 브릿지 — 5556 bind, GMR 리타겟
-.venv-teleop/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py --mode 1
-#   (노트북) publisher — ★작성 필요★: xrt read → pico_wire.pack_frame → com1:5556
+#   (com1) 브릿지 — 5556 bind, GMR 리타겟. com1은 conda gmr env로:
+~/miniconda3/envs/gmr/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py --transport udp --mode 1
+#   (노트북) publisher — repo 밖(노트북 로컬). xrt read → pico_wire.pack_frame → com1:5556
+#       python pico_publisher_udp.py --com1 <com1 IP> --port 5556      # UDP_INTEGRATION.md
+#   ※ 실로봇을 이 네트워크 토폴로지로 돌릴 땐 브릿지에 --arm-estop 추가(하드 E-stop 무장).
+#      기본 auto는 --transport local일 때만 무장 → 네트워크는 DISARMED로 뜬다.
+#      시작 로그 `[bridge] hard E-stop: ARMED/DISARMED` 로 확인. (RUNBOOK §2-3b)
 
 # ── PICO 경로 A (컨트롤러만, co-located: sim2real 온보드) ──
 uv run --with xrobotoolkit_sdk python deploy/robots/g1/tools/pico_control_bridge.py

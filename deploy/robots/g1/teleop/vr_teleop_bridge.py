@@ -36,7 +36,11 @@ from scipy.spatial.transform import Rotation
 
 import vr_shm  # same teleop/ dir
 import estop_shm            # /dev/shm/g1_estop 하트비트 (same teleop/ dir)
-from teleop_safety import SafetyMonitor  # watchdog(stale/rate) + E-stop(A latch), same teleop/ dir
+from teleop_safety import (  # watchdog(stale/rate) + E-stop(A latch), same teleop/ dir
+    SafetyMonitor,
+    estop_flag,
+    resolve_estop_arming,
+)
 from general_motion_retargeting import GeneralMotionRetargeting
 from general_motion_retargeting.rot_utils import quat_mul_np
 
@@ -204,6 +208,13 @@ def main() -> None:
                     help="skip Unity->RH + quat reorder (only if publisher already sends processed body)")
     ap.add_argument("--grip-enable", action="store_true",
                     help="deadman: grip 눌러야 텔레옵 활성. 놓으면 안전 mode1 복귀. 실제/deploy 권장.")
+    ap.add_argument("--arm-estop", action=argparse.BooleanOptionalAction, default=None,
+                    help="하드 E-stop 채널(/dev/shm/g1_estop) 무장. 기본=auto(transport=local일 때만 무장). "
+                         "노트북 PICO로 실로봇을 돌릴 때(udp/zmq + 제어PC에서 bridge·g1_ctrl 동거) "
+                         "--arm-estop 으로 명시 무장 → A버튼 래치·브릿지 死가 g1_ctrl 강제 Passive로 이어짐.")
+    ap.add_argument("--estop-on-watchdog", action=argparse.BooleanOptionalAction, default=None,
+                    help="워치독(통신 스톨/저수신)도 하드 Passive로 올릴지. 기본=auto(local=True, 네트워크=False). "
+                         "네트워크에서 켜면 WiFi hiccup 하나가 곧장 주저앉기(damping)가 되니 주의.")
     ap.add_argument("--fallback-clip", action="store_true",
                     help="VR 끊김 시 clip 재생(valid=0, 테스트/데모용). 기본=안전 mode1 fallback(clip 무시).")
     ap.add_argument("--height", type=float, default=None, help="operator height (m) for GMR scaling")
@@ -265,7 +276,13 @@ def main() -> None:
     user_mode = args.mode                 # 유저 의도 teleop 모드(2/3, 버튼으로 변경). 출력 mode와 분리.
     seq_out = 0
     estop_seq = 0
-    estop_armed = (args.transport == "local")   # 하드 E-stop은 온보드(local)에서만 무장; sim2sim(zmq/udp)은 기존 soft mode1 유지
+    # 하드 E-stop 무장: 기본 auto(local만) — sim2sim(zmq/udp)은 기존대로 soft mode1.
+    # 노트북 PICO + 실로봇은 --arm-estop 으로 명시 무장(워치독은 auto로 soft 유지).
+    estop_armed, estop_on_watchdog = resolve_estop_arming(
+        args.transport, args.arm_estop, args.estop_on_watchdog)
+    print("[bridge] hard E-stop: "
+          + (f"ARMED (A버튼·브릿지死 → 강제 Passive, watchdog->Passive={estop_on_watchdog})"
+             if estop_armed else "DISARMED (soft mode1 fallback만; 무장하려면 --arm-estop)"))
     last_t = None
     # status
     n = 0
@@ -381,7 +398,7 @@ def main() -> None:
             dec = safety.update(f, rx.age_ms())         # 워치독(stale/저수신) + E-stop(우측 A) 래치
             if estop_armed:
                 estop_seq = (estop_seq + 1) & 0xFFFFFFFF   # u32 wrap (하트비트)
-                estop_shm.write(estop_seq, 1 if dec["mode"] is not None else 0)
+                estop_shm.write(estop_seq, estop_flag(dec, estop_on_watchdog))
             if dec["mode"] is not None:                 # ESTOP 또는 SAFE(통신불량/스톨) → 안전 개입
                 user_mode = 1                           # 안전 기본모드(복귀 시에도 mode1부터)
                 fallback()                              # 안전 mode1 + base_vel 0 (smooth면 _push_inactive)

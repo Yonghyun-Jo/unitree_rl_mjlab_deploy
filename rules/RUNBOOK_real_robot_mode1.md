@@ -135,7 +135,37 @@ cd unitree_rl_mjlab
 #   (com1의 기존 gmr conda env를 쓰면) ~/miniconda3/envs/gmr/bin/python 로 실행
 ```
 - 로그 `[bridge] transport=LOCAL  xrt.init() (로컬 PC-Service)` + `TELEOP mode=1 ...`가 수십 Hz로 뜨면 정상.
+- 로그 `[bridge] hard E-stop: ARMED ...` 확인 — DISARMED면 §4 하드 E-stop이 안 걸린다.
 - `[safety] SAFE:STALE` 반복 = xrt/PC-Service 미연결 또는 body 미착용 → §7 트러블슈팅.
+
+### 2-3b. 변형 — PICO를 **윈도우 노트북**에 연결하는 경우 (sim2sim과 같은 토폴로지)
+
+PICO를 로봇 컴퓨터가 아니라 **노트북에 그대로 물린 채** 실로봇을 돌릴 수 있다. 제약은 하나 —
+**브릿지와 `g1_ctrl`은 같은 호스트**여야 한다(`/dev/shm` 공유). 즉 로봇에 유선으로 붙은 제어
+PC(com1 또는 온보드 Jetson)에서 둘 다 돌리고, PICO 데이터만 노트북→그 PC로 네트워크(:5556).
+그 PC엔 GMR만 있으면 되고 `xrobotoolkit_sdk`는 불필요하다.
+
+```bash
+# (노트북) publisher — PICO 읽어서 제어PC로 발행
+python pico_publisher_udp.py --com1 <제어PC IP> --port 5556
+
+# (제어PC) 브릿지 — UDP 수신 + 하드 E-stop 명시 무장
+~/miniconda3/envs/gmr/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py \
+    --transport udp --arm-estop --grip-enable --mode 1
+```
+
+- **`--arm-estop` 필수**: 하드 E-stop 무장은 기본이 auto(=`--transport local`일 때만)이라,
+  네트워크 transport에서는 명시하지 않으면 **DISARMED**(soft mode1 폴백만)로 뜬다.
+  무장하면 §4의 A버튼 래치 + 브릿지 死 하트비트 fail-safe가 온보드와 동일하게 동작한다.
+- **워치독은 기본 soft로 남는다**(`estop-on-watchdog` auto=False on network): WiFi hiccup
+  하나가 곧장 강제 Passive(주저앉기)가 되는 게 더 위험하기 때문. 통신이 끊기면 mode1(제자리)
+  으로만 폴백한다. 온보드와 같이 통신불량도 하드 정지로 올리려면 `--estop-on-watchdog`.
+- ⚠ **네트워크가 안전 경로에 들어온다**: WiFi가 끊기면 A버튼 E-stop 자체가 전달되지 않는다.
+  → 이 토폴로지에서는 **하드웨어 킬스위치 담당자 대기가 특히 필수**(§0).
+- transport는 **udp 권장**(TCP head-of-line stall 제거 + age 기반 staleness 감지). 노트북
+  publisher가 구 ZMQ 버전뿐이면 `--transport zmq`.
+- ⚠ publisher(`pico_publisher_udp.py`)는 **repo 밖(노트북)에만 있다**. 노트북을 계속 쓰는 한
+  문제없지만, 다른 PC에서 발행하려면 그 파일을 옮겨야 한다.
 
 ---
 
@@ -165,6 +195,12 @@ cd unitree_rl_mjlab
 | **우측 A 버튼** | ≈즉시(다음 50Hz 폴) | flag=1 래치 → g1_ctrl **강제 Passive(damping)** |
 | **워치독**(통신불량/SDK 스톨, rate<30Hz 또는 age>200ms 지속) | ≈즉시 | flag=1 → 강제 Passive |
 | **브릿지 프로세스 死**(크래시/kill) | ~0.5s | 하트비트 stale → g1_ctrl fail-safe **강제 Passive** |
+
+> **무장 조건**: 위 표는 브릿지가 `/dev/shm/g1_estop`을 쓰는 동안(=무장)만 성립한다. 무장은
+> 기본 auto = `--transport local`일 때만. **네트워크 transport(노트북 PICO)는 `--arm-estop`을
+> 줘야 무장**된다(§2-3b). 시작 로그 `[bridge] hard E-stop: ARMED / DISARMED`로 확인할 것.
+> 워치독(통신불량) 행은 무장 + `estop_on_watchdog`일 때만 하드 Passive이고, 네트워크 기본값은
+> soft mode1이다.
 
 **해제 & 재기립**:
 1. 우측 **menu 버튼 1초 홀드** → SafetyMonitor E-stop 해제(flag=0) → g1_ctrl 강제 중단.
@@ -220,8 +256,8 @@ cd unitree_rl_mjlab
 |---|---|---|
 | **저수준 활성화** | 개념 자체 없음(실물 모터 없음) | 이 로봇은 clean power-on에서 LowCmd 바로 먹음 → **L2+R2 불필요**. 새 로봇이 방해하면 그때만 fallback(§1.6) |
 | g1_ctrl network | `--network=lo` | `--network=<real_iface>` |
-| PICO 데이터 | 노트북(PICO)→com1, `--transport zmq`(기본) | 로봇 직결, `--transport local` |
-| 하드 E-stop | 무장 안 함(soft mode1 fallback) | **무장** |
+| PICO 데이터 | 노트북(PICO)→com1, `--transport udp`(또는 zmq) | 로봇 직결, `--transport local` / 노트북 유지면 §2-3b |
+| 하드 E-stop | 무장 안 함(soft mode1 fallback) | **무장** (local=auto, 네트워크는 `--arm-estop`) |
 | 실물 모터 | 없음(mujoco) | 있음 → 갠트리·킬스위치 필수 |
 
 - **실로봇 투입 전 반드시 sim2sim으로 정책·obs·조작을 먼저 확인.** (당신은 지금까지 이 sim 단계에 있었고, 그래서 L2+R2를 안 해봤다 — 실로봇에서 §1.6이 새로 필요하다.)
