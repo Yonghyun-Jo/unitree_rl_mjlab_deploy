@@ -104,9 +104,12 @@ FSM:
       Passive: p
       Velocity: v
 
-    motion_file: config/policy/mimic_masked/gmt_multihead_v0/params/g1_dance1_subject2.npz
-    motion_file_light: config/policy/mimic_masked/gmt_multihead_v0/params/g1_aiming_stand10s.npz  # keyboard '5' = 서서 상체만 test demo
-    policy_dir: config/policy/mimic_masked/gmt_multihead_v0/
+    # keyboard '4' = 제자리 상체 데모. LAFAN dance1_subject3 4~20s(제자리 상체 제스처) +
+    # 끝→처음 1.0s Hermite 복귀 구간(총 17.0s). 시작이 4s인 이유 = 3.6s까지 남아있는 T-pose
+    # (양팔 수평) 제외. 복귀 구간이 있어야 modulo 루프 이음매가 안 튄다(raw cut은 1.56rad 점프).
+    motion_file: config/policy/mimic_masked/gmt_multihead_cwc_scratch/params/g1_dance1_subject3_upper16s.npz
+    motion_file_light: config/policy/mimic_masked/gmt_multihead_cwc_scratch/params/g1_aiming_stand10s.npz  # keyboard '5' = 서서 상체만 test demo
+    policy_dir: config/policy/mimic_masked/gmt_multihead_cwc_scratch/   # A/B: mode3=CWC from-scratch(cwc_scratch/59999, 24클립 success 91.2%). 복귀: gmt_multihead_cwc(cwc_only_w1.5/59998) / gmt_multihead_v0(원본) / gmt_multihead_cop_slip(cop)
     time_start: 0.0
     time_end: 1000.0
     end_state: Mimic_Masked   # 타임아웃 없음(무한 실행) — p/v 누를 때까지 유지. 낙상→Passive는 그대로.

@@ -1,0 +1,132 @@
+# mjlab_g1_motion — masked-3mode flow student + foot_z (stage2_masked, masked_footz_v0), G1 29-DOF.
+# Source checkpoint: logs/rsl_rl/g1_student/2026-06-23_16-44-46_masked_footz_v0/model_29999.pt
+# Policy ONNX: obs[1,1640] -> actions[1,29].  obs = 10 terms (164D single frame) x history 10.
+# WOSE branch: masked_root_pos_b(3) DROPPED (privileged true pelvis pos, unobservable on real G1).
+#   164D yaml + exported/policy.onnx = wose 1640D multihead (flow_44000 + mode1_20000/mode2_18500/
+#   mode3_19500, parity 2.5e-6, 2026-07-10). sim2sim ready — no C++ rebuild needed (obs data-driven).
+#
+# ⚠ HISTORY LAYOUT = TERM-MAJOR (must match mjlab ObservationManager):
+#   each term keeps its own history(10), flattened oldest->newest, then terms concatenated:
+#   [base_ang_vel x10 | projected_gravity x10 | command x10 | ... | command_mask x10 | ref_foot_height x10] = 1640.
+#   The C++ ObservationManager produces this when `use_gym_history` is unset/false (default).
+#   DO NOT set use_gym_history: true (that gives frame-major -> wrong order).
+#
+# ⚠ 5 obs terms below need C++ REGISTER_OBSERVATION (not in upstream): masked_joint_command,
+#   masked_root_ori_b, base_vel_command, command_mask, ref_foot_height.
+#   (wose: masked_root_pos_b dropped from the actor — its REGISTER_OBSERVATION may stay unused in C++.)
+#   base_vel_command + ref_foot_height are produced by MaskedLocoController (State_Mimic.cpp).
+#   The other 5 (base_ang_vel, projected_gravity, joint_pos_rel, joint_vel_rel, last_action)
+#   already exist in deploy/include/isaaclab/envs/mdp/observations/observations.h.
+
+joint_ids_map: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28]
+step_dt: 0.02
+
+# beyondmimic recipe gains (kp=armature*(2*pi*10)^2, kd=2*zeta*armature*(2*pi*10), zeta=2).
+# JOINT_ORDER: leg_L[0:6] leg_R[6:12] waist[12:15] arm_L[15:22] arm_R[22:29].
+stiffness: [40.179, 99.098, 40.179, 99.098, 28.501, 28.501, 40.179, 99.098, 40.179, 99.098, 28.501, 28.501,
+            40.179, 28.501, 28.501,
+            14.251, 14.251, 14.251, 14.251, 14.251, 16.778, 16.778, 14.251, 14.251, 14.251, 14.251, 14.251, 16.778, 16.778]
+damping: [2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144, 2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
+          2.5579, 1.8144, 1.8144,
+          0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681, 0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681]
+
+# KNEES_BENT_KEYFRAME (NOT unitree's stock mimic default). Also the action offset below.
+default_joint_pos: [-0.312, 0.0, 0.0, 0.669, -0.363, 0.0, -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0, 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+
+commands: {}
+
+actions:
+  JointPositionAction:
+    # L1-1차: 기계한계 clip (deploy 순서 29). process_actions에서 항상 적용(joint_actions.h:54-57).
+    # legL[0:6] legR[6:12] waist[12:15] armL[15:22] armR[22:29]. default_joint_pos가 전부 범위 내부
+    # -> in-distribution 동작 무변화(no-op), OOD/발산만 방어.
+    clip: [[-2.5307, 2.8798], [-0.5236, 2.9671], [-2.7576, 2.7576], [-0.087267, 2.8798], [-0.87267, 0.5236], [-0.2618, 0.2618],
+           [-2.5307, 2.8798], [-2.9671, 0.5236], [-2.7576, 2.7576], [-0.087267, 2.8798], [-0.87267, 0.5236], [-0.2618, 0.2618],
+           [-2.618, 2.618], [-0.52, 0.52], [-0.52, 0.52],
+           [-3.0892, 2.6704], [-1.5882, 2.2515], [-2.618, 2.618], [-1.0472, 2.0944], [-1.97222, 1.97222], [-1.61443, 1.61443], [-1.61443, 1.61443],
+           [-3.0892, 2.6704], [-2.2515, 1.5882], [-2.618, 2.618], [-1.0472, 2.0944], [-1.97222, 1.97222], [-1.61443, 1.61443], [-1.61443, 1.61443]]
+    joint_names: [.*]
+    # G1_ACTION_SCALE = 0.25 * effort_limit / stiffness (beyondmimic, per-joint).
+    scale: [0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386, 0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
+            0.5475, 0.4386, 0.4386,
+            0.4386, 0.4386, 0.4386, 0.4386, 0.4386, 0.0745, 0.0745, 0.4386, 0.4386, 0.4386, 0.4386, 0.4386, 0.0745, 0.0745]
+    offset: [-0.312, 0.0, 0.0, 0.669, -0.363, 0.0, -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
+             0.0, 0.0, 0.0,
+             0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0, 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+    joint_ids: null
+
+# ── observations: EXACT order + dims must match StudentPolicyCfg (164D single frame; wose) ──
+# all history_length: 10, all scale 1.0 (policy group has no per-term scale in training).
+observations:
+  base_ang_vel:           # 3
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  projected_gravity:      # 3
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  masked_joint_command:   # 58  (q_ref+q̇_ref, lower[:12]/upper[12:] zeroed per cmd_mode)
+    params: {command_name: motion}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,   # q_ref 29
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]   # q̇_ref 29
+    history_length: 10
+  masked_root_ori_b:      # 6  (anchor ori Rot6D; all zeroed in mode1)
+    params: {command_name: motion}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  joint_pos_rel:          # 29
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  joint_vel_rel:          # 29
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  last_action:            # 29
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  base_vel_command:       # 3  (yaw-local [vx,vy,wz]; zeroed in mode3; joystick source)
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  command_mask:           # 2  ([mask_upper, mask_lower])
+    params: {}
+    clip: null
+    scale: [1.0, 1.0]
+    history_length: 10
+  ref_foot_height:        # 2  ([z_L,z_R] foot-trajectory command; MaskedLocoController gen)
+    params: {}
+    clip: null
+    scale: [1.0, 1.0]
+    history_length: 10
+
+# ── deploy 안전층 (State_Mimic이 로드; 없으면/이상하면 전부 비활성). 값은 sim 튜닝. ──
+safety:
+  enable_pos_clamp: false      # L1-2차 C++ 최종 clamp (action.clip이 L1-1차)
+  enable_rate_limit: false     # L2 (Task 3)
+  enable_qd_guard: false        # L3 (Task 4)
+  # 위치 한계(기계, deploy 순서 29). action.clip과 동일.
+  pos_min: [-2.5307,-0.5236,-2.7576,-0.087267,-0.87267,-0.2618,-2.5307,-2.9671,-2.7576,-0.087267,-0.87267,-0.2618,-2.618,-0.52,-0.52,-3.0892,-1.5882,-2.618,-1.0472,-1.97222,-1.61443,-1.61443,-3.0892,-2.2515,-2.618,-1.0472,-1.97222,-1.61443,-1.61443]
+  pos_max: [ 2.8798, 2.9671, 2.7576, 2.8798, 0.5236, 0.2618, 2.8798, 0.5236, 2.7576, 2.8798, 0.5236, 0.2618, 2.618, 0.52, 0.52, 2.6704, 2.2515, 2.618, 2.0944, 1.97222, 1.61443, 1.61443, 2.6704, 1.5882, 2.618, 2.0944, 1.97222, 1.61443, 1.61443]
+  # 속도 rate-limit (Task 3)·qd-guard (Task 4) 기본값 — clearly-high, sim에서 p99 기반 튜닝.
+  vel_max: 20.0                 # rad/s (scalar; per-joint 확장 가능)
+  qd_warn: 15.0                 # rad/s
+  qd_crit: 25.0                 # rad/s
+  over_ticks: 5                 # 연속 초과 틱(0.1s@50Hz)
