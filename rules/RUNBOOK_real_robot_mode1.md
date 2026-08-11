@@ -140,6 +140,9 @@ cd unitree_rl_mjlab
 
 ### 2-3b. 변형 — PICO를 **윈도우 노트북**에 연결하는 경우 (sim2sim과 같은 토폴로지)
 
+> 📕 **노트북 쪽 세션 절차·트러블슈팅 전체 → [RUNBOOK_laptop_pico_teleop.md](RUNBOOK_laptop_pico_teleop.md)**
+> (PC-Service 실행, 앱 IP 칸에 뭘 넣나, `adb reverse`, Full Body/캘리브/Send, TCP failed 진단 4종)
+
 PICO를 로봇 컴퓨터가 아니라 **노트북에 그대로 물린 채** 실로봇을 돌릴 수 있다. 제약은 하나 —
 **브릿지와 `g1_ctrl`은 같은 호스트**여야 한다(`/dev/shm` 공유). 즉 로봇에 유선으로 붙은 제어
 PC(com1 또는 온보드 Jetson)에서 둘 다 돌리고, PICO 데이터만 노트북→그 PC로 네트워크(:5556).
