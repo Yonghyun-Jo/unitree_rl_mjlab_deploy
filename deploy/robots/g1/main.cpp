@@ -9,15 +9,24 @@ std::unique_ptr<LowCmd_t> FSMState::lowcmd = nullptr;
 std::shared_ptr<LowState_t> FSMState::lowstate = nullptr;
 std::shared_ptr<Keyboard> FSMState::keyboard = std::make_shared<Keyboard>();
 
-void init_fsm_state()
+void init_fsm_state(bool allow_lowcmd_conflict)
 {
     auto lowcmd_sub = std::make_shared<unitree::robot::g1::subscription::LowCmd>();
     usleep(0.2 * 1e6);
     if(!lowcmd_sub->isTimeout())
     {
+        // 이미 누군가 rt/lowcmd 를 발행 중 = 다른 컨트롤러가 살아있다(크래시 후 orphan 포함).
+        // 둘 다 모터 명령을 인가하면 토크가 충돌해 policy 와 무관하게 즉시 낙상한다.
         spdlog::critical("The other process is using the lowcmd channel, please close it first.");
+        spdlog::critical("  확인: pgrep -x g1_ctrl   (반드시 -x. pgrep -f 는 검색 명령 자신을 self-match 해 오탐)");
+        spdlog::critical("  정리: pkill -x g1_ctrl   (남의 세션일 수 있으니 확인 후)");
         unitree::robot::go2::shutdown();
-        // exit(0);
+        if(!allow_lowcmd_conflict)
+        {
+            spdlog::critical("  기동 거부. 의도적으로 무시하려면 --allow-lowcmd-conflict (권장하지 않음).");
+            exit(1);
+        }
+        spdlog::warn("--allow-lowcmd-conflict: lowcmd 충돌을 무시하고 계속합니다 (위험 — 낙상 가능).");
     }
     FSMState::lowcmd = std::make_unique<LowCmd_t>();
     FSMState::lowstate = std::make_shared<LowState_t>();
@@ -37,7 +46,7 @@ int main(int argc, char** argv)
     // Unitree DDS Config
     unitree::robot::ChannelFactory::Instance()->Init(0, vm["network"].as<std::string>());
 
-    init_fsm_state();
+    init_fsm_state(vm.count("allow-lowcmd-conflict") > 0);
 
     FSMState::lowcmd->msg_.mode_machine() = 5; // 29dof
     if(!FSMState::lowcmd->check_mode_machine(FSMState::lowstate)) {

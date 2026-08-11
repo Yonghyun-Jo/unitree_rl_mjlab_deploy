@@ -130,6 +130,7 @@ inline po::variables_map helper(int argc, char** argv)
         ("version,v", "show version")
         ("log", "record log file")
         ("network,n", po::value<std::string>()->default_value(""), "dds network interface")
+        ("allow-lowcmd-conflict", "startup guard bypass: 다른 프로세스가 이미 rt/lowcmd 를 쓰고 있어도 기동 (위험 — 토크 충돌로 즉시 낙상)")
         ;
 
     po::variables_map vm;

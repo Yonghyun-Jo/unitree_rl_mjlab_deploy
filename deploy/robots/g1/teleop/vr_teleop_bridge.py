@@ -22,6 +22,7 @@ cmd_mode masks in C++: mode2=상체(팔·waist), mode3=전신(다리 포함). ON
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import signal
 import threading
@@ -200,7 +201,10 @@ def main() -> None:
                          "local(온보드 co-located: xrt 직접읽기, 네트워크 없음).")
     ap.add_argument("--mode", type=int, default=1, choices=[1, 2, 3],
                     help="시작 cmd_mode (기본 1=안전 full-auto). 실행 중 버튼이 override: X→1/Y→2/B→3.")
-    ap.add_argument("--ema", type=float, default=0.5, help="dof_vel EMA alpha (0..1, higher=less smoothing)")
+    ap.add_argument("--ema", type=float, default=0.5,
+                    help="dof_vel EMA alpha (0..1, higher=less smoothing). "
+                         "⚠ --no-smooth 일 때만 유효 — 기본(--smooth)에서는 출력 스레드가 One-Euro dx_hat 을 "
+                         "쓰므로 이 값은 무시된다(EMA 코드에 도달하지 않음).")
     ap.add_argument("--vx", type=float, default=1.5, help="base_vel vx cap (m/s) at full stick")
     ap.add_argument("--vy", type=float, default=0.8, help="base_vel vy cap")
     ap.add_argument("--wz", type=float, default=1.5, help="base_vel wz cap (rad/s)")
@@ -222,9 +226,20 @@ def main() -> None:
                     help="GMR IK max iterations per stage (TWIST2 스톡=10). warm-start(mink.Configuration "
                          "프레임간 유지)+0.001 조기수렴이라 대부분 몇 iter만 씀 → 10이어도 저렴. "
                          "지연은 iter가 아니라 GMR 프로세스 분리로 잡는다(TWIST2 레시피).")
-    # ── com1 원격테스트(WAN jitter/loss) 전용 예측 스무딩 (opt-in). 기본 off → 실배포(co-located) 무영향.
-    #    고정 rate 출력 루프 + One-Euro(적응형 저역통과) + gap 속도 extrapolation.
+    # ── 예측 스무딩. ⚠ 기본 ON 이고 실배포(co-located)에도 그대로 걸린다.
+    #    고정 rate 출력 루프 + One-Euro(적응형 저역통과) + gap 속도 extrapolation + slew-rate limit.
     #    근거: TWIST2(co-locate·hot-loop 무보간), h2_compact(extrapolation for latency jitter), One-Euro(VR/mocap 표준).
+    #
+    #    비용(오프라인 실측, A=0.5rad 정현파, 기본값 mincut 1.0/beta 0.7 기준):
+    #      느린 동작(0.25~1Hz) 위상지연 41~58ms, 빠른 reach 75ms(2Hz 부근은 slew limit 지배).
+    #      명령 사슬(손→관절 명령) 지연의 45~60%가 여기서 나온다. GMR 리타게팅은 1.6ms(2%)로 무시 가능.
+    #      → 체감 지연을 줄이려면 GMR 이 아니라 --smooth-mincut / --smooth-max-jointvel 를 완화한다.
+    #
+    #    ⚠ --no-smooth 로 끄는 것은 권장하지 않는다. 두 가지가 같이 사라진다:
+    #      (1) slew-rate limit 이 One-Euro 앞단(:342)에 있어 outlier clamp 가 통째로 없어진다
+    #          (트래커 dropout·GMR IK 튐·quat flip 이 물리한계 없이 모터로 나간다).
+    #      (2) shm 의 dof_vel 정의가 바뀐다(smooth=One-Euro dx_hat clamp / no-smooth=finite-diff+EMA).
+    #          이 값은 정책 obs 의 qd_ref 로 들어가므로(State_Mimic.cpp) 정책이 다른 스케일의 입력을 받는다.
     ap.add_argument("--smooth", action=argparse.BooleanOptionalAction, default=True,
                     help="예측 스무딩(고정 rate + One-Euro + gap extrapolation + slew-rate limit). "
                          "기본 ON — 실배포 안전장치(outlier 차단)로도 유용. 끄려면 --no-smooth.")
@@ -236,6 +251,12 @@ def main() -> None:
                     help="One-Euro beta(속도 계수). 높을수록 빠른 모션에서 lag↓.")
     ap.add_argument("--smooth-maxgap", type=int, default=4,
                     help="손실 gap에서 속도 extrapolation 최대 tick 수(이후 hold). run-away 방지 상한.")
+    ap.add_argument("--diag", action=argparse.BooleanOptionalAction, default=True,
+                    help="1초마다 [diag] 줄 출력: output tick 간격 p50/p95/max + overrun 수 + GMR 소요. "
+                         "'50Hz에 밀리는가'를 눈으로 확인하는 유일한 수단. 기본 ON(비용 무시 가능).")
+    ap.add_argument("--log", type=str, default=None, metavar="PATH",
+                    help="output tick 단위 진단 CSV 기록(사후 분석용). 예: --log /tmp/teleop_$(date +%%H%%M).csv "
+                         "컬럼: t_s,tick_dt_ms,active,have_new,gap,cmd_mode,gmr_ms,in_rate_hz,in_age_ms,reason")
     ap.add_argument("--smooth-max-jointvel", type=float, default=12.0,
                     help="slew-rate limit: reference가 tick당 이동 가능한 최대 관절속도(rad/s). outlier/garbage "
                          "프레임(트래커 dropout·GMR IK 튐·quat flip)을 물리한계로 clamp → 주기적 엄청난 튐 차단.")
@@ -296,6 +317,24 @@ def main() -> None:
                "stick": [0.0, 0.0, 0.0], "quat": list(IDENTITY_QUAT), "dof": list(ZERO29)}
     _stop = threading.Event()
 
+    # ── 진단 계측(S1): output tick 간격 / overrun / GMR 소요. deque append 는 GIL 하에서 원자적이라
+    #    RT thread(output_loop)와 report()가 락 없이 주고받아도 안전(진단 목적엔 충분).
+    _tick_ms = collections.deque(maxlen=8000)     # ~160s @50Hz
+    _gmr_ms = collections.deque(maxlen=8000)
+    _over = [0]                                   # output tick overrun 누적(리스트=가변 참조)
+    _diag = {"gmr_ms": 0.0, "rate_hz": 0.0, "age_ms": 0.0, "reason": "init"}
+    _log_f = None
+    if args.log:
+        _log_f = open(args.log, "w", buffering=1 << 16)
+        _log_f.write("t_s,tick_dt_ms,active,have_new,gap,cmd_mode,gmr_ms,in_rate_hz,in_age_ms,reason\n")
+        print(f"[bridge] diag CSV -> {args.log}")
+
+    def _pct(vals, q):
+        if not vals:
+            return float("nan")
+        s = sorted(vals)
+        return s[min(len(s) - 1, int(q * len(s)))]
+
     def _push_target(cmd_mode, stick, quat, dof):
         with _lock:
             _shared["seq"] += 1
@@ -321,7 +360,14 @@ def main() -> None:
         max_step = args.smooth_max_jointvel * out_dt     # slew-rate limit: tick당 최대 관절 이동(rad)
         seq, last_seen, gap = 0, -1, 0
         nxt = time.monotonic()
+        t_prev, t_log0 = None, nxt
         while not _stop.is_set():
+            t_now = time.monotonic()
+            tick_dt = (t_now - t_prev) * 1000.0 if t_prev is not None else 0.0
+            if t_prev is not None:
+                _tick_ms.append(tick_dt)
+            t_prev = t_now
+            have_new = False
             with _lock:
                 s_seq, active, um = _shared["seq"], _shared["active"], _shared["cmd_mode"]
                 st = list(_shared["stick"]); tq = list(_shared["quat"]); tgt = list(_shared["dof"])
@@ -356,13 +402,23 @@ def main() -> None:
                 cur_quat = _nlerp(cur_quat, tq, quat_a)
                 vr_shm.write(seq, 1, um, st, cur_quat.tolist(), cur.tolist(), cur_vel.tolist())
                 seq += 1
+            if _log_f is not None:
+                _log_f.write("%.4f,%.3f,%d,%d,%d,%d,%.3f,%.1f,%.1f,%s\n" % (
+                    t_now - t_log0, tick_dt, int(active), int(have_new), gap, um,
+                    _diag["gmr_ms"], _diag["rate_hz"], _diag["age_ms"], _diag["reason"]))
             nxt += out_dt
             slp = nxt - time.monotonic()
             if slp > 0:
                 time.sleep(slp)
             else:
-                nxt = time.monotonic()                   # 밀리면 리셋(누적 방지)
+                # S2: 밀렸을 때 위상(격자)을 버리지 않는다. 놓친 tick 수만큼만 건너뛰어
+                # 누적은 막고 50Hz 격자 정렬은 유지 (기존: nxt=now 리셋 → 이후 박자가 어긋남).
+                missed = int((time.monotonic() - nxt) // out_dt) + 1
+                nxt += out_dt * missed
+                _over[0] += missed
         vr_shm.write(seq, 1, 1, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)  # 종료 안전 write
+        if _log_f is not None:
+            _log_f.flush()
 
     _out_thread = None
     if args.smooth:
@@ -388,7 +444,20 @@ def main() -> None:
     def report(now, tag):
         nonlocal proc, t_report
         if now - t_report >= 1.0:
-            print(f"[bridge] {proc / max(now - t_report, 1e-6):4.0f}Hz  {tag}")
+            dt = max(now - t_report, 1e-6)
+            print(f"[bridge] {proc / dt:4.0f}Hz  {tag}")
+            if args.diag and args.smooth:
+                ticks = list(_tick_ms); _tick_ms.clear()
+                gms = list(_gmr_ms); _gmr_ms.clear()
+                over, _over[0] = _over[0], 0
+                tgt = 1000.0 / args.smooth_hz
+                line = (f"[diag] out {len(ticks) / dt:4.1f}Hz  tick p50={_pct(ticks, .5):5.1f} "
+                        f"p95={_pct(ticks, .95):5.1f} max={max(ticks) if ticks else float('nan'):5.1f}ms "
+                        f"(target {tgt:.0f})  overrun={over}")
+                if gms:
+                    line += (f"  |  gmr p50={_pct(gms, .5):.2f} p95={_pct(gms, .95):.2f} "
+                             f"max={max(gms):.2f}ms")
+                print(line)
             proc = 0
             t_report = now
 
@@ -396,6 +465,8 @@ def main() -> None:
         while True:
             f = rx.latest()                             # UDP/ZMQ 공통: drain-to-latest + dedup (or None)
             dec = safety.update(f, rx.age_ms())         # 워치독(stale/저수신) + E-stop(우측 A) 래치
+            _diag["rate_hz"] = dec["rate_hz"]; _diag["age_ms"] = rx.age_ms()
+            _diag["reason"] = dec["reason"].replace(",", ";")   # CSV 안전
             if estop_armed:
                 estop_seq = (estop_seq + 1) & 0xFFFFFFFF   # u32 wrap (하트비트)
                 estop_shm.write(estop_seq, estop_flag(dec, estop_on_watchdog))
@@ -443,7 +514,10 @@ def main() -> None:
             # --- active: body[24] -> GMR -> qpos -> VrRef (VR 텔레옵) ---
             j = f["body"]["joints"]                     # [24][7] = raw [x,y,z, qx,qy,qz,qw]
             human = _msg_body_to_human(j, transform=not args.no_body_transform)
+            _t_gmr = time.perf_counter()
             qpos = gmr.retarget(human, offset_to_ground=True)   # [36]
+            _diag["gmr_ms"] = (time.perf_counter() - _t_gmr) * 1000.0
+            _gmr_ms.append(_diag["gmr_ms"])
             root_quat = [float(x) for x in qpos[3:7]]           # wxyz
             dof_pos = np.asarray(qpos[7:36], dtype=np.float32)  # 29, == deploy JOINT_ORDER
             if args.smooth:
@@ -453,6 +527,7 @@ def main() -> None:
                 report(now, f"TELEOP(smooth) mode={user_mode}  base_vel=({stick[0]:+.2f},"
                             f"{stick[1]:+.2f},{stick[2]:+.2f})  arm(L_sho_pitch)={dof_pos[15]:+.2f}")
                 continue
+            # ↓ --no-smooth 경로 전용. args.smooth(기본 True)면 위에서 continue 하므로 여기 도달 안 함.
             if prev_dof is not None and last_t is not None:
                 dt = max(now - last_t, 1e-3)
                 raw = (dof_pos - prev_dof) / dt
@@ -476,6 +551,9 @@ def main() -> None:
         if estop_armed:
             estop_shm.clear()   # 정상 종료 -> disarm(파일 제거). 크래시면 하트비트 stale로 C++가 damping.
         rx.close()
+        if _log_f is not None:
+            _log_f.close()
+            print(f"[bridge] diag CSV written: {args.log}")
         print(f"\n[bridge] stopped (safe fallback). total {n} teleop frames.")
 
 
