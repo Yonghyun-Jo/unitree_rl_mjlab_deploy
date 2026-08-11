@@ -4,6 +4,27 @@
 #include "FSM/State_RLBase.h"
 #include "State_Mimic.h"
 #include <cstdio>
+#include <csignal>
+#include <termios.h>
+#include <unistd.h>
+
+namespace {
+// 아래 Keyboard 전역은 생성자에서 tty 를 -icanon -echo 로 바꾸고 소멸자에서만 되돌린다.
+// Ctrl-C(SIGINT)/pkill(SIGTERM) 은 소멸자를 태우지 않으므로 종료 후 셸 터미널이 raw 로
+// 남는다(입력 echo 없음, 줄 단위 입력 안 됨). 여기서 원래 설정을 미리 떠 두고 시그널에서 되돌린다.
+// ⚠ 같은 TU 안의 동적 초기화는 선언 순서대로 실행되므로 이 블록은 반드시 keyboard 정의보다 위.
+termios g_tty_orig;
+const bool g_tty_saved = (::tcgetattr(STDIN_FILENO, &g_tty_orig) == 0);
+
+extern "C" void restore_tty_and_die(int sig)
+{
+    // tcsetattr/signal/raise 는 async-signal-safe. 로봇 관련 정리는 일절 하지 않는다 —
+    // 기존과 동일하게 '그 시그널로 죽는' 것만 유지하고 터미널만 되살린다.
+    if(g_tty_saved) ::tcsetattr(STDIN_FILENO, TCSANOW, &g_tty_orig);
+    ::signal(sig, SIG_DFL);
+    ::raise(sig);
+}
+}  // namespace
 
 std::unique_ptr<LowCmd_t> FSMState::lowcmd = nullptr;
 std::shared_ptr<LowState_t> FSMState::lowstate = nullptr;
@@ -37,6 +58,9 @@ void init_fsm_state(bool allow_lowcmd_conflict)
 
 int main(int argc, char** argv)
 {
+    ::signal(SIGINT,  restore_tty_and_die);   // 종료 시 터미널 복구 (동작은 기존과 동일)
+    ::signal(SIGTERM, restore_tty_and_die);
+
     // Load parameters
     auto vm = param::helper(argc, argv);
 
