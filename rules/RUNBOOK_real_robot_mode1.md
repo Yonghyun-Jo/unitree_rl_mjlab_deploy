@@ -264,4 +264,45 @@ python pico_publisher_udp.py --com1 <제어PC IP> --port 5556
 | 실물 모터 | 없음(mujoco) | 있음 → 갠트리·킬스위치 필수 |
 
 - **실로봇 투입 전 반드시 sim2sim으로 정책·obs·조작을 먼저 확인.** (당신은 지금까지 이 sim 단계에 있었고, 그래서 L2+R2를 안 해봤다 — 실로봇에서 §1.6이 새로 필요하다.)
+
+<!-- AI_APPENDED -->
+
+---
+
+## 9. 터미널 키보드가 안 먹을 때 (2026-08-11)
+
+`f`/`v`/`m`/`p` 가 안 먹으면 **코드를 뒤지기 전에 30초 안에 판정된다.** 컨트롤러가 tty를
+`-echo` 로 두기 때문에 화면에 아무 흔적도 안 남아 전부 "키가 죽었다"로 보인다.
+
+```bash
+P=$(pgrep -x g1_ctrl)
+for t in $(ls /proc/$P/task); do echo -n "$t "; awk '/^syscr/{print $2}' /proc/$P/task/$t/io; done
+```
+
+Keyboard 스레드(= `wchan` 이 `poll_schedule_timeout` 이고 read 수가 작은 쪽)의 `syscr` 로 갈린다:
+
+| 관측 | 원인 | 조치 |
+|---|---|---|
+| `syscr` 가 **안 늘어남** | 키가 프로세스까지 도달 못 함 | 포커스/창 확인. 그래도 안 되면 아래 X 레벨 캡처 |
+| `syscr` 가 **3씩** 늘어남 | **한글 IME** (UTF-8 한글 = 3바이트. `f`→`ㄹ`) — `keyboard.h` 는 1바이트씩 읽어 `"f"` 와 영영 불일치 | 한/영 전환 |
+| `syscr` 가 **1씩** 느는데 `FSM: Change state ...` 로그가 없음 | 그때 비로소 코드/상태 문제 | `/dev/shm/g1_estop` 확인(asserted면 `CtrlFSM::run_()` 이 전이검사 bypass) |
+
+**특정 키 하나만** 안 먹으면 X 입력 레벨이다 (AnyDesk 원격은 물리 키보드가 아니라
+`Keyboard passthrough` 가상 장치로 들어와 스캔코드가 어긋날 수 있다):
+
+```bash
+DISPLAY=:1 timeout 30 xinput test-xi2 --root > /tmp/keys.log   # 그동안 문제 키를 누른다
+awk '/EVENT type .*KeyPress/{f=1} f&&/detail:/{print $2; f=0}' /tmp/keys.log | sort -n | uniq -c
+DISPLAY=:1 xmodmap -pke | grep -E "^keycode +(41|<잡힌값>) "     # 41 = f
+```
+
+2026-08-11 실제: `f` 가 keycode **93**(evdev 85 `KEY_ZENKAKUHANKAKU`, keysym 비어 있음)으로
+도착 → 어느 앱에도 안 찍힘. 우회 `DISPLAY=:1 xmodmap -e 'keycode 93 = f F f F'`
+(되돌리기 `keycode 93 =`, X 세션 재시작 시 소멸). 근본 해결은 AnyDesk 재연결 / 노트북 레이아웃 점검.
+
+### 종료 후 터미널이 깨지는 문제 (해결됨, `3b79d12`)
+
+`g1_ctrl` 이 키 텔레옵을 위해 tty 를 `-icanon -echo` 로 바꾸는데 Ctrl-C 는 소멸자를 안 태워
+셸이 raw 로 남았다. SIGINT/SIGTERM 핸들러에서 termios 를 복구하도록 고쳤고,
+`run_g1_with_gui.sh` 도 `stty -g` 로 이중 안전망을 둔다. 구버전 바이너리로 깨졌으면 `stty sane`.
 </content>
