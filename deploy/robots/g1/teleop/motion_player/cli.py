@@ -58,12 +58,15 @@ def _render_list(ctx, cfg) -> None:
     print("> l · q   목록 · 종료\n")
 
 
-def _confirm(clip, pre, item, dry: bool) -> bool:
+def _confirm(clip, pre, item, dry: bool, modes_unknown: bool = False) -> bool:
     wall = (pre.f_end - pre.f_start) / clip.fps / item.speed
     clip_s = (pre.f_end - pre.f_start) / clip.fps
     print(f"\n▶ {clip.name}   {item.span[0]:.1f}–{item.span[1]:.1f}s "
           f"({clip_s:.1f}s, ×{item.speed:.2f} → 벽시계 {wall:.1f}s)   "
           f"mode{item.mode} · base_vel={item.base_vel}")
+    if modes_unknown:
+        print("  ⚠ 이 정책 슬롯은 모드별 head 유무를 알 수 없습니다 (ONNX_META.json 없음) — "
+              "클립에 적힌 modes 를 그대로 신뢰합니다.")
     print(f"  진입 자세차 {pre.entry_err:.2f} rad (joint[{pre.entry_joint}]) "
           f"→ 램프인 {pre.ramp_in_s:.1f}s")
     if not pre.ok:
@@ -80,27 +83,50 @@ def _confirm(clip, pre, item, dry: bool) -> bool:
 
 
 class _KeyWatcher:
-    """재생 중 Space(중단) / x(E-stop) 을 논블로킹으로 본다. 터미널 상태를 반드시 원복한다."""
+    """재생 중 Space(중단) / x(E-stop) 을 논블로킹으로 본다. 터미널 상태를 반드시 원복한다.
+
+    Ctrl-C(SIGINT)도 여기서 가로챈다: cbreak 모드에서도 ISIG 는 켜져 있어서 Ctrl-C 가
+    os.read() 로 바이트(\\x03)로 오는 게 아니라 KeyboardInterrupt 로 곧장 올라간다 —
+    그러면 p.run() 이 통째로 끊겨 RAMP_OUT/RELEASE 를 건너뛰고 참조가 중간 자세에
+    멈춘 채로 C++ 워치독(stale 감지)에 떠넘겨진다. 그래서 재생 중엔 SIGINT 핸들러를 걸어
+    Space 와 같은 경로(abort 플래그)로 받는다. 두 번째 Ctrl-C 는 탈출구로 남겨 진짜 멈춘
+    재생을 강제 종료할 수 있게 한다.
+    """
 
     def __init__(self, enabled: bool):
         self.enabled = enabled and sys.stdin.isatty()
         self.fd = sys.stdin.fileno() if self.enabled else -1
         self.saved = None
+        self.saved_sigint = None
         self.abort = False
         self.estop = False
+        self._sigint_hits = 0
 
     def __enter__(self):
         if self.enabled:
             self.saved = termios.tcgetattr(self.fd)
             tty.setcbreak(self.fd)
             os.set_blocking(self.fd, False)
+            self.saved_sigint = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, self._on_sigint)
         return self
 
     def __exit__(self, *exc):
+        if self.saved_sigint is not None:
+            signal.signal(signal.SIGINT, self.saved_sigint)
         if self.saved is not None:
             os.set_blocking(self.fd, True)
             termios.tcsetattr(self.fd, termios.TCSADRAIN, self.saved)
         return False
+
+    def _on_sigint(self, signum, frame):
+        self._sigint_hits += 1
+        if self._sigint_hits >= 2:
+            # 탈출구: 두 번째 Ctrl-C 는 강제 종료. 기본 핸들러로 되돌리고 다시 던진다 —
+            # with 문의 예외 경로로 __exit__ 가 호출되어 터미널/시그널은 그대로 원복된다.
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            raise KeyboardInterrupt
+        self.abort = True
 
     def poll(self) -> bool:
         if not self.enabled:
@@ -109,7 +135,7 @@ class _KeyWatcher:
             ch = os.read(self.fd, 1)
         except (BlockingIOError, OSError):
             return self.abort
-        if ch in (b" ", b"\x03"):
+        if ch == b" ":
             self.abort = True
         elif ch == b"x":
             self.estop = True
@@ -157,10 +183,15 @@ def main(argv=None) -> int:
 
             item = payload
             info = next(c for c in ctx.clips if c.name == item.clip_name)
-            clip = clips_mod.load_clip(info)
+            try:
+                clip = clips_mod.load_clip(info)
+            except Exception as e:
+                print(f"  ✗ {info.name} 로드 실패: {e}")
+                continue
+            modes_unknown = not ctx.valid_modes
             allowed = tuple(sorted(set(info.modes) & (ctx.valid_modes or set(info.modes))))
             pre = clips_mod.preflight(clip, item.span, item.mode, allowed, profile)
-            if not _confirm(clip, pre, item, args.dry_run):
+            if not _confirm(clip, pre, item, args.dry_run, modes_unknown=modes_unknown):
                 continue
 
             spec = pub_mod.PlaybackSpec(
