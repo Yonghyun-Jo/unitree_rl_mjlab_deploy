@@ -30,19 +30,36 @@ def _spec(speed=1.0, mode=3, ramp_in=1.0, ramp_out=1.0, T=200, fps=50.0):
 def test_plan_starts_at_standby_and_ends_at_standby():
     seq = list(publisher.plan_frames(_spec()))
     assert np.allclose(seq[0][1].dof_pos, 0.0), seq[0][1].dof_pos[:3]
-    assert seq[0][1].cmd_mode == 3 and seq[0][1].valid == 1
+    assert seq[0][1].cmd_mode == 1 and seq[0][1].valid == 1     # LEAD_IN(CRITICAL-2)
     # 마지막 재생 프레임(RELEASE 직전)은 standby 로 돌아와 있어야 한다
     play_frames = [f for _, f in seq if f.valid == 1 and f.cmd_mode == 3]
     assert np.allclose(play_frames[-1].dof_pos, 0.0, atol=1e-5), play_frames[-1].dof_pos[:3]
     print("  ok starts_and_ends_at_standby")
 
 
+def test_plan_leads_in_with_mode1_before_playback_mode():
+    """CRITICAL-2: 컨트롤러가 이미 mode2/3 이어도 재앵커/크로스페이드가 걸리도록, 재생은
+    항상 cmd_mode=1 홀드로 시작해서 재생모드(2|3)로 넘어가야 한다."""
+    seq = [f for _, f in publisher.plan_frames(_spec())]
+    modes = [f.cmd_mode for f in seq]
+    valids = [f.valid for f in seq]
+    assert modes[0] == 1 and valids[0] == 1, (modes[0], valids[0])
+    first_playback = next(i for i, m in enumerate(modes) if m in (2, 3))
+    assert all(m == 1 for m in modes[:first_playback]), modes[:first_playback]
+    assert modes[-1] == 1 and valids[-1] == 0
+    assert modes[-2] == 1 and valids[-2] == 1
+    print("  ok leads_in_with_mode1")
+
+
 def test_plan_release_switches_to_mode1_then_invalidates():
     seq = [f for _, f in publisher.plan_frames(_spec())]
     modes = [f.cmd_mode for f in seq]
-    assert 1 in modes, "RELEASE 에서 mode1 패킷이 없다 — C++ 크로스페이드가 안 걸린다"
-    first_m1 = modes.index(1)
-    assert all(m == 3 for m in modes[:first_m1]), modes[:first_m1][:5]
+    # LEAD_IN(선두) 과 RELEASE(말미) 는 mode1, 그 사이(재생 구간)는 전부 mode3 이어야 한다.
+    first_pb = next(i for i, m in enumerate(modes) if m == 3)
+    last_pb = len(modes) - 1 - next(i for i, m in enumerate(reversed(modes)) if m == 3)
+    assert all(m == 1 for m in modes[:first_pb]), "LEAD_IN 은 전부 mode1 이어야 한다"
+    assert all(m == 3 for m in modes[first_pb:last_pb + 1]), "재생 구간은 mode3 이어야 한다"
+    assert all(m == 1 for m in modes[last_pb + 1:]), "RELEASE 는 전부 mode1 이어야 한다"
     assert seq[-1].valid == 0, "마지막 패킷은 valid=0 이어야 한다"
     assert all(f.valid == 1 for f in seq[:-1])
     print("  ok release_sequence")
@@ -76,6 +93,33 @@ def test_speed_half_doubles_wall_clock():
         (full[-1][0], half[-1][0])
     assert len(half) - len(full) == 100, (len(full), len(half))
     print("  ok speed_half_doubles_wall_clock")
+
+
+def test_velocity_ref_continuous_across_ramp_boundaries_at_half_speed():
+    """IMPORTANT-3: RAMP_IN->PLAY, PLAY->RAMP_OUT 경계에서 dof_vel 이 계단으로 튀면 안 된다.
+
+    ramp_frame 은 a*clip_qd 를, play_frame 은 clip_qd*speed 를 내보내는데 speed != 1.0 이면
+    경계(a=1)에서 a*clip_qd != clip_qd*speed 로 어긋난다 — ramp_frame 도 speed 를 반영해야
+    한다. speed=1.0 에서는 버그가 안 보이므로 0.5 로 검증한다.
+    """
+    spec = _spec(speed=0.5, mode=3, ramp_in=0.2, ramp_out=0.2, T=200, fps=50.0)
+    playback = [f for _, f in publisher.plan_frames(spec) if f.cmd_mode == spec.mode and f.valid == 1]
+
+    n_in = max(1, int(round(spec.ramp_in_s / publisher.CONTROL_DT)))     # RAMP_IN = n_in+1 프레임
+    n_clip = spec.f_end - spec.f_start
+    play_wall_s = (n_clip / spec.clip.fps) / spec.speed
+    n_play = max(1, int(round(play_wall_s / publisher.CONTROL_DT)))
+
+    last_ramp_in = playback[n_in]
+    first_play = playback[n_in + 1]
+    last_play = playback[n_in + n_play]
+    first_ramp_out = playback[n_in + n_play + 1]
+
+    assert np.allclose(last_ramp_in.dof_vel, first_play.dof_vel, atol=1e-6), \
+        (last_ramp_in.dof_vel[:3], first_play.dof_vel[:3])
+    assert np.allclose(last_play.dof_vel, first_ramp_out.dof_vel, atol=1e-6), \
+        (last_play.dof_vel[:3], first_ramp_out.dof_vel[:3])
+    print("  ok velocity_ref_continuous_at_half_speed")
 
 
 def test_abort_shortens_and_still_ends_at_standby():
@@ -251,10 +295,12 @@ def test_abort_during_ramp_in_reverses_instead_of_completing():
 
 def main() -> int:
     test_plan_starts_at_standby_and_ends_at_standby()
+    test_plan_leads_in_with_mode1_before_playback_mode()
     test_plan_release_switches_to_mode1_then_invalidates()
     test_plan_reaches_clip_pose_during_play()
     test_plan_frame_spacing_is_control_period()
     test_speed_half_doubles_wall_clock()
+    test_velocity_ref_continuous_across_ramp_boundaries_at_half_speed()
     test_abort_shortens_and_still_ends_at_standby()
     test_publisher_writes_bytes_matching_vr_shm_contract()
     test_publisher_should_abort_hook()

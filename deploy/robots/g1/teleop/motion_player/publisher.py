@@ -18,6 +18,7 @@ import numpy as np
 from .clips import ClipData, DeployProfile
 from .frames import RefFrame, play_frame, ramp_frame, smoothstep
 
+LEAD_IN_HOLD_S = 0.3
 RAMP_OUT_S = 1.5
 ABORT_RAMP_OUT_S = 0.8
 RELEASE_HOLD_S = 0.5
@@ -53,6 +54,20 @@ def plan_frames(spec: PlaybackSpec, abort_at: float | None = None
     """
     t = 0.0
 
+    # --- LEAD_IN: cmd_mode=1 홀드 ---
+    # 컨트롤러가 이미 mode2/3 였다면(조작자 키·GUI·이전 생산자) g_cmd_mode 가 안 바뀌어
+    # C++ 재앵커(init_quat)와 크로스페이드가 아예 안 걸린 채로 RAMP_IN 이 시작해버린다.
+    # 재생 시작 전 반드시 mode1 을 한 번 거쳐 전환을 강제한다(spec §2.7: "매 재생을
+    # mode1 → 재생모드 → mode1 로 왕복").
+    n_lead = max(1, int(round(LEAD_IN_HOLD_S / CONTROL_DT)))
+    for _ in range(n_lead):
+        if abort_at is not None and t >= abort_at:
+            # 아직 아무것도 움직이지 않았다(이미 standby/mode1) — 곧장 종료한다.
+            yield t, _standby_frame(spec, cmd_mode=1, valid=0)
+            return
+        yield t, _standby_frame(spec, cmd_mode=1, valid=1)
+        t += CONTROL_DT
+
     # --- RAMP_IN: standby -> clip[f_start] ---
     n_in = max(1, int(round(spec.ramp_in_s / CONTROL_DT)))
     s_in = 1.0                      # 램프인이 실제로 도달한 진행도 (1.0 = 완주)
@@ -62,7 +77,8 @@ def plan_frames(spec: PlaybackSpec, abort_at: float | None = None
             s_in = last_s
             break
         yield t, ramp_frame(spec.clip, spec.profile, spec.f_start, i / n_in,
-                            spec.mode, (0.0, 0.0, 0.0), "in")
+                            spec.mode, (0.0, 0.0, 0.0), "in",
+                            f_entry=spec.f_start, speed=spec.speed)
         last_s = i / n_in
         t += CONTROL_DT
 
@@ -85,7 +101,7 @@ def plan_frames(spec: PlaybackSpec, abort_at: float | None = None
             clip_elapsed = (i * CONTROL_DT) * spec.speed
             f_last = min(spec.f_end - 1, spec.f_start + int(round(clip_elapsed * spec.clip.fps)))
             yield t, play_frame(spec.clip, f_last, spec.speed, spec.mode,
-                                spec.base_vel_kind, spec.manual_bv)
+                                spec.base_vel_kind, spec.manual_bv, f_entry=spec.f_start)
             t += CONTROL_DT
         aborted = abort_at is not None and t < play_start + play_wall_s - 1e-9
         a_scale = 1.0
@@ -96,7 +112,8 @@ def plan_frames(spec: PlaybackSpec, abort_at: float | None = None
     n_out = max(1, int(round(out_s / CONTROL_DT)))
     for i in range(n_out + 1):
         yield t, ramp_frame(spec.clip, spec.profile, f_last, i / n_out,
-                            spec.mode, (0.0, 0.0, 0.0), "out", a_scale=a_scale)
+                            spec.mode, (0.0, 0.0, 0.0), "out",
+                            f_entry=spec.f_start, speed=spec.speed, a_scale=a_scale)
         t += CONTROL_DT
 
     # --- RELEASE: mode1 로 전환(재앵커/크로스페이드 유발) -> 유지 -> valid=0 ---

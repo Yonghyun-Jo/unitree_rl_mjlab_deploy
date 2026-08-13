@@ -37,8 +37,10 @@ def test_smoothstep_endpoints():
 def test_ramp_in_endpoints_are_continuous():
     """s=0 이면 정확히 standby, s=1 이면 정확히 clip[f0]. 경계에서 점프가 없어야 한다."""
     c, p = _clip(pos=0.8, vel=1.2), _profile(standby=0.0)
-    a = frames.ramp_frame(c, p, f_anchor=0, s=0.0, mode=3, base_vel=(0, 0, 0), direction="in")
-    b = frames.ramp_frame(c, p, f_anchor=0, s=1.0, mode=3, base_vel=(0, 0, 0), direction="in")
+    a = frames.ramp_frame(c, p, f_anchor=0, s=0.0, mode=3, base_vel=(0, 0, 0), direction="in",
+                          f_entry=0)
+    b = frames.ramp_frame(c, p, f_anchor=0, s=1.0, mode=3, base_vel=(0, 0, 0), direction="in",
+                          f_entry=0)
     assert np.allclose(a.dof_pos, 0.0), a.dof_pos[:3]
     assert np.allclose(a.dof_vel, 0.0), a.dof_vel[:3]
     assert np.allclose(b.dof_pos, 0.8), b.dof_pos[:3]
@@ -48,8 +50,10 @@ def test_ramp_in_endpoints_are_continuous():
 
 def test_ramp_out_endpoints():
     c, p = _clip(pos=0.8, vel=1.2), _profile(standby=0.0)
-    a = frames.ramp_frame(c, p, f_anchor=5, s=0.0, mode=3, base_vel=(0, 0, 0), direction="out")
-    b = frames.ramp_frame(c, p, f_anchor=5, s=1.0, mode=3, base_vel=(0, 0, 0), direction="out")
+    a = frames.ramp_frame(c, p, f_anchor=5, s=0.0, mode=3, base_vel=(0, 0, 0), direction="out",
+                          f_entry=0)
+    b = frames.ramp_frame(c, p, f_anchor=5, s=1.0, mode=3, base_vel=(0, 0, 0), direction="out",
+                          f_entry=0)
     assert np.allclose(a.dof_pos, 0.8) and np.allclose(a.dof_vel, 1.2)
     assert np.allclose(b.dof_pos, 0.0) and np.allclose(b.dof_vel, 0.0)
     print("  ok ramp_out_endpoints")
@@ -59,7 +63,7 @@ def test_ramp_is_monotonic():
     c, p = _clip(pos=1.0), _profile(standby=0.0)
     prev = -1.0
     for i in range(21):
-        f = frames.ramp_frame(c, p, 0, i / 20.0, 3, (0, 0, 0), "in")
+        f = frames.ramp_frame(c, p, 0, i / 20.0, 3, (0, 0, 0), "in", f_entry=0)
         cur = float(f.dof_pos[0])
         assert cur >= prev - 1e-9, (i, cur, prev)
         prev = cur
@@ -69,12 +73,26 @@ def test_ramp_is_monotonic():
 def test_speed_scales_velocity():
     """속도를 늦추면 qd_ref 도 같은 배율로 늦춰져야 한다."""
     c = _clip(vel=2.0)
-    full = frames.play_frame(c, 10, speed=1.0, mode=3, base_vel_kind="zero", manual_bv=(0, 0, 0))
-    half = frames.play_frame(c, 10, speed=0.5, mode=3, base_vel_kind="zero", manual_bv=(0, 0, 0))
+    full = frames.play_frame(c, 10, speed=1.0, mode=3, base_vel_kind="zero", manual_bv=(0, 0, 0),
+                             f_entry=0)
+    half = frames.play_frame(c, 10, speed=0.5, mode=3, base_vel_kind="zero", manual_bv=(0, 0, 0),
+                             f_entry=0)
     assert np.allclose(full.dof_vel, 2.0)
     assert np.allclose(half.dof_vel, 1.0), half.dof_vel[:3]
     assert np.allclose(full.dof_pos, half.dof_pos)      # 위치는 프레임이 같으면 같다
     print("  ok speed_scales_velocity")
+
+
+def test_ramp_frame_speed_scales_velocity_too():
+    """ramp_frame 도 speed 를 곱해야 play_frame 과 경계에서 dof_vel 이 계단으로 튀지 않는다."""
+    c, p = _clip(pos=0.8, vel=2.0), _profile(standby=0.0)
+    full = frames.ramp_frame(c, p, f_anchor=0, s=1.0, mode=3, base_vel=(0, 0, 0), direction="in",
+                             f_entry=0, speed=1.0)
+    half = frames.ramp_frame(c, p, f_anchor=0, s=1.0, mode=3, base_vel=(0, 0, 0), direction="in",
+                             f_entry=0, speed=0.5)
+    assert np.allclose(full.dof_vel, 2.0), full.dof_vel[:3]
+    assert np.allclose(half.dof_vel, 1.0), half.dof_vel[:3]     # a=1 이므로 순수 speed 배율만 남는다
+    print("  ok ramp_frame_speed_scales_velocity")
 
 
 def test_yaw_local_base_vel_identity():
@@ -102,9 +120,11 @@ def test_clamp_base_vel():
 def test_mode3_zeroes_base_vel():
     """mode3 은 C++ 가 어차피 0으로 덮는다. 혼란 방지를 위해 우리도 0을 보낸다."""
     c = _clip()
-    f = frames.play_frame(c, 0, speed=1.0, mode=3, base_vel_kind="manual", manual_bv=(1.0, 1.0, 1.0))
+    f = frames.play_frame(c, 0, speed=1.0, mode=3, base_vel_kind="manual", manual_bv=(1.0, 1.0, 1.0),
+                          f_entry=0)
     assert f.base_vel == (0.0, 0.0, 0.0), f.base_vel
-    f2 = frames.play_frame(c, 0, speed=1.0, mode=2, base_vel_kind="manual", manual_bv=(1.0, 1.0, 1.0))
+    f2 = frames.play_frame(c, 0, speed=1.0, mode=2, base_vel_kind="manual", manual_bv=(1.0, 1.0, 1.0),
+                           f_entry=0)
     assert f2.base_vel == (1.0, 1.0, 1.0), f2.base_vel
     print("  ok mode3_zeroes_base_vel")
 
@@ -166,12 +186,65 @@ def test_quat_slerp_near_parallel():
     print("  ok quat_slerp_near_parallel")
 
 
+def _quat_from_yaw(yaw_rad: float) -> np.ndarray:
+    return np.array([math.cos(yaw_rad / 2.0), 0.0, 0.0, math.sin(yaw_rad / 2.0)])
+
+
+def _quat_from_pitch(pitch_rad: float) -> np.ndarray:
+    return np.array([math.cos(pitch_rad / 2.0), 0.0, math.sin(pitch_rad / 2.0), 0.0])
+
+
+def _extract_yaw(q) -> float:
+    w, x, y, z = q
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _extract_pitch(q) -> float:
+    w, x, y, z = q
+    return math.asin(max(-1.0, min(1.0, 2.0 * (w * y - z * x))))
+
+
+def test_yaw_normalize_self_is_identity():
+    """entry 와 같은(순수 yaw) 프레임을 자기 자신에 대해 정규화하면 identity 여야 한다.
+
+    RAMP_IN 의 목표(target_quat)가 이걸로 identity 가 되어야 첫 패킷이 '진짜' identity 라는
+    설계 전제(CRITICAL-1)가 성립한다.
+    """
+    q = _quat_from_yaw(math.radians(37.0))
+    out = frames.yaw_normalize(q, q)
+    assert np.allclose(out, np.array([1.0, 0.0, 0.0, 0.0]), atol=1e-6), out
+    print("  ok yaw_normalize_self_identity")
+
+
+def test_yaw_normalize_preserves_relative_rotation():
+    """entry 가 -99도인 클립에서 +30도, +60도로 도는 프레임을 정규화하면 상대 +30/+60 이 나와야 한다."""
+    entry = _quat_from_yaw(math.radians(-99.0))
+    f1 = _quat_from_yaw(math.radians(-99.0 + 30.0))
+    f2 = _quat_from_yaw(math.radians(-99.0 + 60.0))
+    n1 = frames.yaw_normalize(entry, f1)
+    n2 = frames.yaw_normalize(entry, f2)
+    assert abs(math.degrees(_extract_yaw(n1)) - 30.0) < 1e-4, math.degrees(_extract_yaw(n1))
+    assert abs(math.degrees(_extract_yaw(n2)) - 60.0) < 1e-4, math.degrees(_extract_yaw(n2))
+    print("  ok yaw_normalize_preserves_relative_rotation")
+
+
+def test_yaw_normalize_preserves_pitch():
+    """yaw 만 상쇄해야 한다 — entry 의 yaw 가 달라도 q 의 pitch 는 그대로 살아남아야 한다."""
+    entry = _quat_from_yaw(math.radians(40.0))
+    pitch = math.radians(12.0)
+    q = _quat_from_pitch(pitch)
+    out = frames.yaw_normalize(entry, q)
+    assert abs(_extract_pitch(out) - pitch) < 1e-6, (_extract_pitch(out), pitch)
+    print("  ok yaw_normalize_preserves_pitch")
+
+
 def main() -> int:
     test_smoothstep_endpoints()
     test_ramp_in_endpoints_are_continuous()
     test_ramp_out_endpoints()
     test_ramp_is_monotonic()
     test_speed_scales_velocity()
+    test_ramp_frame_speed_scales_velocity_too()
     test_yaw_local_base_vel_identity()
     test_yaw_local_base_vel_90deg()
     test_clamp_base_vel()
@@ -179,6 +252,9 @@ def main() -> int:
     test_quat_slerp_endpoints()
     test_quat_slerp_antipodal()
     test_quat_slerp_near_parallel()
+    test_yaw_normalize_self_is_identity()
+    test_yaw_normalize_preserves_relative_rotation()
+    test_yaw_normalize_preserves_pitch()
     print("test_frames: ALL PASS")
     return 0
 

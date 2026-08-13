@@ -51,6 +51,42 @@ def quat_slerp(a, b, s: float) -> np.ndarray:
     return (math.sin((1.0 - s) * theta) / sin_t) * a + (math.sin(s * theta) / sin_t) * b
 
 
+def _quat_mul(a, b) -> np.ndarray:
+    """Hamilton product, wxyz. a*b = a 를 나중에, b 를 먼저 적용하는 합성."""
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return np.array([
+        aw * bw - ax * bx - ay * by - az * bz,
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+    ], dtype=np.float64)
+
+
+def _yaw_only_quat(q_wxyz) -> np.ndarray:
+    """q 의 yaw 성분만 남긴 순수 z축 회전 쿼터니언."""
+    w, x, y, z = (float(v) for v in q_wxyz)
+    yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    return np.array([math.cos(yaw / 2.0), 0.0, 0.0, math.sin(yaw / 2.0)], dtype=np.float64)
+
+
+def yaw_normalize(q_ref_wxyz, q_wxyz) -> np.ndarray:
+    """q 를 q_ref 의 yaw 성분에 대해 상대화한다: R_yaw(q_ref)ᵀ · q.
+
+    C++ 재앵커(init_quat = R_yaw(robot) · R_yaw(ref_now)ᵀ, State_Mimic.cpp:596-612)가
+    "재생기가 보낸 첫 패킷의 yaw" 를 기준점으로 삼기 때문에, 매 패킷을 span 진입 프레임
+    (entry)의 yaw 에 대해 상대화해야 클립의 절대 world yaw 가 그대로 heading 오차로
+    명령되는 걸 막는다. yaw 만 상쇄하므로 pitch/roll 은 그대로 남는다.
+    q_ref 가 순수 yaw(무피치/무롤)이고 q_wxyz == q_ref_wxyz 이면 결과는 정확히 identity.
+    """
+    q_ref = np.asarray(q_ref_wxyz, dtype=np.float64)
+    q = np.asarray(q_wxyz, dtype=np.float64)
+    yaw_conj = _yaw_only_quat(q_ref)
+    yaw_conj[1:] *= -1.0           # 순수 회전의 conjugate = inverse
+    out = _quat_mul(yaw_conj, q)
+    return out / np.linalg.norm(out)
+
+
 def yaw_local_base_vel(quat_wxyz, lin_vel_w, ang_vel_w) -> tuple[float, float, float]:
     """pelvis 세계좌표 속도 -> yaw-local [vx, vy, wz].
 
@@ -86,11 +122,15 @@ def _resolve_base_vel(clip: ClipData, f_idx: int, mode: int,
 
 
 def ramp_frame(clip: ClipData, profile: DeployProfile, f_anchor: int, s: float,
-               mode: int, base_vel, direction: str, a_scale: float = 1.0) -> RefFrame:
+               mode: int, base_vel, direction: str, f_entry: int, speed: float = 1.0,
+               a_scale: float = 1.0) -> RefFrame:
     """standby <-> clip[f_anchor] 사이를 smoothstep 으로 잇는다.
 
     direction="in":  s=0 -> standby, s=1 -> clip[f_anchor]
     direction="out": s=0 -> clip[f_anchor], s=1 -> standby
+    f_entry: span 진입 프레임 — root_quat 을 이 프레임의 yaw 에 대해 상대화한다(yaw_normalize).
+    speed: dof_vel 스케일. play_frame 과 경계(a=1)에서 값이 정확히 이어지려면 여기도
+           같은 speed 를 곱해야 한다 — 안 그러면 RAMP_IN/OUT<->PLAY 경계에서 속도 참조가 계단으로 튄다.
     a_scale: 램프인 도중 중단 시, 이미 도달한 진행도에서 되돌리기 위한 배율.
     """
     a = smoothstep(s)
@@ -101,8 +141,9 @@ def ramp_frame(clip: ClipData, profile: DeployProfile, f_anchor: int, s: float,
     target_v = clip.joint_vel[f_anchor].astype(np.float64)
     standby = profile.standby.astype(np.float64)
     dof_pos = standby + a * (target_p - standby)
-    dof_vel = a * target_v
-    quat = quat_slerp(_IDENTITY_QUAT, clip.root_quat[f_anchor].astype(np.float64), a)
+    dof_vel = a * target_v * float(speed)
+    target_quat = yaw_normalize(clip.root_quat[f_entry], clip.root_quat[f_anchor])
+    quat = quat_slerp(_IDENTITY_QUAT, target_quat, a)
     return RefFrame(cmd_mode=mode, valid=1,
                     base_vel=clamp_base_vel(base_vel) if mode < 3 else (0.0, 0.0, 0.0),
                     root_quat=tuple(float(v) for v in quat),
@@ -111,11 +152,15 @@ def ramp_frame(clip: ClipData, profile: DeployProfile, f_anchor: int, s: float,
 
 
 def play_frame(clip: ClipData, f_idx: int, speed: float, mode: int,
-               base_vel_kind: str, manual_bv) -> RefFrame:
-    """재생 중 한 프레임. ⚠ speed 를 바꾸면 dof_vel 도 같은 배율로 곱한다."""
+               base_vel_kind: str, manual_bv, f_entry: int) -> RefFrame:
+    """재생 중 한 프레임. ⚠ speed 를 바꾸면 dof_vel 도 같은 배율로 곱한다.
+
+    f_entry: span 진입 프레임 — root_quat 을 이 프레임의 yaw 에 대해 상대화한다(yaw_normalize).
+    """
     f_idx = int(min(max(f_idx, 0), clip.n_frames - 1))
     bv = _resolve_base_vel(clip, f_idx, mode, base_vel_kind, manual_bv)
+    quat = yaw_normalize(clip.root_quat[f_entry], clip.root_quat[f_idx])
     return RefFrame(cmd_mode=mode, valid=1, base_vel=bv,
-                    root_quat=tuple(float(v) for v in clip.root_quat[f_idx]),
+                    root_quat=tuple(float(v) for v in quat),
                     dof_pos=clip.joint_pos[f_idx].astype(np.float32),
                     dof_vel=(clip.joint_vel[f_idx] * float(speed)).astype(np.float32))
