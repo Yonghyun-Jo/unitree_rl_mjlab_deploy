@@ -205,9 +205,16 @@ python C:\dev\pico-capture\scripts\test_pico_pose.py
 ### 1-6. publisher 실행
 
 ```powershell
-conda activate pico
-python C:\dev\pico-capture\pico_publisher.py --com1 192.168.50.211      # 같은 LAN
-python C:\dev\pico-capture\pico_publisher.py --com1 100.121.81.113      # 원격(Tailscale)
+conda activate pico     # ⚠ 필수. 이걸 빼면 SDK 가 없어 "Python" 한 줄 찍고 즉시 죽는다
+python C:\dev\pico-capture\udp\pico_publisher_udp.py --com1 100.121.81.113 --port 5556
+```
+
+⚠ **§1-5 의 `test_pico_pose.py` 를 먼저 Ctrl+C 로 끌 것.** PICO SDK 는 한 프로세스만 잡을 수 있어,
+켜둔 채 publisher 를 띄우면 그대로 죽는다. 같은 이유로 **ZMQ publisher 와 동시 실행 금지.**
+
+롤백(구 ZMQ, 브릿지도 `--transport zmq` 로):
+```powershell
+python C:\dev\pico-capture\pico_publisher.py --com1 100.121.81.113
 ```
 
 정상이면 `[stat] seq=... 50.0Hz ... body=True`.
@@ -223,10 +230,13 @@ pgrep -x g1_ctrl                                  # 비어야 정상
 cd /home/piene/unitree_rl_mjlab && ./simulate/build/unitree_mujoco
 # 터미널 B — 뜨면 키보드 f(FixStand) → m(Mimic)
 cd /home/piene/unitree_rl_mjlab && ./deploy/robots/g1/tools/run_g1_with_gui.sh
-# 터미널 C — 브릿지 (진단 로깅 켜기)
+# 터미널 C — 브릿지 (진단 로깅 켜기). transport 생략 = udp(기본, §4)
 ~/miniconda3/envs/gmr/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py \
-    --mode 1 --grip-enable --log /tmp/teleop_$(date +%m%d_%H%M).csv
+    --mode 1 --grip-enable --log /tmp/teleop_$(date +%m%d_%H%M%S).csv
 ```
+
+시작 줄 **`[bridge] transport=UDP  bind *:5556/udp`** 를 확인할 것.
+`--log` 경로에 **초(`%S`)까지** 넣는다 — 분 단위면 재실행 시 앞 세션 CSV 를 덮어쓴다.
 
 **실로봇이면 `--arm-estop` 을 반드시 추가**(네트워크 transport 는 auto 로 무장 안 된다 — RUNBOOK_real_robot_mode1 §2-3b).
 
@@ -332,15 +342,38 @@ pose 스트림이 그쪽을 타면 **USB 로는 못 넘어온다.** `pico_sessio
 
 ---
 
-## 4. transport 선택 (미해결 항목)
+## 4. transport — **UDP 로 결정 (2026-08-13 A/B 실측으로 닫음)**
 
-| | 상태 |
-|---|---|
-| **ZMQ(TCP, 기본)** | 마지막 known-good. LAN 에서 매끄러움. 단 손실 구간에서 **재전송 stall → burst → drain-latest 점프 = 툭툭** |
-| **UDP** | 원격 WAN 손실용으로 만들었으나 **검증 미완**. 2026-07-10 테스트에서 body 가 안 와 롤백했는데, **원인은 transport 가 아니라 PICO 앱측 pose 미스트리밍으로 판단**된 채 남음 |
+브릿지 `--transport` **기본값 = `udp`**. 되돌리려면 `--transport zmq`(구 `pico_publisher.py` 와 짝).
 
-→ **A/B 로 닫을 것**: ZMQ 로 CSV 1회 → UDP(`pico_publisher_udp.py` + 브릿지 `--transport udp`)로 CSV 1회 →
-입력 rate 분포 / 끊김 횟수 / 워치독 발동 횟수로 비교. 브릿지 `--log` 가 생기면서 처음으로 측정 가능해졌다.
+### 실측 (연구실 노트북 ↔ 본가 com1, Tailscale 직결 P2P)
+
+| 지표 | ZMQ (287s) | **UDP (168s)** |
+|---|---|---|
+| `in_age_ms` **최대** | **1173 ms** | **164 ms** |
+| age > 200 ms (워치독 문턱 초과) | 152틱 = **3.0초** | **0틱** |
+| `in_age_ms` p99 | 214 ms | 49 ms |
+| rate < 30 Hz | 3.4 % | 0.7 % |
+| 안전 트립 총 시간 | 10.3초 / 287초 (**3.6 %**) | 0.58초 / 168초 (**0.34 %**) |
+| teleop 활성 비율 | 60.1 % | 81.9 % |
+
+CSV: `/tmp/teleop_UDP_134022.csv`(UDP) · `/tmp/teleop_0811_sim.csv` t=5.9~292.6 구간(ZMQ).
+
+### 왜 UDP 인가 — 대역폭이 아니라 **실패 모드**가 다르다
+
+- **ZMQ(TCP)**: 재전송 stall → **2초 완전 침묵** → slow-start restart 로 6→50Hz 램프.
+  이때 `age` 는 **도착 시각** 기준이라 2초 묵은 포즈가 `age=0` 으로 들어온다.
+  **워치독이 못 잡는 유일한 실패 모드**(= 팔이 과거 궤적을 고속 재생).
+- **UDP**: 재전송이 없어 "도착 = 방금 보낸 것"이 참 → `age` 가 정직하다.
+  최악이 **프레임 성김**(50→25Hz, `age` 는 0~18ms 유지)이라 팔이 얼지 않고 성기게 따라온다.
+- 프레임 크기: ZMQ JSON **2388 B(MTU 1280에서 2세그먼트, 둘 다 와야 1프레임)** vs
+  UDP 바이너리 **806 B(1세그먼트) + 3중 중복**. 대역폭은 119 vs 121 KB/s 로 **거의 동일** → 중복이 공짜.
+
+### 남은 것
+
+UDP 세션의 유일한 트립(0.58초, t≈118.5)은 **`age` 가 신선한 채 rate 만 절반**으로 떨어진 형태다.
+3중 중복을 감안하면 네트워크 손실로 설명되지 않는다(패킷 79% 손실 필요) → **노트북 publisher 측 정체**로 추정.
+publisher 창의 자체 Hz 표시를 그 순간에 보면 확정된다. **미확인.**
 
 ---
 

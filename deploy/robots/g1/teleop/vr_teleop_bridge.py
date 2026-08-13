@@ -3,7 +3,7 @@
 
 Replaces vr_replay.py's clip source with the LIVE PICO stream:
 
-  노트북 pico_publisher.py --ZMQ--> [this: bind :5556]
+  노트북 pico_publisher_udp.py --UDP--> [this: bind :5556]   (--transport zmq 로 구 publisher 롤백)
     -> GMR("xrobot","unitree_g1").retarget(body[24])  -> qpos[36]
        root_quat = qpos[3:7] (wxyz),  dof_pos = qpos[7:36] (== robot_spec JOINT_ORDER, no remap)
     -> dof_vel  = finite-diff(dof_pos) + EMA  (policy uses q̇_ref; NOT published by laptop)
@@ -195,10 +195,12 @@ class _OneEuro:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5556)
-    ap.add_argument("--transport", choices=["udp", "zmq", "local"], default="zmq",
-                    help="pose 스트림 transport. zmq(기본, TCP·기존 방식·LAN 매끄러움) / "
-                         "udp(원격 WAN 손실=스킵용; pico_wire/udp_receiver 필요) / "
-                         "local(온보드 co-located: xrt 직접읽기, 네트워크 없음).")
+    ap.add_argument("--transport", choices=["udp", "zmq", "local"], default="udp",
+                    help="pose 스트림 transport. udp(기본, 손실=스킵; pico_wire/udp_receiver) / "
+                         "zmq(TCP·구 publisher 롤백용) / "
+                         "local(온보드 co-located: xrt 직접읽기, 네트워크 없음). "
+                         "기본이 udp인 근거는 2026-08-13 동일 링크 A/B 실측: 최대 무수신 "
+                         "1173ms(zmq) → 164ms(udp), 워치독 문턱 200ms 초과 3.0초 → 0초.")
     ap.add_argument("--mode", type=int, default=1, choices=[1, 2, 3],
                     help="시작 cmd_mode (기본 1=안전 full-auto). 실행 중 버튼이 override: X→1/Y→2/B→3.")
     ap.add_argument("--ema", type=float, default=0.5,

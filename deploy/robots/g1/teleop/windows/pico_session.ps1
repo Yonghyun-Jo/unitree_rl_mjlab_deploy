@@ -328,6 +328,35 @@ if ($Tune) {
             foreach ($p in Get-ServiceProcs) { $p.PriorityClass = 'High' }
             Ok "PC-Service 우선순위: High"
         } catch { Warn "우선순위 변경 실패: $_" }
+
+        # 4-5. 무선 어댑터 절전 해제 — PICO 구간이 아니라 노트북→제어PC 구간용.
+        #      2026-08-11 실측: 손실 0% 인데 RTT 가 8ms → 231/492/923/707ms 로 튀었다.
+        #      무선 파워세이브로 프레임이 큐에 앉으면, TCP 가 RTO 백오프+slow-start 로
+        #      그 0.9s 를 2s 애플리케이션 정지로 증폭한다(브릿지 CSV 로 확인).
+        try {
+            $wsub = "19cbb8fa-5279-450e-9fac-8a3d5fedd0c1"   # Wireless Adapter Settings
+            $wset = "12bbebe6-58d6-4636-95bb-3217ef867c1a"   # Power Saving Mode (0 = Maximum Performance)
+            powercfg /setacvalueindex SCHEME_CURRENT $wsub $wset 0 | Out-Null
+            powercfg /setdcvalueindex SCHEME_CURRENT $wsub $wset 0 | Out-Null
+            powercfg /setactive SCHEME_CURRENT | Out-Null
+            Ok "무선 어댑터 절전 모드: 최대 성능 (AC/DC)"
+        } catch { Warn "무선 절전 설정 실패: $_" }
+
+        # 4-6. 무선 NIC 자체의 '장치 끄기' 해제 (전원계획과 별개 축이다)
+        try {
+            $n = 0
+            Get-NetAdapter -Physical -ErrorAction Stop |
+                Where-Object { $_.InterfaceDescription -match 'Wi-?Fi|Wireless|802\.11|AX2|AC 9' } |
+                ForEach-Object {
+                    $pm = Get-NetAdapterPowerManagement -Name $_.Name -ErrorAction SilentlyContinue
+                    if ($pm -and $pm.AllowComputerToTurnOffDevice -eq 'Enabled') {
+                        $pm.AllowComputerToTurnOffDevice = 'Disabled'
+                        Set-NetAdapterPowerManagement -InputObject $pm
+                        $n++
+                    }
+                }
+            Ok "무선 NIC 절전 해제 ($n 개)"
+        } catch { Warn "무선 NIC 절전 해제 실패(무시 가능): $($_.Exception.Message)" }
     }
 } else {
     Write-Host "    (튜닝 생략. 최초 1회 + 재부팅 후에는 관리자 PowerShell 에서 -Tune 을 권장)" -ForegroundColor DarkGray
