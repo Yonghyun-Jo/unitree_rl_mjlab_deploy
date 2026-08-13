@@ -112,7 +112,9 @@ def preflight(clip: ClipData, span: tuple[float, float], mode: int,
     seg_p = clip.joint_pos[f_start:f_end]
     seg_v = clip.joint_vel[f_start:f_end]
     if not (np.isfinite(seg_p).all() and np.isfinite(seg_v).all()
-            and np.isfinite(clip.root_quat[f_start:f_end]).all()):
+            and np.isfinite(clip.root_quat[f_start:f_end]).all()
+            and np.isfinite(clip.pelvis_lin_vel_w[f_start:f_end]).all()
+            and np.isfinite(clip.pelvis_ang_vel_w[f_start:f_end]).all()):
         reasons.append("구간에 NaN/Inf 가 있다")
 
     if profile.pos_min is not None:
