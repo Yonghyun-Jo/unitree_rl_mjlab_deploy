@@ -18,7 +18,12 @@ import numpy as np
 from .clips import ClipData, DeployProfile
 from .frames import RefFrame, play_frame, ramp_frame, smoothstep
 
-LEAD_IN_HOLD_S = 0.3
+LEAD_IN_HOLD_S = 2.0        # C++ arm_blend_in+arm_blend_out(≈95 steps, ~1.9s@50Hz, MaskedLocoController.h)
+                            # 보다 반드시 길어야 한다 — mode1 진입이 그 팔 블렌드도 같이 트리거하는데
+                            # notify_mode_switch(2|3) 은 그걸 리셋하지 않고 apply_arm_blend 는 매 tick
+                            # 무조건 걸린다. 짧게 잡으면 재생모드로 넘어간 뒤에도 블렌드가 계속 돌아
+                            # 상체 목표가 재생 시작 구간에서 default pose 쪽으로 끌려간다("스냅하게
+                            # 만들려고" 줄이지 말 것 — 그게 바로 이 버그였다).
 RAMP_OUT_S = 1.5
 ABORT_RAMP_OUT_S = 0.8
 RELEASE_HOLD_S = 0.5

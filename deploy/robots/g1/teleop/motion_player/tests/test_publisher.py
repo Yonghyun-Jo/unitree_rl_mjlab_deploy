@@ -123,7 +123,11 @@ def test_velocity_ref_continuous_across_ramp_boundaries_at_half_speed():
 
 
 def test_abort_shortens_and_still_ends_at_standby():
-    seq = list(publisher.plan_frames(_spec(ramp_in=1.0, ramp_out=1.0), abort_at=1.5))
+    # LEAD_IN(LEAD_IN_HOLD_S) + RAMP_IN(1.0s) 을 넘겨 PLAY 구간 0.2s 지점에서 중단시켜야
+    # 한다 — LEAD_IN 안에서 중단하면 아직 clip 을 한 번도 참조하지 않은 상태라
+    # play_frames(cmd_mode==3) 가 통째로 비어 아래 [-1] 참조가 IndexError 로 죽는다.
+    abort_at = publisher.LEAD_IN_HOLD_S + 1.0 + 0.2
+    seq = list(publisher.plan_frames(_spec(ramp_in=1.0, ramp_out=1.0), abort_at=abort_at))
     assert seq[-1][1].valid == 0
     play_frames = [f for _, f in seq if f.valid == 1 and f.cmd_mode == 3]
     assert np.allclose(play_frames[-1].dof_pos, 0.0, atol=1e-5), play_frames[-1].dof_pos[:3]
@@ -169,7 +173,10 @@ def test_publisher_should_abort_hook():
 
     def should_abort():
         calls["n"] += 1
-        return calls["n"] > 10
+        # LEAD_IN_HOLD_S(=2.0s -> 100 프레임)을 넘어 RAMP_IN/PLAY 구간에서 중단시켜야
+        # 한다 — LEAD_IN 안에서 중단하면 이미 standby/mode1 이라 plan_frames 가 즉시
+        # valid=0 한 프레임만 내고 끝나버려 이 훅이 원래 겨냥하던 재계획 경로를 안 탄다.
+        return calls["n"] > 120
 
     p = publisher.Publisher(writer=lambda *a, **k: None, sleeper=lambda _t: None,
                             clock=_FakeClock())
@@ -202,7 +209,11 @@ def test_abort_survives_severe_clock_drift():
 
     def should_abort():
         calls["n"] += 1
-        return calls["n"] > 5
+        # LEAD_IN_HOLD_S(=2.0s -> 100 프레임)을 넘어 RAMP_IN/PLAY 구간에서 중단시켜야
+        # 드리프트 재계획(RAMP_OUT/RELEASE)이 실제로 걸린다 — LEAD_IN 안에서 중단하면
+        # 이미 mode1 이라 재계획이 valid=0 한 프레임으로 끝나버리고, emitted 도 전부
+        # cmd_mode==1 이라 아래 mode1 검증이 (버그가 있어도) 트리비얼하게 통과해버린다.
+        return calls["n"] > 130
 
     emitted = []
     p = publisher.Publisher(writer=lambda *a, **k: None, sleeper=lambda _t: None,

@@ -74,13 +74,23 @@ def _make_tiny_npz(path: Path, T: int = 10, fps: float = 50.0) -> None:
 
 
 def test_render_list_caches_clip_durations_across_calls():
-    """IMPORTANT-8: 'l' 을 두 번 호출해도 load_clip 은 클립당 한 번만 불려야 한다."""
+    """IMPORTANT-8: 'l' 을 두 번 호출해도 load_clip 은 클립당 한 번만 불려야 한다.
+
+    두 클립을 일부러 같은 이름(stem)·다른 경로·다른 길이로 만든다 — COLMO/walk/
+    walk1_subject2.npz 와 COLMOv2/walk/walk1_subject2.npz 처럼 매니페스트가 이름이
+    같은 클립을 섞을 수 있기 때문이다. 캐시 키가 c.name 이면 두 번째 클립이 첫 번째
+    클립의 duration 을 그대로 보여줘도 이름이 다른 fixture 로는 절대 못 잡는다 — 그래서
+    이름을 같게 고정해야 이 테스트가 실제로 그 회귀를 잡는다.
+    """
     with tempfile.TemporaryDirectory() as d:
         droot = Path(d)
-        p1, p2 = droot / "walk1_subject1.npz", droot / "walk1_subject2.npz"
-        _make_tiny_npz(p1)
-        _make_tiny_npz(p2)
-        clip_infos = [resolver_mod.ClipInfo(name="walk1_subject1", path=p1, modes=(1, 2, 3)),
+        sub1, sub2 = droot / "COLMO" / "walk", droot / "COLMOv2" / "walk"
+        sub1.mkdir(parents=True)
+        sub2.mkdir(parents=True)
+        p1, p2 = sub1 / "walk1_subject2.npz", sub2 / "walk1_subject2.npz"
+        _make_tiny_npz(p1, T=10, fps=50.0)     # duration = 0.2s
+        _make_tiny_npz(p2, T=40, fps=50.0)     # duration = 0.8s — p1 과 뚜렷이 다르게
+        clip_infos = [resolver_mod.ClipInfo(name="walk1_subject2", path=p1, modes=(1, 2, 3)),
                      resolver_mod.ClipInfo(name="walk1_subject2", path=p2, modes=(1, 2, 3))]
         ctx = resolver_mod.PolicyContext(slot="s", policy_dir=droot, manifest_path=None,
                                          clips=clip_infos, valid_modes={2, 3}, deployable=True,
@@ -105,8 +115,11 @@ def test_render_list_caches_clip_durations_across_calls():
             clips_mod.load_clip = orig_load_clip
 
         assert calls["n"] == len(clip_infos), calls["n"]    # 두 번째 호출은 캐시 히트라 재로딩 없음
-        assert set(cache.keys()) == {"walk1_subject1", "walk1_subject2"}, cache
-        assert buf.getvalue()      # 목록이 실제로 출력되긴 했는지(스모크)
+        assert set(cache.keys()) == {p1, p2}, cache          # 이름이 아니라 경로로 키가 잡혀야 한다
+        assert abs(cache[p1] - 0.2) < 1e-6, cache[p1]
+        assert abs(cache[p2] - 0.8) < 1e-6, cache[p2]
+        out = buf.getvalue()
+        assert "0.2s" in out and "0.8s" in out, out          # 각 행이 자기 자신의 duration 을 보여야 한다
     print("  ok render_list_caches_durations")
 
 

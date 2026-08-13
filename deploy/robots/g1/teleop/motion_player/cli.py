@@ -48,13 +48,15 @@ def _render_list(ctx, cfg, duration_cache: dict) -> None:
                         f"{p.span[0]:.0f}–{p.span[1]:.0f}s" for k, p in enumerate(ps)) or "—"
         # IMPORTANT-8: load_clip 은 body_quat_w/lin_vel_w/ang_vel_w 까지 통째로 풀어 수십 MB
         # 를 디코딩한다 — 목록을 볼 때마다(특히 'l' 재입력마다) 24클립을 매번 다시 열 이유가
-        # 없다. 클립 이름으로 한 번 계산해두고 재사용한다.
-        if c.name not in duration_cache:
+        # 없다. 파일 경로로 한 번 계산해두고 재사용한다. 이름(c.name)으로 키를 잡으면
+        # COLMO/walk/walk1_subject2.npz 와 COLMOv2/walk/walk1_subject2.npz 처럼 stem 이
+        # 같고 파일이 다른 클립이 서로의 duration 을 훔쳐 보여준다.
+        if c.path not in duration_cache:
             try:
-                duration_cache[c.name] = clips_mod.load_clip(c).duration
+                duration_cache[c.path] = clips_mod.load_clip(c).duration
             except Exception:
-                duration_cache[c.name] = None
-        d = duration_cache[c.name]
+                duration_cache[c.path] = None
+        d = duration_cache[c.path]
         length = f"{d:.1f}s" if d is not None else "?"
         print(f"  {i:>3}  {c.name:<24} {length:>9}  "
               f"{','.join(str(m) for m in c.modes):<7} {tag}")
@@ -188,7 +190,7 @@ def main(argv=None) -> int:
         import estop_shm
         estop_mod = estop_shm
 
-    duration_cache: dict = {}          # IMPORTANT-8: 클립 이름 -> duration. 'l' 재입력마다 재로딩 방지.
+    duration_cache: dict = {}          # IMPORTANT-8: 클립 경로 -> duration. 'l' 재입력마다 재로딩 방지.
     _render_list(ctx, cfg, duration_cache)
     seq_estop = 0
     try:
