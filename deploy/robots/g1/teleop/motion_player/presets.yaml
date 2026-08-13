@@ -1,0 +1,17 @@
+# LAFAN Motion Player 설정.
+#
+# motion_root    : 매니페스트/클립 경로의 기준 (mjlab_g1_motion 워크스페이스 루트)
+# slot_overrides : ONNX_META 의 manifest 를 신뢰할 수 없는 슬롯에 실제 경로를 지정.
+#                  gmt_multihead_cwc_scratch 의 ONNX_META 는
+#                  "motions/g1_flow_specialists.yaml (24클립, ...)" 라고 적혀 있으나
+#                  그 파일은 존재하지 않는다. 24클립의 실체는 _deploy24.yaml 이다.
+#                  ⚠ 이 매핑은 사람이 확인한 사실이다. 추측으로 늘리지 말 것.
+# presets        : 자주 쓰는 재생 구간.
+
+motion_root: /home/piene/mjlab1.4/mjlab_g1_motion
+
+slot_overrides:
+  gmt_multihead_cwc_scratch: motions/g1_flow_specialists_deploy24.yaml
+  gmt_multihead_v0: motions/g1_flow_specialists_deploy24.yaml
+
+presets: []
