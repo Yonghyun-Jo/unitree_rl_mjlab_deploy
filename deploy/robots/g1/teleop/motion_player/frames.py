@@ -86,15 +86,17 @@ def _resolve_base_vel(clip: ClipData, f_idx: int, mode: int,
 
 
 def ramp_frame(clip: ClipData, profile: DeployProfile, f_anchor: int, s: float,
-               mode: int, base_vel, direction: str) -> RefFrame:
+               mode: int, base_vel, direction: str, a_scale: float = 1.0) -> RefFrame:
     """standby <-> clip[f_anchor] 사이를 smoothstep 으로 잇는다.
 
     direction="in":  s=0 -> standby, s=1 -> clip[f_anchor]
     direction="out": s=0 -> clip[f_anchor], s=1 -> standby
+    a_scale: 램프인 도중 중단 시, 이미 도달한 진행도에서 되돌리기 위한 배율.
     """
     a = smoothstep(s)
     if direction == "out":
         a = 1.0 - a
+    a = a_scale * a
     target_p = clip.joint_pos[f_anchor].astype(np.float64)
     target_v = clip.joint_vel[f_anchor].astype(np.float64)
     standby = profile.standby.astype(np.float64)

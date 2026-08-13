@@ -16,7 +16,7 @@ from typing import Callable, Iterator
 import numpy as np
 
 from .clips import ClipData, DeployProfile
-from .frames import RefFrame, play_frame, ramp_frame
+from .frames import RefFrame, play_frame, ramp_frame, smoothstep
 
 RAMP_OUT_S = 1.5
 ABORT_RAMP_OUT_S = 0.8
@@ -55,33 +55,48 @@ def plan_frames(spec: PlaybackSpec, abort_at: float | None = None
 
     # --- RAMP_IN: standby -> clip[f_start] ---
     n_in = max(1, int(round(spec.ramp_in_s / CONTROL_DT)))
+    s_in = 1.0                      # 램프인이 실제로 도달한 진행도 (1.0 = 완주)
+    last_s = 0.0                    # 마지막으로 실제 송출한 프레임의 진행도
     for i in range(n_in + 1):
+        if abort_at is not None and t >= abort_at:
+            s_in = last_s
+            break
         yield t, ramp_frame(spec.clip, spec.profile, spec.f_start, i / n_in,
                             spec.mode, (0.0, 0.0, 0.0), "in")
+        last_s = i / n_in
         t += CONTROL_DT
 
-    # --- PLAY: 클립 시간축을 speed 로 훑는다 ---
-    play_start = t
-    n_clip = spec.f_end - spec.f_start
-    play_wall_s = (n_clip / spec.clip.fps) / max(1e-6, spec.speed)
-    n_play = max(1, int(round(play_wall_s / CONTROL_DT)))
-    f_last = spec.f_start
-    for i in range(n_play):
-        if abort_at is not None and t >= abort_at:
-            break
-        clip_elapsed = (i * CONTROL_DT) * spec.speed
-        f_last = min(spec.f_end - 1, spec.f_start + int(round(clip_elapsed * spec.clip.fps)))
-        yield t, play_frame(spec.clip, f_last, spec.speed, spec.mode,
-                            spec.base_vel_kind, spec.manual_bv)
-        t += CONTROL_DT
-    aborted = abort_at is not None and t < play_start + play_wall_s - 1e-9
+    if s_in < 1.0:
+        # 램프인 도중 중단 — 클립 자세까지 완주시키지 않고 이미 도달한 진행도에서
+        # 그대로 되돌린다("멈추라고 눌렀는데 계속 나아갔다"를 막는다). PLAY 는 건너뛴다.
+        aborted = True
+        f_last = spec.f_start
+        a_scale = smoothstep(s_in)
+    else:
+        # --- PLAY: 클립 시간축을 speed 로 훑는다 ---
+        play_start = t
+        n_clip = spec.f_end - spec.f_start
+        play_wall_s = (n_clip / spec.clip.fps) / max(1e-6, spec.speed)
+        n_play = max(1, int(round(play_wall_s / CONTROL_DT)))
+        f_last = spec.f_start
+        for i in range(n_play):
+            if abort_at is not None and t >= abort_at:
+                break
+            clip_elapsed = (i * CONTROL_DT) * spec.speed
+            f_last = min(spec.f_end - 1, spec.f_start + int(round(clip_elapsed * spec.clip.fps)))
+            yield t, play_frame(spec.clip, f_last, spec.speed, spec.mode,
+                                spec.base_vel_kind, spec.manual_bv)
+            t += CONTROL_DT
+        aborted = abort_at is not None and t < play_start + play_wall_s - 1e-9
+        a_scale = 1.0
 
-    # --- RAMP_OUT: clip[f_last] -> standby ---
+    # --- RAMP_OUT: clip[f_last] -> standby (a_scale<1 이면 램프인이 실제로 도달한
+    #     진행도에서 이어서 되돌아온다 — 클립 자세로 완주했다 되돌아오는 계단을 막는다) ---
     out_s = ABORT_RAMP_OUT_S if aborted else spec.ramp_out_s
     n_out = max(1, int(round(out_s / CONTROL_DT)))
     for i in range(n_out + 1):
         yield t, ramp_frame(spec.clip, spec.profile, f_last, i / n_out,
-                            spec.mode, (0.0, 0.0, 0.0), "out")
+                            spec.mode, (0.0, 0.0, 0.0), "out", a_scale=a_scale)
         t += CONTROL_DT
 
     # --- RELEASE: mode1 로 전환(재앵커/크로스페이드 유발) -> 유지 -> valid=0 ---

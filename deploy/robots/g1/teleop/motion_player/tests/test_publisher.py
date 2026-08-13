@@ -197,6 +197,58 @@ def test_emit_drops_repeats_but_never_drops_a_state_transition():
     print("  ok emit_drops_repeats_but_never_drops_a_state_transition")
 
 
+def test_abort_during_ramp_in_reverses_instead_of_completing():
+    """RAMP_IN 도중 중단하면 클립 자세까지 완주한 뒤 되돌아오면 안 된다.
+
+    조작자가 abort 를 누른 건 뭔가 이상해서다 — 그런데 로봇이 클립 자세로 완주까지
+    한 뒤에야 되돌아온다면 "멈추라고 눌렀는데 계속 나아갔다"가 되어 그 컨트롤을
+    신뢰할 수 없게 만든다(즉각 정지가 필요하면 별도의 하드 E-stop 이 있다 — 이건
+    "더 나아가지 않고 되돌아오기"만 보장하면 된다).
+    """
+    T = 200
+    fps = 50.0
+    quat = np.zeros((T, 4), dtype=np.float32)
+    quat[:, 0] = 1.0
+    clip = clips.ClipData(name="c", fps=fps, n_frames=T, duration=T / fps,
+                          joint_pos=np.full((T, 29), 0.8, dtype=np.float32),
+                          joint_vel=np.full((T, 29), 1.0, dtype=np.float32),
+                          root_quat=quat,
+                          pelvis_lin_vel_w=np.zeros((T, 3), dtype=np.float32),
+                          pelvis_ang_vel_w=np.zeros((T, 3), dtype=np.float32))
+    profile = clips.DeployProfile(standby=np.zeros(29, dtype=np.float32),
+                                  pos_min=None, pos_max=None)
+    spec = publisher.PlaybackSpec(clip=clip, profile=profile, f_start=0, f_end=100,
+                                  mode=3, speed=1.0, base_vel_kind="zero",
+                                  manual_bv=(0.0, 0.0, 0.0), ramp_in_s=1.0, ramp_out_s=1.0)
+
+    seq = list(publisher.plan_frames(spec, abort_at=0.4))
+
+    # (a) 클립 자세(joint_pos[f_start])에 절대 도달하면 안 된다 — 오늘 동작(완주 후
+    #     되돌아옴)이라면 반드시 도달하므로 이 assert 가 구식 동작을 가려낸다.
+    assert not any(np.allclose(f.dof_pos, clip.joint_pos[spec.f_start], atol=1e-5)
+                   for _, f in seq), "RAMP_IN 중단 후에도 클립 자세에 도달했다"
+
+    # RAMP_IN/RAMP_OUT 경계 = abort_at 시각 그 자체(RAMP_OUT 은 정확히 t=abort_at 에서
+    # 시작한다 — plan_frames 의 t 는 단조증가이므로 이 경계로 명확히 나뉜다). dof_pos
+    # 곡선 모양(증가->감소)으로 경계를 추정하면 바로 이 결함(첫 RAMP_OUT 프레임이
+    # 계단으로 인해 마지막 RAMP_IN 프레임보다 값이 더 큰 경우) 때문에 오탐한다.
+    before = [f for t, f in seq if t < 0.4 - 1e-9]
+    after = [f for t, f in seq if t >= 0.4 - 1e-9]
+    last_ramp_in = before[-1]
+    first_ramp_out = after[0]
+
+    # (b) RAMP_OUT 의 첫 프레임은 RAMP_IN 의 마지막 프레임과 연속이어야 한다(계단 없음).
+    assert np.allclose(first_ramp_out.dof_pos, last_ramp_in.dof_pos, atol=1e-6), \
+        (last_ramp_in.dof_pos[:3], first_ramp_out.dof_pos[:3])
+
+    # (c) 시퀀스는 여전히 cmd_mode=1 프레임 다음에 valid=0 프레임으로 끝나야 한다.
+    modes = [f.cmd_mode for _, f in seq]
+    assert 1 in modes, "RELEASE 의 mode1 패킷이 없다"
+    assert seq[-1][1].cmd_mode == 1 and seq[-1][1].valid == 0
+    assert seq[-2][1].cmd_mode == 1 and seq[-2][1].valid == 1
+    print("  ok abort_during_ramp_in_reverses_instead_of_completing")
+
+
 def main() -> int:
     test_plan_starts_at_standby_and_ends_at_standby()
     test_plan_release_switches_to_mode1_then_invalidates()
@@ -208,6 +260,7 @@ def main() -> int:
     test_publisher_should_abort_hook()
     test_abort_survives_severe_clock_drift()
     test_emit_drops_repeats_but_never_drops_a_state_transition()
+    test_abort_during_ramp_in_reverses_instead_of_completing()
     print("test_publisher: ALL PASS")
     return 0
 
