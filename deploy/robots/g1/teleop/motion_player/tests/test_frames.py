@@ -119,6 +119,53 @@ def test_quat_slerp_endpoints():
     print("  ok quat_slerp")
 
 
+def test_quat_slerp_antipodal():
+    """dot < 0: 부호가 반대인 quaternion (같은 회전)에서 최단경로를 취해야 한다."""
+    h = math.sqrt(0.5)
+    # 90도 회전 about z axis: [sqrt(0.5), 0, 0, sqrt(0.5)]
+    # 부호 반대: [-sqrt(0.5), 0, 0, -sqrt(0.5)]
+    a = np.array([1.0, 0.0, 0.0, 0.0])
+    b = np.array([-h, 0.0, 0.0, -h])  # 부호가 반대 (dot < 0)
+
+    # s=1.0 에서 결과가 unit norm
+    result_end = frames.quat_slerp(a, b, 1.0)
+    assert abs(np.linalg.norm(result_end) - 1.0) < 1e-6, result_end
+
+    # s=1.0 에서 결과가 최단경로: b 또는 +b (부호 정규화 후)와 같아야 함
+    assert np.allclose(result_end, b) or np.allclose(result_end, -b), result_end
+
+    # s=0.5 에서 중간점: 최단경로면 w가 양수이고 0.9 이상 (45도에 가까움)
+    # 긴 경로를 취하면 w가 음수이거나 매우 작음
+    mid = frames.quat_slerp(a, b, 0.5)
+    assert mid[0] > 0.9, f"mid w={mid[0]}, took long path instead of short"
+    assert abs(np.linalg.norm(mid) - 1.0) < 1e-6, mid
+    print("  ok quat_slerp_antipodal")
+
+
+def test_quat_slerp_near_parallel():
+    """dot > 0.9995: 거의 같은 두 quaternion에서 선형보간 + 정규화를 거친다."""
+    # identity
+    a = np.array([1.0, 0.0, 0.0, 0.0])
+    # 아주 작은 회전 about z: ~0.001 rad => z ≈ sin(0.0005) ≈ 0.0005, w ≈ cos(0.0005) ≈ 0.99999988
+    small_angle = 0.001
+    b = np.array([
+        math.cos(small_angle / 2.0),
+        0.0,
+        0.0,
+        math.sin(small_angle / 2.0)
+    ])
+    # dot(a, b) ≈ cos(small_angle/2) ≈ 0.9999997... (> 0.9995 ✓)
+
+    # s=0.5 에서 결과는 unit norm (정규화 있음)
+    mid = frames.quat_slerp(a, b, 0.5)
+    assert abs(np.linalg.norm(mid) - 1.0) < 1e-9, f"norm={np.linalg.norm(mid)}"
+
+    # s=0.5 에서 결과는 a, b 사이에 있어야 함 (기하학적으로 interpolated)
+    # a와 b가 아주 가까우므로 선형보간의 중간점도 거기 가까움
+    assert np.allclose(mid, (a + b) / 2.0, atol=1e-6), mid
+    print("  ok quat_slerp_near_parallel")
+
+
 def main() -> int:
     test_smoothstep_endpoints()
     test_ramp_in_endpoints_are_continuous()
@@ -130,6 +177,8 @@ def main() -> int:
     test_clamp_base_vel()
     test_mode3_zeroes_base_vel()
     test_quat_slerp_endpoints()
+    test_quat_slerp_antipodal()
+    test_quat_slerp_near_parallel()
     print("test_frames: ALL PASS")
     return 0
 
