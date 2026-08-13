@@ -269,7 +269,7 @@ python pico_publisher_udp.py --com1 <제어PC IP> --port 5556
 
 ---
 
-## 9. 터미널 키보드가 안 먹을 때 (2026-08-11)
+## 9. 터미널 키보드가 안 먹을 때 (2026-08-13)
 
 `f`/`v`/`m`/`p` 가 안 먹으면 **코드를 뒤지기 전에 30초 안에 판정된다.** 컨트롤러가 tty를
 `-echo` 로 두기 때문에 화면에 아무 흔적도 안 남아 전부 "키가 죽었다"로 보인다.
@@ -296,7 +296,7 @@ awk '/EVENT type .*KeyPress/{f=1} f&&/detail:/{print $2; f=0}' /tmp/keys.log | s
 DISPLAY=:1 xmodmap -pke | grep -E "^keycode +(41|<잡힌값>) "     # 41 = f
 ```
 
-2026-08-11 실제: `f` 가 keycode **93**(evdev 85 `KEY_ZENKAKUHANKAKU`, keysym 비어 있음)으로
+2026-08-13 실제: `f` 가 keycode **93**(evdev 85 `KEY_ZENKAKUHANKAKU`, keysym 비어 있음)으로
 도착 → 어느 앱에도 안 찍힘. 우회 `DISPLAY=:1 xmodmap -e 'keycode 93 = f F f F'`
 (되돌리기 `keycode 93 =`, X 세션 재시작 시 소멸). 근본 해결은 AnyDesk 재연결 / 노트북 레이아웃 점검.
 
@@ -305,4 +305,21 @@ DISPLAY=:1 xmodmap -pke | grep -E "^keycode +(41|<잡힌값>) "     # 41 = f
 `g1_ctrl` 이 키 텔레옵을 위해 tty 를 `-icanon -echo` 로 바꾸는데 Ctrl-C 는 소멸자를 안 태워
 셸이 raw 로 남았다. SIGINT/SIGTERM 핸들러에서 termios 를 복구하도록 고쳤고,
 `run_g1_with_gui.sh` 도 `stty -g` 로 이중 안전망을 둔다. 구버전 바이너리로 깨졌으면 `stty sane`.
+
+---
+
+## 10. base_vel 캡 — 세 입력 경로 (2026-08-13 상향)
+
+| 경로 | 풀스틱/슬라이더 최대 (vx, vy, wz) | 위치 |
+|---|---|---|
+| PICO 썸스틱 (브릿지) | **2.5 / 1.2 / 2.0** | `vr_teleop_bridge.py` `--vx/--vy/--wz` 기본값 |
+| 브라우저 GUI 슬라이더 | 3.0 / 1.5 / 2.0 | `tools/gui_shm.py` `VXCAP/VYCAP/WCAP` |
+| 게임패드 스틱 | 3.0 / 1.5 / 2.0 | `State_Mimic.cpp:194` |
+| **C++ 하드캡(최종 클램프)** | **3.0 / 1.5 / 2.0** | `State_Mimic.cpp:47` `KB_MAXVX/VY/W` → `:202` |
+
+- 하드캡 = **학습 base_vel 범위**(20-motion manifest, yaw-local). 그보다 크게 줘도 C++ 에서 잘린다.
+- ⚠ 최종 클램프는 `g_kb_* + 게임패드 스틱`의 **합**에 걸린다 → 패드가 꽂혀 있으면 데드존(0.08)
+  밖 드리프트가 PICO 명령에 더해진다.
+- 낮추려면 브릿지 실행에 `--vx 1.5` 처럼 준다(코드 수정 불필요). 2026-08-13 이전 기본값은
+  1.5 / 0.8 / 1.5 였으므로, 같은 스틱 각도에서 나가는 속도가 vx 기준 1.67배가 됐다.
 </content>
