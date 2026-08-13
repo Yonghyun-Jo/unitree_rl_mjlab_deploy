@@ -84,3 +84,23 @@ XRT_SRC=<.../XRoboToolkit-PC-Service-Pybind_X86_and_ARM64> bash deploy/robots/g1
 - 로봇 clone-to-build의 유일한 선행 = `build_deps.sh`(`.deps`는 gitignore).
 - bridge/GMR은 laptop 사정 — `.venv-teleop`·`.gmr`는 gitignore, `setup_teleop.sh`로 재현.
 - 완전 오프라인 재현(네트워크 없이 clone만)이 필요하면 GMR을 repo에 vendoring(Option 2)으로 승격.
+
+## LAFAN Motion Player (`motion_player/`)
+
+학습에 쓴 LAFAN 클립을 배포 정책의 모션 참조로 재생한다. PICO 없이 동작한다.
+
+```bash
+# com1: unitree_mujoco + g1_ctrl 이 떠 있어야 한다. 재기동 전 pkill -x g1_ctrl 필수.
+.venv/bin/python deploy/robots/g1/teleop/motion_player/cli.py --dry-run   # 계획만
+.venv/bin/python deploy/robots/g1/teleop/motion_player/cli.py            # 실제 송출
+```
+
+- **mode2** = 상체만 클립, 다리는 자율 보행 (`base_vel: clip` 이면 클립대로 이동). **실기 첫 시도용.**
+- **mode3** = 전신 클립. base_vel 은 C++ 가 0 으로 덮는다.
+- **mode1 은 재생 불가** — 참조가 마스킹돼 정책에 도달하지 않는다.
+- 재생 중: `Space` 중단(램프아웃 0.8 s), `x` E-stop(즉시 Passive, 복구는 `f` 재기립).
+- 클립 목록은 배포 정책의 `ONNX_META.json` → 매니페스트를 따라 자동으로 정해진다.
+  슬롯이 바뀌면 목록도 따라 바뀐다. 매니페스트를 못 찾으면 `presets.yaml` 의
+  `slot_overrides` 에 실제 경로를 적는다.
+
+테스트: `for t in resolver clips frames publisher playlist; do .venv/bin/python deploy/robots/g1/teleop/motion_player/tests/test_$t.py; done`

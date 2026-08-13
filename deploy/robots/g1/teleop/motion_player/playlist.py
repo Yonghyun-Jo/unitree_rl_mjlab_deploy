@@ -17,7 +17,7 @@ _MODE1_REASON = (
 @dataclass
 class PlayItem:
     clip_name: str
-    span: tuple[float, float] | None      # None = 클립 전체 (권장하지 않음)
+    span: tuple[float, float] | None      # 실제로는 필수 — load_config 이 부재를 거부한다
     mode: int
     base_vel: str                         # "clip" | "zero" | "manual"
     speed: float

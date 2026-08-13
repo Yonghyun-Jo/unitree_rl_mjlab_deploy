@@ -186,6 +186,7 @@ uv run --with xrobotoolkit_sdk python deploy/robots/g1/tools/pico_control_bridge
 python deploy/robots/g1/teleop/udp_receiver.py --port 5556        # :5556 수신 확인(UDP)
 python deploy/robots/g1/teleop/com1_subscriber.py --port 5556     # :5556 수신 확인(ZMQ)
 python deploy/robots/g1/teleop/vr_replay.py <motion.npz> --mode 2 # PICO 없이 VR경로 검증
+.venv/bin/python deploy/robots/g1/teleop/motion_player/cli.py     # LAFAN 클립 재생(구간/속도/mode2·3)
 ```
 
 ---
