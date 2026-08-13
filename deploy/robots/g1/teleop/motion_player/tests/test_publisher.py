@@ -134,6 +134,69 @@ def test_publisher_should_abort_hook():
     print("  ok should_abort_hook")
 
 
+class _JumpClock:
+    """벽시계 대신 쓰는 가짜 시계 — 호출할 때마다 step 초씩 흐른다(드리프트 재현용)."""
+    def __init__(self, step: float):
+        self.t = 0.0
+        self.step = step
+
+    def __call__(self):
+        v = self.t
+        self.t += self.step
+        return v
+
+
+def test_abort_survives_severe_clock_drift():
+    """should_abort 판정에 심한 시계 드리프트가 겹쳐도 RAMP_OUT/RELEASE 가 통째로
+
+    사라지면 안 된다. run() 이 재계획 시 벽시계를 다시 읽으면(now = clock()-start),
+    느린 hook·GC stall·스케줄러 정체로 now 가 재계획된 시퀀스 전체 길이를 넘어버릴 수
+    있고, 그러면 tt>=now 필터가 빈 리스트를 만든다 — 로봇이 재생 도중 자세로 그대로
+    멈춘다. t_rel(그 프레임 자신의 예정 시각)로 재계획하면 구조적으로 항상 비지 않는다.
+    """
+    calls = {"n": 0}
+
+    def should_abort():
+        calls["n"] += 1
+        return calls["n"] > 5
+
+    emitted = []
+    p = publisher.Publisher(writer=lambda *a, **k: None, sleeper=lambda _t: None,
+                            clock=_JumpClock(step=0.5))
+    result = p.run(_spec(ramp_in=0.1, ramp_out=0.1),
+                   on_tick=lambda t, f: emitted.append(f), should_abort=should_abort)
+    assert result == "aborted", result
+    assert emitted, "아무것도 송출하지 않았다"
+    assert emitted[-1].valid == 0, "드리프트 상황에서도 마지막 패킷은 valid=0 이어야 한다"
+    assert any(f.cmd_mode == 1 for f in emitted), \
+        "드리프트 상황에서도 mode1 패킷이 최소 1개는 나가야 한다"
+    print("  ok abort_survives_severe_clock_drift")
+
+
+def test_emit_drops_repeats_but_never_drops_a_state_transition():
+    """lag > CONTROL_DT 인 동안에도 (cmd_mode, valid) 전환 프레임은 절대 드롭되면 안 된다.
+
+    같은 상태가 반복되는 중간 프레임은 시간축을 지키려 버려도 되지만, 이전에 실제로
+    송출한 상태와 다른 프레임(RELEASE 의 mode1 전환, 마지막 valid=0)은 lag 와 무관하게
+    항상 내보내야 한다 — g_poll_vr 이 valid=0 앞에서 cmd_mode 대입을 건너뛰므로 mode1
+    전환은 오직 (cmd_mode=1, valid=1) 홀드 패킷으로만 전달된다.
+    """
+    spec = _spec(ramp_in=0.1, ramp_out=0.1)
+    planned = [f for _, f in publisher.plan_frames(spec)]
+    planned_states = {(f.cmd_mode, f.valid) for f in planned}
+
+    emitted = []
+    p = publisher.Publisher(writer=lambda *a, **k: None, sleeper=lambda _t: None,
+                            clock=_JumpClock(step=0.03))
+    result = p.run(spec, on_tick=lambda t, f: emitted.append(f))
+    assert result == "completed", result
+    assert len(emitted) < len(planned), (len(emitted), len(planned))
+    emitted_states = {(f.cmd_mode, f.valid) for f in emitted}
+    assert emitted_states == planned_states, (planned_states, emitted_states)
+    assert emitted[-1].valid == 0, "마지막 송출 패킷은 valid=0 이어야 한다"
+    print("  ok emit_drops_repeats_but_never_drops_a_state_transition")
+
+
 def main() -> int:
     test_plan_starts_at_standby_and_ends_at_standby()
     test_plan_release_switches_to_mode1_then_invalidates()
@@ -143,6 +206,8 @@ def main() -> int:
     test_abort_shortens_and_still_ends_at_standby()
     test_publisher_writes_bytes_matching_vr_shm_contract()
     test_publisher_should_abort_hook()
+    test_abort_survives_severe_clock_drift()
+    test_emit_drops_repeats_but_never_drops_a_state_transition()
     print("test_publisher: ALL PASS")
     return 0
 

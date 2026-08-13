@@ -104,6 +104,7 @@ class Publisher:
         self._sleep = sleeper if sleeper is not None else time.sleep
         self._clock = clock if clock is not None else time.perf_counter
         self._seq = 0
+        self._last_state: tuple[int, int] | None = None
 
     def run(self, spec: PlaybackSpec,
             on_tick: Callable[[float, RefFrame], None] | None = None,
@@ -120,9 +121,16 @@ class Publisher:
         for t_rel, frame in gen:
             if not aborted and should_abort is not None and should_abort():
                 aborted = True
-                now = self._clock() - start
-                pending = list(plan_frames(spec, abort_at=max(now, 0.0)))
-                pending = [(tt, ff) for tt, ff in pending if tt >= now]
+                # abort_at 은 반드시 t_rel(이 프레임 자신의 "예정" 시각) 이어야 한다 —
+                # 벽시계를 다시 읽으면(now = clock()-start) should_abort 판정 시점의
+                # 드리프트(느린 hook, GC stall, 스케줄러 정체 — 바로 아래 _emit 의 드롭
+                # 규칙이 상정하는 그 상황)로 now 가 재계획된 시퀀스 전체 길이를 넘어버릴
+                # 수 있고, 그러면 tt>=now 필터가 빈 리스트가 되어 RAMP_OUT/RELEASE 가
+                # 통째로 사라진다(로봇이 재생 도중 자세로 그대로 멈춤). t_rel 은
+                # plan_frames 자신의 스케줄 위에 있는 값이라 tt>=t_rel 결과가 구조적으로
+                # 항상 비지 않는다 — "개선"한답시고 다시 벽시계로 되돌리지 말 것.
+                pending = [(tt, ff) for tt, ff in plan_frames(spec, abort_at=t_rel)
+                          if tt >= t_rel]
                 break
             self._emit(t_rel, frame, start, on_tick)
         for t_rel, frame in pending:
@@ -132,12 +140,19 @@ class Publisher:
     def _emit(self, t_rel: float, frame: RefFrame, start: float, on_tick) -> None:
         deadline = start + t_rel
         lag = self._clock() - deadline
+        state = (frame.cmd_mode, frame.valid)
+        # (cmd_mode, valid) 가 마지막으로 실제 송출한 상태와 다르면(=상태 전환) lag 와
+        # 무관하게 반드시 내보낸다. C++ g_poll_vr 은 valid=0 패킷에서 cmd_mode 대입 전에
+        # 반환하므로, mode1 전환은 오직 (cmd_mode=1, valid=1) 홀드 패킷으로만 전달된다 —
+        # 이 패킷들이 통째로 드롭되면 컨트롤러가 override 만 풀리고 mode1 로 못 넘어간다.
+        is_transition = state != self._last_state
         if lag < -1e-6:
             self._sleep(-lag)
-        elif lag > CONTROL_DT:
-            return                        # 밀렸으면 이 프레임은 버리고 시간축을 지킨다
+        elif lag > CONTROL_DT and not is_transition:
+            return                        # 반복되는 중간 프레임만 버려서 시간축을 지킨다
         self._seq += 1
         self._write(self._seq, frame.valid, frame.cmd_mode, list(frame.base_vel),
                     list(frame.root_quat), frame.dof_pos.tolist(), frame.dof_vel.tolist())
+        self._last_state = state
         if on_tick is not None:
             on_tick(t_rel, frame)
