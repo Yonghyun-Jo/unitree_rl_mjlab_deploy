@@ -396,7 +396,12 @@ Write-Host "                                     (§2 에서 UDP 포트 경고�
 Write-Host "       TCP failed                 → 이 스크립트를 다시 실행 (터널/포트가 어긋난 것)"
 
 if (-not $Publish) {
-    Write-Host "`n  publisher:  python $CaptureDir\pico_publisher.py --com1 $Com1" -ForegroundColor White
+    Write-Host "`n  publisher (UDP — 브릿지 기본값):" -ForegroundColor White
+    Write-Host "      conda activate pico"
+    Write-Host "      python $CaptureDir\udp\pico_publisher_udp.py --com1 $Com1 --port 5556"
+    Write-Host "  ⚠ test_pico_pose.py 를 먼저 Ctrl+C. PICO SDK 는 한 프로세스만 잡는다." -ForegroundColor Yellow
+    Write-Host "  롤백(구 ZMQ, 브릿지도 --transport zmq):" -ForegroundColor DarkGray
+    Write-Host "      python $CaptureDir\pico_publisher.py --com1 $Com1" -ForegroundColor DarkGray
     Write-Host "  (또는 이 스크립트를 -Publish 로 다시 실행)" -ForegroundColor DarkGray
     exit 0
 }
@@ -416,7 +421,7 @@ if (-not (Test-Path $py)) {
     $py = "python"
 }
 
-$pub = Start-Process -FilePath $py -ArgumentList @("$CaptureDir\pico_publisher.py", "--com1", $Com1) `
+$pub = Start-Process -FilePath $py -ArgumentList @("$CaptureDir\udp\pico_publisher_udp.py", "--com1", $Com1, "--port", "5556") `
                      -NoNewWindow -PassThru
 try { $pub.PriorityClass = 'High' } catch { }
 Write-Host "    publisher PID $($pub.Id) — [stat] ... body=True 가 나오면 정상" -ForegroundColor DarkGray
