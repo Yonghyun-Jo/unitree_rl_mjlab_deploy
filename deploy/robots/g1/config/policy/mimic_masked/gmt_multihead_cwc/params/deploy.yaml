@@ -119,14 +119,21 @@ observations:
 
 # ── deploy 안전층 (State_Mimic이 로드; 없으면/이상하면 전부 비활성). 값은 sim 튜닝. ──
 safety:
-  enable_pos_clamp: false      # L1-2차 C++ 최종 clamp (action.clip이 L1-1차)
-  enable_rate_limit: false     # L2 (Task 3)
-  enable_qd_guard: false        # L3 (Task 4)
+  enable_pos_clamp: true       # L1-2차 C++ 최종 clamp. pos_min/max == action.clip (바이트 동일),
+                               # blend 는 볼록결합 -> 정상경로 no-op. 최종 보루로만 작동.
+  enable_rate_limit: true      # L2 — 명령 rate 하드캡 (아래 vel_max)
+  enable_qd_guard: true         # L3 — 측정 qd 감시 (warn=강제 mode1 / crit=Passive)
   # 위치 한계(기계, deploy 순서 29). action.clip과 동일.
   pos_min: [-2.5307,-0.5236,-2.7576,-0.087267,-0.87267,-0.2618,-2.5307,-2.9671,-2.7576,-0.087267,-0.87267,-0.2618,-2.618,-0.52,-0.52,-3.0892,-1.5882,-2.618,-1.0472,-1.97222,-1.61443,-1.61443,-3.0892,-2.2515,-2.618,-1.0472,-1.97222,-1.61443,-1.61443]
   pos_max: [ 2.8798, 2.9671, 2.7576, 2.8798, 0.5236, 0.2618, 2.8798, 0.5236, 2.7576, 2.8798, 0.5236, 0.2618, 2.618, 0.52, 0.52, 2.6704, 2.2515, 2.618, 2.0944, 1.97222, 1.61443, 1.61443, 2.6704, 1.5882, 2.618, 2.0944, 1.97222, 1.61443, 1.61443]
-  # 속도 rate-limit (Task 3)·qd-guard (Task 4) 기본값 — clearly-high, sim에서 p99 기반 튜닝.
-  vel_max: 20.0                 # rad/s (scalar; per-joint 확장 가능)
-  qd_warn: 15.0                 # rad/s
-  qd_crit: 25.0                 # rad/s
-  over_ticks: 5                 # 연속 초과 틱(0.1s@50Hz)
+  # ── L2/L3 임계 — COLMOv2 레퍼런스 실측 기준 ──
+  # 하한 앵커 = 6.0 rad/s: COLMOv2 77클립·827,657프레임의 |q̇| 상한 (29관절·전 카테고리 동일).
+  # 상한 앵커 = 20.0 rad/s: 하드웨어 최소 velocity_limit (hip_roll·knee = 7520_22).
+  #   이 위로 잡으면 Unitree 온보드 펌웨어 보호정지가 먼저 걸려 우리 가드가 무의미해진다.
+  # 사다리:  warn 12 < vel_max 15 < crit 18 < hw 20.  상세 유도 = cwc_scratch/params/deploy.yaml
+  # warn/crit = 측정 q̇ (포락 6.0 의 ×2.0 / ×3.0). vel_max = 명령 target rate 캡 —
+  #   COLMOv2 |dq_des| p99.9=15.3 / max=19.1 -> 15.0 은 프레임 0.126% 에서만 개입.
+  vel_max: 15.0                 # rad/s — 1kHz tick당 0.015 rad 캡. 개입률 0.126%
+  qd_warn: 12.0                 # rad/s — 지속 시 강제 mode1 (mode1 에선 no-op)
+  qd_crit: 18.0                 # rad/s — 지속 시 Passive(damping). hw 20 아래
+  over_ticks: 5                 # 연속 초과 틱(0.1s@50Hz). 접지 충격 스파이크 기각용
