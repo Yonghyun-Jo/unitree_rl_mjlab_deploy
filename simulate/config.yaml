@@ -19,4 +19,16 @@ joystick_bits: 16 # Some game controllers may only have 8-bit accuracy
 
 print_scene_information: 1 # Print link, joint and sensors information of robot
 
-enable_elastic_band: 0 # Virtual spring band, used for lifting h1 (off: use f->reset->m startup)
+enable_elastic_band: 1 # 가상 스프링 밴드 = sim 하네스. G1 29dof 배포 repo 표준 기본값
+# (ASAP sim2real/config/g1_29dof_hist.yaml:25, GR00T-WholeBodyControl g1_29dof_sonic_model12.yaml:20,
+#  g1_29dof_gear_wbc.yaml:22 전부 True. 같은 unitree_mujoco 파생 코드 — 우리만 꺼 두고 있었다.)
+# 왜 필요한가: FixStand 는 balance 제어 없는 순수 관절 PD hold 라 sim 에서 몇 초 만에 넘어진다.
+#   그러면 Mimic_Masked 진입 즉시 bad_orientation(57.3°)이 Passive 로 걷어차 "키가 안 먹는" 것처럼 보인다.
+# MuJoCo 창 키: 9=밴드 on/off,  8 또는 ↓=늘림(로봇 내림),  7 또는 ↑=줄임(로봇 올림)
+# 절차: sim 기동 -> (밴드가 바로 알맞은 높이로 잡아준다) -> f -> m (서두를 필요 없음)
+#       -> 정책이 돌기 시작하면 9 로 밴드 해제. 넘어지려 하면 9 로 다시 잡으면 된다.
+# 수치(G1 33.34kg=327N, stiffness 200, 앵커 z=3, torso_link 부착): 평형거리 = mg/K + length_.
+#   main.cc 의 length_ 기본값을 upstream 0.0 -> 0.5 로 바꿔 두었다(torso 평형 1.36m -> 0.86m
+#   = 서 있을 때 높이 0.837 근처). 그래서 기동 직후 바로 발이 지면에 닿는다.
+# ⚠ 밴드가 켜져 있는 동안은 지면반력이 줄어 dynamics 가 달라진다. 정책 성능 판정은 9 로 끈 뒤에.
+#   (모드전환 테스트는 실기가 하네스에 매달린 상태와 같아지므로 켜 둔 채가 오히려 대응된다.)

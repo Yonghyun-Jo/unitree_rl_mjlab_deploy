@@ -79,7 +79,10 @@ public:
   double stiffness_ = 200;
   double damping_ = 100;
   std::vector<double> point_ = {0, 0, 3};
-  double length_ = 0.0;
+  // 0.0(upstream) 이면 평형이 torso z=1.36m 라 기동하자마자 로봇이 공중에 매달려, 매번 '8'/↓ 를
+  // 대여섯 번 눌러 내려야 했다. 0.5 면 평형 torso z=0.86m ≈ 서 있는 높이(0.837) 라 발이 바로
+  // 지면에 닿는다. (G1 33.34kg=327N, stiffness 200, 앵커 z=3: 평형거리 = mg/K + length_)
+  double length_ = 0.5;
   bool enable_ = true;
   std::vector<double> f_ = {0, 0, 0};
 };
