@@ -18,6 +18,12 @@ int main() {
     { float nan=std::numeric_limits<float>::quiet_NaN(); float q[1]={nan}; float lo[1]={-1},hi[1]={1};
       js_clamp_position(q,lo,hi,1); CHK(std::isnan(q[0]),"clamp NaN untouched"); }
 
+    // qd_argmax: 부호 무시 최대, 빈 배열 -1, NaN 우선
+    { float qd[4]={1.0f,-7.5f,3.0f,7.4f}; CHK(js_qd_argmax(qd,4)==1,"qd_argmax picks max |qd|"); }
+    { CHK(js_qd_argmax(nullptr,0)==-1,"qd_argmax empty -> -1"); }
+    { float nan=std::numeric_limits<float>::quiet_NaN(); float qd[3]={9.0f,nan,1.0f};
+      CHK(js_qd_argmax(qd,3)==1,"qd_argmax NaN takes priority over larger finite"); }
+
     // rate_limit: within step -> no-op + prev updates; over step -> capped; NaN -> hold prev
     { float q[1]={0.1f}; float prev[1]={0.0f}; float step[1]={1.0f};
       js_rate_limit(q,prev,step,1); CHK(close(q[0],0.1f)&&close(prev[0],0.1f),"rate within"); }

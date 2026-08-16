@@ -34,6 +34,19 @@ inline int js_qd_severity(const float* qd, int n, float warn, float crit) {
     return 0;
 }
 
+// 모니터링용: |qd|가 가장 큰 관절 인덱스. n<=0 이면 -1.
+// 비유한값이 있으면 그 관절을 즉시 반환한다(js_qd_severity가 sev=2로 보는 것과 같은 우선순위).
+// 판정에는 쓰지 않는다 — 로그 메시지에 "어느 관절이었나"를 붙이기 위한 것.
+inline int js_qd_argmax(const float* qd, int n) {
+    int best = -1; float m = -1.0f;
+    for (int i = 0; i < n; ++i) {
+        if (!std::isfinite(qd[i])) return i;
+        float a = std::fabs(qd[i]);
+        if (a > m) { m = a; best = i; }
+    }
+    return best;
+}
+
 // L3 qd-guard 상태 스텝(순수·테스트가능). sev(0/1/2, js_qd_severity 반환)로 카운터/래치 갱신.
 // warn은 sev>=1(crit도 warn 포함), crit은 sev>=2로 **독립** 누적 -> 지속 abnormal이 두 경계를 오가도
 // warn은 반드시 걸린다(단조). 래치는 여기서 해제 안 함(호출측이 warn=조작자 mode1, crit=FSM 재진입으로 해제).

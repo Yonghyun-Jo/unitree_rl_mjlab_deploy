@@ -20,6 +20,7 @@ public:
         if (policy_thread.joinable()) {
             policy_thread.join();
         }
+        mon_log_summary();   // join 이후라 policy_thread 가 쓴 mon_* 가 전부 보인다(경합 없음)
     }
 
     class MotionLoader_;
@@ -53,6 +54,20 @@ private:
     int   js_warn_run_ = 0, js_crit_run_ = 0;
     bool  js_qd_warn_latched_ = false;      // policy_thread 내부 전용
     std::atomic<bool> js_qd_crit_latched_{false};  // policy_thread set, registered_check(1kHz) read
+
+    // ── 안전층 모니터링 (읽기 전용 관측 — 제어 경로에 영향 없음) ──
+    // 원칙: 1kHz run()/검사 람다에서는 "세기만" 하고 I/O 를 하지 않는다. 출력은 드문 이벤트
+    // (트립·래치)와 exit() 요약뿐 — 1kHz 스레드에서 spdlog 를 돌리면 실시간 지터가 생긴다.
+    // 스레드: mon_clamp_*/mon_rate_*/mon_tilt_* = FSM 스레드(1kHz), mon_qd_* = policy_thread(50Hz).
+    //   exit() 는 join() 뒤에 읽으므로 경합 없음.
+    void mon_log_summary();
+    void mon_reset();
+    uint32_t mon_clamp_ticks_ = 0, mon_rate_ticks_ = 0;
+    float mon_clamp_max_ = 0.f;  int mon_clamp_joint_ = -1;
+    float mon_rate_max_  = 0.f;  int mon_rate_joint_  = -1;
+    float mon_qd_max_    = 0.f;  int mon_qd_joint_    = -1;
+    float mon_tilt_max_deg_ = 0.f;
+    const char* mon_exit_reason_ = nullptr;   // null = 조작자 전이(p/v) 또는 정상 종료
 };
 
 

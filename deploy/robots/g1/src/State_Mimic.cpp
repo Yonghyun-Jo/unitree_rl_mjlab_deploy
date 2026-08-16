@@ -452,16 +452,78 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     }
     this->registered_checks.emplace_back(
         std::make_pair(
-            [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); }, // bad orientation
+            [this]()->bool{ // bad orientation
+                // 판정은 bad_orientation() 단일 출처. tilt 는 로그·최댓값 기록용으로만 다시 구한다.
+                const auto & g = env->robot->data.projected_gravity_b;
+                const float tilt_deg = std::acos(std::clamp(-g[2], -1.0f, 1.0f)) * 57.29578f;
+                if (tilt_deg > mon_tilt_max_deg_) mon_tilt_max_deg_ = tilt_deg;
+                const bool trip = isaaclab::mdp::bad_orientation(env.get(), 1.0);
+                if (trip && !mon_exit_reason_) {
+                    mon_exit_reason_ = "bad_orientation";
+                    spdlog::warn("[safety] bad_orientation TRIPPED  tilt={:.1f}deg (limit 57.3) -> Passive", tilt_deg);
+                }
+                return trip;
+            },
             FSMStringMap.right.at("Passive")
         )
     );
     this->registered_checks.emplace_back(
         std::make_pair(
-            [this]()->bool{ return js_enable_qd_guard_ && js_qd_crit_latched_.load(); }, // qd crit -> Passive
+            [this]()->bool{ // qd crit -> Passive
+                const bool trip = js_enable_qd_guard_ && js_qd_crit_latched_.load();
+                if (trip && !mon_exit_reason_) mon_exit_reason_ = "qd_crit";
+                return trip;
+            },
             FSMStringMap.right.at("Passive")
         )
     );
+}
+
+// deploy 관절 순서 29 (legL/legR/waist/armL/armR) — 로그를 사람이 읽게 하기 위한 이름표.
+static const char* const G1_JOINT_NAME[29] = {
+    "L_hip_pitch","L_hip_roll","L_hip_yaw","L_knee","L_ank_pitch","L_ank_roll",
+    "R_hip_pitch","R_hip_roll","R_hip_yaw","R_knee","R_ank_pitch","R_ank_roll",
+    "waist_yaw","waist_roll","waist_pitch",
+    "L_sho_pitch","L_sho_roll","L_sho_yaw","L_elbow","L_wri_roll","L_wri_pitch","L_wri_yaw",
+    "R_sho_pitch","R_sho_roll","R_sho_yaw","R_elbow","R_wri_roll","R_wri_pitch","R_wri_yaw"};
+static inline const char* jname(int i) { return (i >= 0 && i < 29) ? G1_JOINT_NAME[i] : "?"; }
+
+// 안전층이 값을 깎았는지 전/후 비교로 집계. NaN 이면 fabs(NaN)>mx 가 false 라 조용히 건너뛴다.
+static inline void mon_track(const float* pre, const float* post, int n,
+                             uint32_t& ticks, float& max_d, int& max_j) {
+    float mx = 0.0f; int mj = -1;
+    for (int i = 0; i < n; ++i) { float d = std::fabs(post[i] - pre[i]); if (d > mx) { mx = d; mj = i; } }
+    if (mj >= 0) { ++ticks; if (mx > max_d) { max_d = mx; max_j = mj; } }
+}
+
+void State_Mimic::mon_reset()
+{
+    mon_clamp_ticks_ = mon_rate_ticks_ = 0;
+    mon_clamp_max_ = mon_rate_max_ = mon_qd_max_ = mon_tilt_max_deg_ = 0.0f;
+    mon_clamp_joint_ = mon_rate_joint_ = mon_qd_joint_ = -1;
+    mon_exit_reason_ = nullptr;
+}
+
+// 체류 요약 — 실기 발산은 0.2s 라 눈으로 못 본다. 나간 뒤 이 한 덩어리가 유일한 증거다.
+void State_Mimic::mon_log_summary()
+{
+    const float dwell = env->episode_length * env->step_dt;
+    spdlog::info("[Mimic_Masked] 체류 {:.1f}s, 최종 mode{}, 종료사유 {}",
+                 dwell, g_cmd_mode, mon_exit_reason_ ? mon_exit_reason_ : "operator");
+    if (mon_clamp_joint_ >= 0)
+        spdlog::info("  pos_clamp  : {} tick (최대 {:.4f} rad 삭감 @ {} {})",
+                     mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_, jname(mon_clamp_joint_));
+    else
+        spdlog::info("  pos_clamp  : {} tick ({})", mon_clamp_ticks_, js_enable_pos_clamp_ ? "무개입" : "OFF");
+    if (mon_rate_joint_ >= 0)
+        spdlog::info("  rate_limit : {} tick (최대 {:.4f} rad 삭감 @ {} {})",
+                     mon_rate_ticks_, mon_rate_max_, mon_rate_joint_, jname(mon_rate_joint_));
+    else
+        spdlog::info("  rate_limit : {} tick ({})", mon_rate_ticks_, js_enable_rate_limit_ ? "무개입" : "OFF");
+    spdlog::info("  |qd| 최대  : {:.2f} rad/s @ {} {}   (warn {:.1f} / crit {:.1f}, guard {})",
+                 mon_qd_max_, mon_qd_joint_, jname(mon_qd_joint_),
+                 js_qd_warn_, js_qd_crit_, js_enable_qd_guard_ ? "ON" : "OFF");
+    spdlog::info("  기울기 최대: {:.1f} deg  (limit 57.3)", mon_tilt_max_deg_);
 }
 
 // deploy.yaml의 safety 블록 로드 (fail-safe): 블록이 없거나, pos_min/pos_max 길이가 29가 아니거나,
@@ -554,6 +616,7 @@ void State_Mimic::enter()
     js_qd_crit_latched_ = false;
     js_qd_warn_latched_ = false;
     js_warn_run_ = js_crit_run_ = 0;
+    mon_reset();               // 모니터링 카운터도 체류 단위로 리셋 (요약이 이번 체류만 담게)
     g_req_mode = g_cmd_mode;   // 진입 시 요청 모드를 현재 모드와 일치시켜 시작(불일치 방지)
     // Start policy thread
     policy_thread_running = true;
@@ -579,15 +642,32 @@ void State_Mimic::enter()
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (mode 1/2/3 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
             // ── L3: 측정 qd 폭주 감지 (policy_thread 50Hz — g_cmd_mode/notify_mode_switch 같은 스레드) ──
+            // 모니터링: |qd| 최댓값은 guard on/off 와 무관하게 항상 추적. 50Hz, I/O 없음.
+            // qd_now/qd_j 는 아래 warn/crit 로그가 "지금 값"을 찍도록 재사용한다(체류 최댓값 아님).
+            const int qd_j = js_qd_argmax(env->robot->data.joint_vel.data(),
+                                          (int)env->robot->data.joint_vel.size());
+            const float qd_now = (qd_j >= 0) ? std::fabs(env->robot->data.joint_vel[qd_j]) : 0.0f;
+            if (qd_j >= 0 && std::isfinite(qd_now) && qd_now > mon_qd_max_) {
+                mon_qd_max_ = qd_now; mon_qd_joint_ = qd_j;
+            }
             if (js_enable_qd_guard_) {
                 const int reqd = g_req_mode;   // 조작자 실제 요청 모드(가드가 강제한 g_cmd_mode와 분리; 입력핸들러만 세팅)
                 int sev = js_qd_severity(env->robot->data.joint_vel.data(),
                                          (int)env->robot->data.joint_vel.size(), js_qd_warn_, js_qd_crit_);
+                const bool warn_before = js_qd_warn_latched_;
                 bool crit_l = js_qd_crit_latched_.load();
+                const bool crit_before = crit_l;
                 js_qd_step(sev, js_over_ticks_, js_warn_run_, js_crit_run_, js_qd_warn_latched_, crit_l);
                 if (crit_l) js_qd_crit_latched_.store(true);
+                if (!crit_before && crit_l)     // 래치되는 에지에서 1회만
+                    spdlog::error("[safety] qd_crit LATCHED  |qd|={:.2f} rad/s @ {} {} (crit {:.1f} 을 {}틱 연속 초과) -> Passive",
+                                  qd_now, qd_j, jname(qd_j), js_qd_crit_, js_over_ticks_);
                 // warn 수동복귀: 조작자가 mode1(X/'1')을 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
                 if (js_qd_warn_latched_ && reqd == 1) js_qd_warn_latched_ = false;
+                // 해제 뒤에 로그 → mode1 에서는 같은 틱에 풀리므로(=no-op) 스팸이 안 난다.
+                if (!warn_before && js_qd_warn_latched_)
+                    spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> mode1 강제. 복귀=키 '1'",
+                                 qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
                 if (js_qd_warn_latched_) g_cmd_mode = 1;   // g_poll_vr 뒤에 덮어써 mode1 유지(soft)
                 // crit은 아래 registered_check가 Passive로 전이시킴(여기선 latch만).
             }
@@ -645,9 +725,20 @@ void State_Mimic::run()
     g_loco.apply_switch_blend(action.data(), static_cast<int>(action.size()));
     // L1-2차: C++ 최종 위치 clamp (기계한계, gated). action.clip(process_actions)이 1차 방어이고
     // 이건 최종 출력 직전 보루 — 기본 off, sim2sim 검증 후 enable_pos_clamp:true로 켠다.
+    // 모니터링 스냅샷 — 안전층이 실제로 값을 깎았는지 전/후 비교로 집계한다. 여기는 1kHz FSM
+    // 스레드이므로 절대 I/O 를 하지 않는다(세기만; 출력은 exit() 요약). 29 float 복사는 무시할 비용.
+    const int mon_n = static_cast<int>(action.size());
+    std::array<float, 29> mon_pre{};
+    const bool mon_on = (mon_n <= 29);
+    if (mon_on) for (int i = 0; i < mon_n; ++i) mon_pre[i] = action[i];
+
     if (js_enable_pos_clamp_)
         js_clamp_position(action.data(), js_pos_lo_.data(), js_pos_hi_.data(),
                           static_cast<int>(action.size()));
+    if (mon_on && js_enable_pos_clamp_) {
+        mon_track(mon_pre.data(), action.data(), mon_n, mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_);
+        for (int i = 0; i < mon_n; ++i) mon_pre[i] = action[i];   // rate-limit 비교용 기준 갱신
+    }
     // L2: 관절 속도 rate-limit (gated, 기본 off). 출력 전용 — obs(last_action 등)는 raw action을
     // 그대로 읽으므로 parity 영향 없음. 비활성일 때도 q_prev는 계속 추적해서, 나중에 켤 때
     // stale q_prev로 인한 첫 틱 점프가 나지 않게 한다.
@@ -656,6 +747,8 @@ void State_Mimic::run()
                       static_cast<int>(action.size()));
     else
         for (int i = 0; i < (int)action.size(); ++i) js_q_prev_[i] = action[i];
+    if (mon_on && js_enable_rate_limit_ && js_q_prev_valid_)
+        mon_track(mon_pre.data(), action.data(), mon_n, mon_rate_ticks_, mon_rate_max_, mon_rate_joint_);
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
