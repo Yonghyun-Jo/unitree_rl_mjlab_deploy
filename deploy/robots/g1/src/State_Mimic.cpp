@@ -1,11 +1,18 @@
 #include "State_Mimic.h"
+#include "RtPriority.h"
 #include "LoopDiag.h"
 #include "unitree_articulation.h"
 #include "MaskedLocoController.h"   // deploy-clean foot_z gen + base_vel spline + arm-blend
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
+#include <atomic>
+#include <cstring>
+#include <thread>
 #include <algorithm>   // std::clamp
 #include <array>
+#include <string>
+
+extern std::string g_network_iface;   // main.cpp — 진단 부하 인터록 전용 (조작 경로 아님)
 #include <string>
 #include <cstdint>     // GUI shared-memory struct
 #include <cstdio>      // printf (base_vel command readout)
@@ -665,6 +672,9 @@ void State_Mimic::enter()
     policy_thread_running = true;
     policy_thread = std::thread([this]{
         using clock = std::chrono::high_resolution_clock;
+        // 정책도 RT 로. 안전(FSM 1kHz)보다는 «아래»다 — 정책이 늦으면 행동이 낡을 뿐이고,
+        // 안전이 늦으면 관절 가드가 안 돈다. 실패해도 경고만 남기고 종전대로 돈다.
+        rtprio::raise_this_thread("정책 50Hz", rtprio::POLICY_50HZ);
         const std::chrono::duration<double> desiredDuration(env->step_dt);
         const auto dt = std::chrono::duration_cast<clock::duration>(desiredDuration);
 
@@ -693,6 +703,73 @@ void State_Mimic::enter()
             d_csv = std::fopen(path, "w");
             if (d_csv) { std::fprintf(d_csv, "%s\n", LoopDiag::csv_header()); std::fflush(d_csv); }
             spdlog::info("[diag] CSV -> {} ({})", path, d_csv ? "열림" : "열기 실패");
+        }
+
+        // ── 진단용 부하 주입 (G1_DIAG_LOAD 이 있을 때만). 전환 생성기를 «붙이기 전에»
+        // 「별도 스레드로 돌리면 되지 않나」를 실측으로 답하기 위한 것이다. 이 repo 에는
+        // 우선순위 설정이 하나도 없으므로, 계산 스레드 하나가 50 Hz 정책과 1 kHz 안전 루프를
+        // 얼마나 밀어내는지는 «재야» 안다.
+        //   G1_DIAG_LOAD=<policy.onnx 경로>[:<몇 틱마다>]      예) .../policy.onnx:5
+        // 진짜 ONNX 를 돌린다 — 캐시 거동까지 같아야 답이 답이 되기 때문. 합성 busy-loop 로는
+        // 대역폭·캐시 압력이 재현되지 않는다.
+        std::thread load_th;
+        std::atomic<bool> load_run{false};
+        // 🔴 인터록: 실로봇에서는 «절대» 켜지지 않는다. 환경변수는 스크립트·systemd·셸
+        // 히스토리로 새기 쉬운데, 켜지면 관절 안전 루프와 다투는 스레드가 하나 더 생긴다.
+        // 그래서 주석이 아니라 «코드»로 막는다 — sim2sim(--network=lo) 이 아니면 거부.
+        if (std::getenv("G1_DIAG_LOAD") && g_network_iface != "lo") {
+            spdlog::error("[diag:load] 🔴 G1_DIAG_LOAD 가 설정돼 있으나 --network={} 이다. "
+                          "진단용 부하는 sim2sim(lo) 에서만 허용된다 — 무시한다.", g_network_iface);
+        }
+        else if (const char* spec = std::getenv("G1_DIAG_LOAD")) {
+            std::string sp(spec);
+            int every = 1;
+            const auto colon = sp.rfind(':');
+            if (colon != std::string::npos && sp.find(".onnx") < colon) {
+                every = std::max(1, std::atoi(sp.substr(colon + 1).c_str()));
+                sp = sp.substr(0, colon);
+            }
+            load_run = true;
+            spdlog::warn("[diag:load] 🔴 진단용 부하 ON — {} 를 {}틱마다. 실운용에서 켜지 말 것.",
+                         sp, every);
+            load_th = std::thread([sp, every, &load_run, this]{
+              // 예외 격리: OrtRunner 생성자는 경로가 틀리면 throw 한다. 스레드 밖으로 나가면
+              // std::terminate -> 제어기 «전체»가 죽는다. 진단 도구가 제어기를 죽이면 안 된다.
+              try {
+                rtprio::lower_this_thread("진단 부하", 10);   // 계산은 언제나 안전보다 «뒤»
+                isaaclab::OrtRunner rr(sp);
+                auto obs = rr.zero_obs();
+                LoopDiag ld(env->step_dt * 1000.0 * every, 1.0);
+                auto prev = clock::now();
+                bool first = true;
+                char buf[768];
+                static const char* SEG[6] = {"-","-","-","-","-","-"};
+                const auto period = std::chrono::duration_cast<clock::duration>(
+                    std::chrono::duration<double>(env->step_dt * every));
+                auto next = clock::now() + period;
+                while (load_run) {
+                    const auto t0 = clock::now();
+                    rr.act(obs);
+                    const auto t1 = clock::now();
+                    auto ms = [](clock::time_point a, clock::time_point b) {
+                        return std::chrono::duration<double, std::milli>(b - a).count(); };
+                    ld.tick(ms(t0, t1), first ? 0.0 : ms(prev, t0));
+                    prev = t0; first = false;
+                    if (ld.window_closed()) {
+                        ld.format(buf, sizeof buf, SEG);
+                        if (char* nl = std::strchr(buf, '\n')) *nl = '\0';
+                        spdlog::info("[diag:load] {}", buf + 7);
+                        ld.reset();
+                    }
+                    std::this_thread::sleep_until(next);
+                    next += period;
+                }
+              } catch (const std::exception& e) {
+                spdlog::error("[diag:load] 부하 스레드 중단: {}", e.what());
+              } catch (...) {
+                spdlog::error("[diag:load] 부하 스레드 중단 (알 수 없는 예외)");
+              }
+            });
         }
 
         while (policy_thread_running)
@@ -784,8 +861,8 @@ void State_Mimic::enter()
                     diag.format(d_buf, sizeof d_buf, DIAG_SEG);
                     // overrun 이 있으면 경고로 올린다 — 50 Hz 를 못 지킨 것이고, 조용히 지나가면
                     // 나중에 「로봇이 이상하다」로만 보인다.
-                    if (diag.overrun() > 0) spdlog::warn("{}", d_buf);
-                    else                    spdlog::info("{}", d_buf);
+                    if (diag.overrun() > 0) spdlog::warn("[diag:policy] {}", d_buf + 7);
+                    else                    spdlog::info("[diag:policy] {}", d_buf + 7);
                     if (d_csv) {
                         char c[512];
                         diag.format_csv(c, sizeof c);
@@ -800,6 +877,8 @@ void State_Mimic::enter()
             std::this_thread::sleep_until(sleepTill);
             sleepTill += dt;
         }
+        load_run = false;
+        if (load_th.joinable()) load_th.join();
         if (d_csv) std::fclose(d_csv);
     });
 }

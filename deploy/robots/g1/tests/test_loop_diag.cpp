@@ -1,5 +1,5 @@
 // test_loop_diag.cpp — LoopDiag.h 계약. 계측이 «제어를 방해하지 않고» 사실을 말하는지만 본다.
-//   cd deploy/robots/g1/tests && g++ -std=c++17 -I../include -O2 test_loop_diag.cpp -o /tmp/tld && /tmp/tld
+//   cd deploy/robots/g1/tests && g++ -std=c++17 -I../../../include -O2 test_loop_diag.cpp -o /tmp/tld && /tmp/tld
 #include "LoopDiag.h"
 #include <cstdio>
 #include <cstring>
@@ -73,6 +73,55 @@ int main() {
                         std::chrono::high_resolution_clock::now() - t0).count() / 100000.0;
         std::printf("hot path %.1f ns/tick (예산 20,000,000 ns)\n", ns);
         chk(ns < 1000.0, "tick+seg 가 1 µs 를 넘는다 — 계측이 관측을 바꾼다");
+    }
+
+    // ── 🔴 링버퍼: 창이 CAP 보다 길어도 max/overrun/ticks 는 «정확»해야 한다.
+    //    처음엔 앞 CAP 개만 담고 나머지를 버렸다 -> 1 kHz(창당 1000틱)에서 «뒤쪽 절반»을
+    //    통째로 못 봤다. 2026-08-18 에 이 편향이 실측 숫자를 오염시킨 채 보고됐다.
+    {
+        LoopDiag d(20.0, 3600.0);
+        for (int i = 0; i < LoopDiag::CAP + 200; ++i) d.tick(1.0, 20.0);
+        d.tick(999.0, 20.0);                        // 마지막에 큰 값 하나
+        chk(d.work_max() == 999.0, "CAP 을 넘긴 뒤의 max 를 놓친다");
+        chk(d.overrun() == 1, "CAP 을 넘긴 뒤의 overrun 을 놓친다");
+        chk(d.ticks() == LoopDiag::CAP + 201, "CAP 을 넘긴 뒤 tick 수를 놓친다");
+        char buf[512]; d.format(buf, sizeof buf, SEG);
+        chk(std::strstr(buf, "max=999.0") != nullptr, "format 의 max 가 링버퍼에 잘린다");
+    }
+    // ── CAP 을 넘긴 «앞쪽» 표본이 분위수를 오염시키면 안 된다 (마지막 CAP 개만 본다)
+    {
+        LoopDiag d(1000.0, 3600.0);
+        for (int i = 0; i < LoopDiag::CAP; ++i) d.tick(1.0, 20.0);      // 옛 값
+        for (int i = 0; i < LoopDiag::CAP; ++i) d.tick(7.0, 20.0);      // 새 값이 전부 밀어냄
+        char buf[512]; d.format(buf, sizeof buf, SEG);
+        chk(std::strstr(buf, "p50=7.0") != nullptr, "옛 표본이 분위수에 남아 있다");
+    }
+    // ── 🔴 publish/take: 실시간 스레드가 «로그를 안 찍고» 넘길 수 있어야 한다.
+    //    spdlog 기본 sink 는 동기 stdout — 1 kHz 루프에서 부르면 계측이 위험 요인이 된다.
+    {
+        LoopDiag d(1.0, 3600.0);
+        char out[768];
+        chk(!d.take(out, sizeof out), "빈 슬롯에서 가져와졌다");
+        d.tick(0.5, 1.0);
+        d.publish(SEG);
+        chk(d.take(out, sizeof out), "publish 한 것을 못 가져온다");
+        chk(std::strstr(out, "p50=0.5") != nullptr, "슬롯 내용이 다르다");
+        chk(!d.take(out, sizeof out), "한 번 가져온 것을 또 준다");
+        d.publish(SEG);
+        d.publish(SEG);                     // 소비 전 재발행 = 조용히 건너뜀 (블록도 손실보고도 없음)
+        chk(d.take(out, sizeof out), "재발행 뒤 못 가져온다");
+    }
+    // ── publish 비용: 실시간 스레드 안에서 도는 유일한 «무거운» 연산이다
+    {
+        LoopDiag d(1.0, 3600.0);
+        char out[768];
+        for (int i = 0; i < LoopDiag::CAP; ++i) d.tick(1.0 + (i % 7) * 0.1, 1.0);
+        auto t0 = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < 1000; ++i) { d.publish(SEG); d.take(out, sizeof out); }
+        double us = std::chrono::duration<double, std::micro>(
+                        std::chrono::high_resolution_clock::now() - t0).count() / 1000.0;
+        std::printf("publish %.1f us (1kHz 예산 1000 us, 창당 1회)\n", us);
+        chk(us < 100.0, "publish 가 1 kHz 예산의 10% 를 넘는다");
     }
 
     std::printf(fail ? "%d FAILED\n" : "all passed\n", fail);

@@ -56,6 +56,10 @@ void init_fsm_state(bool allow_lowcmd_conflict)
     spdlog::info("Connected to robot.");
 }
 
+// 부팅에 쓴 DDS 인터페이스. 진단용 부하 주입이 «실로봇인가»를 알아야 해서 남긴다
+// (sim2sim = lo). 조작 경로가 아니다 — 다른 용도로 쓰지 말 것.
+std::string g_network_iface;
+
 int main(int argc, char** argv)
 {
     ::signal(SIGINT,  restore_tty_and_die);   // 종료 시 터미널 복구 (동작은 기존과 동일)
@@ -68,7 +72,8 @@ int main(int argc, char** argv)
     std::cout << "     G1-29dof Controller \n";
 
     // Unitree DDS Config
-    unitree::robot::ChannelFactory::Instance()->Init(0, vm["network"].as<std::string>());
+    g_network_iface = vm["network"].as<std::string>();
+    unitree::robot::ChannelFactory::Instance()->Init(0, g_network_iface);
 
     init_fsm_state(vm.count("allow-lowcmd-conflict") > 0);
 
