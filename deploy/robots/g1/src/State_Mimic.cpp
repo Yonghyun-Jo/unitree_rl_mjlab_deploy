@@ -1,4 +1,5 @@
 #include "State_Mimic.h"
+#include "LoopDiag.h"
 #include "unitree_articulation.h"
 #include "MaskedLocoController.h"   // deploy-clean foot_z gen + base_vel spline + arm-blend
 #include "isaaclab/envs/mdp/observations/observations.h"
@@ -438,6 +439,7 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     );
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
     load_safety_cfg(dcfg["safety"]);   // fail-safe: 없거나/이상하면 전부 비활성 (아래 정의)
+    load_gait_cfg(dcfg["gait"]);       // fail-safe: 없으면 종전 quintic 기본값 유지 (아래 정의)
 
     const auto & joy = FSMState::lowstate->joystick;
     // end_state가 자기자신이면(=masked/teleop) 클립 끝이 무의미 → 타임아웃 체크 미등록 = 무한 실행.
@@ -587,6 +589,47 @@ void State_Mimic::load_safety_cfg(const YAML::Node& s)
     }
 }
 
+// deploy.yaml의 gait 블록 로드 (fail-safe): 없거나 파싱이 실패하면 손대지 않는다 →
+// MaskedLocoController 의 기본값(전 모드 quintic / height_scale 1.0 / deadzone 없음)이 남아
+// 종전 거동이 그대로 유지된다.
+//
+// ⚠ 왜 모드별인가: 배포 ONNX 의 head 는 각각 다른 시점에 학습돼 foot_z 생성 조건이 다르다
+//    (ONNX_META.json 의 mode{N}_ckpt ↔ 그 시점 stage4_mode{N}_env_cfg.py 의 FOOT_GEN).
+//    하나로 통일하면 반드시 어느 head 하나가 학습과 다른 발-z 명령을 받는다. 이 값은 weights
+//    에 안 남는 런타임 스칼라라 config 로 받는 수밖에 없고, 정책과 같이 다니도록 policy 쪽
+//    deploy.yaml 에 둔다(config.yaml 아님).
+// ⚠ g_loco 는 파일 전역이고 State_Mimic 은 두 번 만들어진다(mimic=dance / mimic_masked).
+//    그래서 «블록이 없으면 손대지 않는다» 가 중요하다 — gait 블록이 없는 dance 쪽 생성자가
+//    나중에 돌아도 mimic_masked 가 실은 값을 지우지 않는다. 두 정책이 서로 다른 gait 블록을
+//    갖게 되면 그때는 생성 순서가 승자를 정하므로, 그 시점에 모드표를 인스턴스로 옮길 것.
+void State_Mimic::load_gait_cfg(const YAML::Node& g)
+{
+    if (!g || !g.IsMap()) { spdlog::warn("[gait] no gait block -> 전 모드 quintic 기본값 유지"); return; }
+    try {
+        if (g["walk_max"]) g_loco.walk_max = g["walk_max"].as<float>();
+        if (g["run_min"])  g_loco.run_min  = g["run_min"].as<float>();
+        for (int m = 1; m <= 5; ++m) {
+            const YAML::Node n = g["mode" + std::to_string(m)];
+            if (!n || !n.IsMap()) continue;
+            auto& mg = g_loco.mode_gait[m];
+            const std::string src = n["source"] ? n["source"].as<std::string>() : "quintic";
+            mg.lut = (src == "lut");
+            // LUT 은 표가 stance 높이를 갖고 있다 — 파이썬도 foot_source=="lut" 이면
+            // stance_z 를 gait_lut.STANCE_Z 로 덮어쓴다. 같은 순서로 덮고, yaml 이 명시하면 그것이 이긴다.
+            if (mg.lut) mg.stance_z = GL_STANCE_Z;
+            if (n["stance_z"])       mg.stance_z       = n["stance_z"].as<float>();
+            if (n["height_scale"])   mg.height_scale   = n["height_scale"].as<float>();
+            if (n["stand_deadzone"]) mg.stand_deadzone = n["stand_deadzone"].as<float>();
+            spdlog::info("[gait] mode{}: source={} height_scale={:.2f} stance_z={:.5f} deadzone={:.2f}",
+                         m, mg.lut ? "lut" : "quintic", mg.height_scale, mg.stance_z, mg.stand_deadzone);
+        }
+        spdlog::info("[gait] walk_max={:.2f} run_min={:.2f} (lut gait 히스테리시스)",
+                     g_loco.walk_max, g_loco.run_min);
+    } catch (const std::exception& e) {
+        spdlog::warn("[gait] parse error -> 남은 값 그대로 사용: {}", e.what());
+    }
+}
+
 void State_Mimic::enter()
 {
     // set gain
@@ -636,11 +679,29 @@ void State_Mimic::enter()
         init_quat = robot_yaw * ref_yaw.transpose();
         env->reset();
 
+        // ── 속도계 (LoopDiag.h). 로봇 동작은 안 바꾼다 — "지금 몇 ms 쓰나"만 본다.
+        // 이 루프는 여태 한 바퀴가 몇 ms 인지 «아무도 안 재고 있었다»: sleep_until 뿐이고
+        // sleepTill 은 따라잡기도 안 하므로 한 번 밀리면 누적된다. 새 계산(전환 생성기 등)을
+        // 얹기 전에 «남은 예산»을 알아야 한다. 파이썬 브릿지엔 같은 [diag] 가 이미 있다.
+        LoopDiag diag(env->step_dt * 1000.0, 1.0);
+        static const char* DIAG_SEG[6] = {"poll", "safe", "ctrl", "obs", "ort", "act"};
+        auto d_prev = clock::now();
+        bool d_first = true;
+        char d_buf[768];
+        std::FILE* d_csv = nullptr;
+        if (const char* path = std::getenv("G1_DIAG_CSV")) {
+            d_csv = std::fopen(path, "w");
+            if (d_csv) { std::fprintf(d_csv, "%s\n", LoopDiag::csv_header()); std::fflush(d_csv); }
+            spdlog::info("[diag] CSV -> {} ({})", path, d_csv ? "열림" : "열기 실패");
+        }
+
         while (policy_thread_running)
         {
+            const auto d_t0 = clock::now();
             env->robot->update();
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (mode 1/2/3 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
+            const auto d_t_poll = clock::now();
             // ── L3: 측정 qd 폭주 감지 (policy_thread 50Hz — g_cmd_mode/notify_mode_switch 같은 스레드) ──
             // 모니터링: |qd| 최댓값은 guard on/off 와 무관하게 항상 추적. 50Hz, I/O 없음.
             // qd_now/qd_j 는 아래 warn/crit 로그가 "지금 값"을 찍도록 재사용한다(체류 최댓값 아님).
@@ -671,6 +732,7 @@ void State_Mimic::enter()
                 if (js_qd_warn_latched_) g_cmd_mode = 1;   // g_poll_vr 뒤에 덮어써 mode1 유지(soft)
                 // crit은 아래 registered_check가 Passive로 전이시킴(여기선 latch만).
             }
+            const auto d_t_safe = clock::now();
             // Controller: detect a mode switch (spline base_vel + mode1 arm-blend), then advance
             // one step so the obs (base_vel_command / ref_foot_height) see fresh values.
             if (g_cmd_mode != g_prev_cmd_mode) {
@@ -701,12 +763,44 @@ void State_Mimic::enter()
             }
             motion->update(env->episode_length * env->step_dt + time_range_[0]);
             if (motion_light) motion_light->update(env->episode_length * env->step_dt);  // advance mode5 clip
+            const auto d_t_ctrl = clock::now();
             env->step();
+            const auto d_t1 = clock::now();
+
+            // ── 계측 (틱당 ~1 ns. 구간 셋은 env->step() 이 채워 둔 값을 읽기만 한다)
+            {
+                auto ms = [](clock::time_point a, clock::time_point b) {
+                    return std::chrono::duration<double, std::milli>(b - a).count();
+                };
+                diag.seg(0, ms(d_t0, d_t_poll));
+                diag.seg(1, ms(d_t_poll, d_t_safe));
+                diag.seg(2, ms(d_t_safe, d_t_ctrl));
+                diag.seg(3, env->last_obs_us * 1e-3);
+                diag.seg(4, env->last_ort_us * 1e-3);
+                diag.seg(5, env->last_act_us * 1e-3);
+                diag.tick(ms(d_t0, d_t1), d_first ? 0.0 : ms(d_prev, d_t0));
+                d_prev = d_t0; d_first = false;
+                if (diag.window_closed()) {
+                    diag.format(d_buf, sizeof d_buf, DIAG_SEG);
+                    // overrun 이 있으면 경고로 올린다 — 50 Hz 를 못 지킨 것이고, 조용히 지나가면
+                    // 나중에 「로봇이 이상하다」로만 보인다.
+                    if (diag.overrun() > 0) spdlog::warn("{}", d_buf);
+                    else                    spdlog::info("{}", d_buf);
+                    if (d_csv) {
+                        char c[512];
+                        diag.format_csv(c, sizeof c);
+                        std::fprintf(d_csv, "%s\n", c);
+                        std::fflush(d_csv);
+                    }
+                    diag.reset();
+                }
+            }
 
             // Sleep
             std::this_thread::sleep_until(sleepTill);
             sleepTill += dt;
         }
+        if (d_csv) std::fclose(d_csv);
     });
 }
 

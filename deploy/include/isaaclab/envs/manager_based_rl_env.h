@@ -2,6 +2,7 @@
 // All rights reserved.
 
 #pragma once
+#include <chrono>
 
 #include <eigen3/Eigen/Dense>
 #include <yaml-cpp/yaml.h>
@@ -56,13 +57,25 @@ public:
         observation_manager->reset();
     }
 
+    // 마지막 step() 의 구간 시간 (µs). 계측 전용 — 읽는 쪽이 없으면 아무 일도 안 한다.
+    // 20 ms 예산이 obs 조립 / ONNX 추론 / action 처리 중 «어디로» 가는지 이걸로만 알 수 있다.
+    double last_obs_us = 0.0, last_ort_us = 0.0, last_act_us = 0.0;
+
     void step()
     {
+        using diag_clk = std::chrono::high_resolution_clock;
         episode_length += 1;
         robot->update();
+        const auto t0 = diag_clk::now();
         auto obs = observation_manager->compute();
+        const auto t1 = diag_clk::now();
         auto action = alg->act(obs);
+        const auto t2 = diag_clk::now();
         action_manager->process_action(action);
+        const auto t3 = diag_clk::now();
+        last_obs_us = std::chrono::duration<double, std::micro>(t1 - t0).count();
+        last_ort_us = std::chrono::duration<double, std::micro>(t2 - t1).count();
+        last_act_us = std::chrono::duration<double, std::micro>(t3 - t2).count();
     }
 
     float step_dt;
