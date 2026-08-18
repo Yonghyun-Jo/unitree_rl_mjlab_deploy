@@ -68,6 +68,31 @@ inline void lower_this_thread(const char* who, int nice_delta = 10) {
     spdlog::info("[rt] {} -> SCHED_OTHER nice +{} ({})", who, nice_delta, rc == 0 ? "ok" : "무시됨");
 }
 
+// 계산 스레드를 «맨 뒤»로 — SCHED_IDLE. nice 와 달리 «다른 게 없을 때만» 돈다.
+//
+// 왜 따로 있나 (2026-08-18 실측): 부하 스레드에 nice +10 을 «성공적으로» 걸었는데도 1 kHz
+// 안전 루프의 꼬리가 80.6 ms 였다. nice 는 같은 SCHED_OTHER 안의 가중치일 뿐이라, 이미 실행
+// 중인 계산이 안전 루프를 밀어내는 것을 못 막는다.
+//
+// 🟢 권한이 필요 없다 — 내리는 것이기 때문. RT(올리기)는 CAP_SYS_NICE 가 필요하지만
+// SCHED_IDLE 은 아무나 된다.
+//
+// 🔴 그런데 «재봤더니 도움이 안 된다» (2026-08-18, com1 sim2sim). 1 kHz 안전 루프 꼬리:
+//        27MB  매 틱 :  nice+10  15.0 ms   ->  SCHED_IDLE  18.8 ms
+//        185MB n=5   :  nice+10  61.3 ms   ->  SCHED_IDLE 121.3 ms   (2배 «악화»)
+//    이유: 이 꼬리는 «런큐 순번» 문제가 아니라 «메모리» 문제다. 스케줄링 클래스는 언제 도는지를
+//    정할 뿐 도는 동안 얼마나 캐시·대역폭을 먹는지는 못 정한다. 게다가 뒤로 밀린 스레드는 더
+//    «오래» 돌아(25.8 -> 30.4 ms) 캐시를 더 오래 짓밟는다.
+//    ⇒ 이 손잡이는 답이 아니다. 답은 «모델 크기»다. 남겨 둔 이유는 재시도를 막기 위해서다.
+inline bool idle_this_thread(const char* who) {
+    sched_param sp{};
+    sp.sched_priority = 0;
+    const int rc = pthread_setschedparam(pthread_self(), SCHED_IDLE, &sp);
+    if (rc == 0) spdlog::info("[rt] {} -> SCHED_IDLE (다른 게 없을 때만 돈다)", who);
+    else spdlog::warn("[rt] {} -> SCHED_IDLE 실패: {}", who, std::strerror(rc));
+    return rc == 0;
+}
+
 // 특정 코어에 핀. cpu < 0 이면 아무것도 안 한다.
 inline void pin_this_thread(const char* who, int cpu) {
     if (cpu < 0) return;

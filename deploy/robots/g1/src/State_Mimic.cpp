@@ -736,7 +736,11 @@ void State_Mimic::enter()
               // 예외 격리: OrtRunner 생성자는 경로가 틀리면 throw 한다. 스레드 밖으로 나가면
               // std::terminate -> 제어기 «전체»가 죽는다. 진단 도구가 제어기를 죽이면 안 된다.
               try {
-                rtprio::lower_this_thread("진단 부하", 10);   // 계산은 언제나 안전보다 «뒤»
+                // 계산은 언제나 안전보다 «뒤». 얼마나 뒤로 미는지는 G1_DIAG_LOAD_SCHED 로 고른다:
+                //   nice(기본) = SCHED_OTHER nice +10 · idle = SCHED_IDLE(권한 불필요, 더 강함)
+                const char* sched = std::getenv("G1_DIAG_LOAD_SCHED");
+                if (sched && std::string(sched) == "idle") rtprio::idle_this_thread("진단 부하");
+                else                                       rtprio::lower_this_thread("진단 부하", 10);
                 isaaclab::OrtRunner rr(sp);
                 auto obs = rr.zero_obs();
                 LoopDiag ld(env->step_dt * 1000.0 * every, 1.0);
