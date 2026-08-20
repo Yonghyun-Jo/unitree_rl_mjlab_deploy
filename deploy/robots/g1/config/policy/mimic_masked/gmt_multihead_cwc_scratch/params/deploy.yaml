@@ -135,7 +135,12 @@ gait:
   run_min: 1.7         #                        이 위면 run, 사이는 직전 상태 유지
   mode1: {source: lut}
   mode2: {source: lut, stand_deadzone: 0.15}   # 학습과 동일(lut, height_scale 기본 1.0)
-  mode3: {source: quintic}    # 학습과 다름(위 참조) — 종전 배포 동작을 그대로 둔 것
+  mode3: {source: quintic}    # ⚠ mode>=3 의 발-z 는 «생성기를 안 쓴다» — 학습(stage4_mode3)에
+                              #   FOOT_GEN 이 없어 obs 원천이 «레퍼런스 발 world-z» 다
+                              #   (클립 = motion npz, VR = 트래커/GMR FK).
+                              #   State_Mimic.cpp REGISTER_OBSERVATION(ref_foot_height) 참조.
+                              #   이 줄이 남아 있는 이유 = 레퍼런스를 못 얻을 때
+                              #   (VR 미접속 standby) 쓸 «두 발 접지» stance 값 하나뿐이다.
 
 # ── deploy 안전층 (State_Mimic이 로드; 없으면/이상하면 전부 비활성). 값은 sim 튜닝. ──
 safety:

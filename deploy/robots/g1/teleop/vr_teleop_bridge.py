@@ -273,6 +273,34 @@ def main() -> None:
                                    # 조기수렴 → 상한 10이어도 실사용 iter 적음. CPU 경합은 프로세스 분리로.
     print(f"[bridge] GMR ready. (IK max_iter={gmr.max_iter})")
 
+    # ── 레퍼런스 발 world-z ([z_L, z_R]) 원천 ────────────────────────────────────────
+    # mode3(전신)은 학습 cfg 에 FOOT_GEN 이 «없다» → mjlab calc_ref_foot_height 가 생성기가
+    # 아니라 «레퍼런스 발 world-z» 를 obs 로 먹인다. 그래서 텔레옵도 그 값을 같이 보내야
+    # 학습과 같은 obs 가 된다. GMR 은 retarget() 안에서 이미 FK 를 돌려 놓으므로
+    # configuration.data.xpos 를 읽는 비용은 0 이다 (offset_to_ground=True → 지면 기준).
+    # 이름으로 찾는다 — 인덱스로 박으면 GMR 에셋이 바뀔 때 조용히 틀어진다.
+    try:
+        import mujoco as _mj
+        _foot_bids = [_mj.mj_name2id(gmr.model, _mj.mjtObj.mjOBJ_BODY, nm)
+                      for nm in ("left_ankle_roll_link", "right_ankle_roll_link")]
+        if any(b < 0 for b in _foot_bids):
+            _foot_bids = None
+    except Exception as _e:                                    # noqa: BLE001
+        print(f"[bridge] ⚠ 발-z FK 준비 실패({_e})")
+        _foot_bids = None
+    if _foot_bids is None:
+        print("[bridge] ⚠ ankle_roll body 를 못 찾음 -> 발-z 미전송 "
+              "(mode3 은 stance 상수로 폴백 = 학습과 불일치)")
+    else:
+        print(f"[bridge] 발-z FK 준비 완료 (body ids {_foot_bids}, [L, R])")
+
+    def _gmr_foot_z():
+        """직전 retarget() 결과의 발 world-z [z_L, z_R]. 못 구하면 None."""
+        if _foot_bids is None:
+            return None
+        xp = gmr.configuration.data.xpos
+        return [float(xp[_foot_bids[0], 2]), float(xp[_foot_bids[1], 2])]
+
     # ── pose 스트림 수신자 (transport 교체 가능). udp=기본(WAN/LAN 공통), zmq=롤백.
     if args.transport == "udp":
         from udp_receiver import UdpReceiver
@@ -318,7 +346,8 @@ def main() -> None:
     #    One-Euro+extrapolation 적용해 shm write. smooth off면 _shared/thread 미사용(기존 경로 그대로).
     _lock = threading.Lock()
     _shared = {"seq": 0, "active": False, "cmd_mode": user_mode,
-               "stick": [0.0, 0.0, 0.0], "quat": list(IDENTITY_QUAT), "dof": list(ZERO29)}
+               "stick": [0.0, 0.0, 0.0], "quat": list(IDENTITY_QUAT), "dof": list(ZERO29),
+               "foot_z": None}
     _stop = threading.Event()
 
     # ── 진단 계측(S1): output tick 간격 / overrun / GMR 소요. deque append 는 GIL 하에서 원자적이라
@@ -339,7 +368,7 @@ def main() -> None:
         s = sorted(vals)
         return s[min(len(s) - 1, int(q * len(s)))]
 
-    def _push_target(cmd_mode, stick, quat, dof):
+    def _push_target(cmd_mode, stick, quat, dof, foot_z=None):
         with _lock:
             _shared["seq"] += 1
             _shared["active"] = True
@@ -347,6 +376,7 @@ def main() -> None:
             _shared["stick"] = list(stick)
             _shared["quat"] = list(quat)
             _shared["dof"] = dof.tolist() if hasattr(dof, "tolist") else list(dof)
+            _shared["foot_z"] = None if foot_z is None else list(foot_z)
 
     def _push_inactive(cmd_mode):
         with _lock:
@@ -357,6 +387,7 @@ def main() -> None:
         out_dt = 1.0 / args.smooth_hz
         oe = _OneEuro(out_dt, args.smooth_mincut, args.smooth_beta)
         cur = None
+        cur_foot_z = None
         cur_vel = np.zeros(29, dtype=np.float32)
         cur_quat = np.asarray(IDENTITY_QUAT, dtype=np.float32)
         quat_a = 1.0 - float(np.exp(-out_dt / 0.05))    # ~50ms 방향 저역통과
@@ -375,12 +406,15 @@ def main() -> None:
             with _lock:
                 s_seq, active, um = _shared["seq"], _shared["active"], _shared["cmd_mode"]
                 st = list(_shared["stick"]); tq = list(_shared["quat"]); tgt = list(_shared["dof"])
+                tfz = _shared["foot_z"]
+                tfz = None if tfz is None else list(tfz)
             if not active:
                 if args.fallback_clip:
                     vr_shm.write(seq, 0, um, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)
                 else:
                     vr_shm.write(seq, 1, 1, [0.0, 0.0, 0.0], IDENTITY_QUAT, ZERO29, ZERO29)
-                seq += 1; oe.reset(); cur = None; cur_vel[:] = 0.0; last_seen = s_seq; gap = 0
+                seq += 1; oe.reset(); cur = None; cur_foot_z = None
+                cur_vel[:] = 0.0; last_seen = s_seq; gap = 0
             else:
                 have_new = (s_seq != last_seen)
                 if have_new:
@@ -404,7 +438,15 @@ def main() -> None:
                 else:
                     cur_vel = cur_vel * VDECAY
                 cur_quat = _nlerp(cur_quat, tq, quat_a)
-                vr_shm.write(seq, 1, um, st, cur_quat.tolist(), cur.tolist(), cur_vel.tolist())
+                # 발-z 도 quat 과 같은 계수로 1차 저역통과. None(=원천 없음)이면 그대로 None 을
+                # 넘겨 C++ 이 «모름 -> stance 폴백» 으로 처리하게 한다 (0 을 보내면 거짓 obs).
+                if tfz is None:
+                    cur_foot_z = None
+                else:
+                    cur_foot_z = tfz if cur_foot_z is None else [
+                        c + (t - c) * quat_a for c, t in zip(cur_foot_z, tfz)]
+                vr_shm.write(seq, 1, um, st, cur_quat.tolist(), cur.tolist(), cur_vel.tolist(),
+                             foot_z=cur_foot_z)
                 seq += 1
             if _log_f is not None:
                 _log_f.write("%.4f,%.3f,%d,%d,%d,%d,%.3f,%.1f,%.1f,%s\n" % (
@@ -524,9 +566,10 @@ def main() -> None:
             _gmr_ms.append(_diag["gmr_ms"])
             root_quat = [float(x) for x in qpos[3:7]]           # wxyz
             dof_pos = np.asarray(qpos[7:36], dtype=np.float32)  # 29, == deploy JOINT_ORDER
+            foot_z = _gmr_foot_z()                             # [z_L, z_R] world (지면 기준) or None
             if args.smooth:
                 # receiver는 최신 target만 갱신 → output thread가 고정 rate로 스무딩/보간해 shm write.
-                _push_target(user_mode, stick, root_quat, dof_pos)
+                _push_target(user_mode, stick, root_quat, dof_pos, foot_z)
                 n += 1
                 report(now, f"TELEOP(smooth) mode={user_mode}  base_vel=({stick[0]:+.2f},"
                             f"{stick[1]:+.2f},{stick[2]:+.2f})  arm(L_sho_pitch)={dof_pos[15]:+.2f}")
@@ -539,7 +582,8 @@ def main() -> None:
             prev_dof = dof_pos.copy()
             last_t = now
 
-            vr_shm.write(seq_out, 1, user_mode, stick, root_quat, dof_pos.tolist(), dof_vel.tolist())
+            vr_shm.write(seq_out, 1, user_mode, stick, root_quat, dof_pos.tolist(), dof_vel.tolist(),
+                         foot_z=foot_z)
             seq_out += 1
             n += 1
             report(now, f"TELEOP mode={user_mode}  base_vel=({stick[0]:+.2f},{stick[1]:+.2f},"

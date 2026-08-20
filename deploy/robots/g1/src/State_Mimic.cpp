@@ -109,8 +109,15 @@ struct VrRef {
     float    root_quat[4]; // pelvis wxyz
     float    dof_pos[29];  // = GMR qpos[7:36]
     float    dof_vel[29];  // finite-diff + EMA
+    // ── v2 확장 (2026-08-20). 레퍼런스 발 world-z [z_L, z_R].
+    // mode3 은 학습에 FOOT_GEN 이 없어 «레퍼런스 발 z» 가 obs 원천이다(생성기 아님).
+    // ⚠ 구버전 publisher 는 여기까지 안 쓴다 → 아래 g_poll_vr 이 «짧은 파일»도 받아들이고,
+    //   그 경우 이 필드는 0 으로 남아 사용되지 않는다(obs 는 stance 로 폴백).
+    float    foot_z[2];
 };
 #pragma pack(pop)
+// 확장 전 레이아웃 크기 — 이 길이로 온 파일도 정상 수신한다(구버전 호환).
+static constexpr size_t VR_REF_LEGACY_BYTES = sizeof(VrRef) - sizeof(float) * 2;
 static uint32_t g_vr_last_seq = 0;
 static int g_vr_stale = 0;                      // polls since seq last advanced
 static constexpr int VR_STALE_MAX = 25;         // ~0.5s @50Hz: writer stalled/dead -> release to clip
@@ -123,9 +130,14 @@ static void g_poll_vr()
         return;
     }
     VrRef v{};
-    size_t n = std::fread(&v, sizeof(v), 1, f);
+    unsigned char buf[sizeof(VrRef)] = {};
+    size_t n = std::fread(buf, 1, sizeof(buf), f);
     std::fclose(f);
-    if (n != 1 || v.magic != 0x6702) return;
+    // 신(발-z 포함) / 구 레이아웃 둘 다 수신. v 는 0 초기화라 구버전이면 foot_z 가 0 으로 남는다.
+    if (n != sizeof(VrRef) && n != VR_REF_LEGACY_BYTES) return;
+    std::memcpy(&v, buf, n);
+    const bool vr_has_foot_z = (n == sizeof(VrRef));
+    if (v.magic != 0x6702) return;
     if (v.seq == g_vr_last_seq) {   // LIVENESS: seq frozen -> writer stalled/dead (or stale zombie)
         if (State_Mimic::motion && State_Mimic::motion->vr_override && ++g_vr_stale > VR_STALE_MAX)
             State_Mimic::motion->clear_vr();     // auto-return to clip (VR 끊김 안전, c00ac28 의도)
@@ -140,7 +152,7 @@ static void g_poll_vr()
         Eigen::VectorXf dp = Eigen::VectorXf::Map(v.dof_pos, 29);
         Eigen::VectorXf dv = Eigen::VectorXf::Map(v.dof_vel, 29);
         Eigen::Quaternionf rq(v.root_quat[0], v.root_quat[1], v.root_quat[2], v.root_quat[3]);  // wxyz
-        State_Mimic::motion->set_vr(dp, dv, rq);
+        State_Mimic::motion->set_vr(dp, dv, rq, {v.foot_z[0], v.foot_z[1]}, vr_has_foot_z);
     }
 }
 
@@ -342,11 +354,37 @@ REGISTER_OBSERVATION(base_vel_command)
     return std::vector<float>(g_loco.base_vel.begin(), g_loco.base_vel.end());
 }
 
-// Reference foot height [z_L, z_R] — foot-trajectory command (deploy source = controller's
-// spline generator). Mirrors mjlab_g1_motion g1_mimic_env.calc_ref_foot_height. MUST be the
-// LAST policy obs term (after base_vel + mask), matching the trained obs order.
+// Reference foot height [z_L, z_R]. MUST be the LAST policy obs term (after base_vel + mask),
+// matching the trained obs order.
+//
+// 🔴 원천은 «모드마다 다르다» — mjlab_g1_motion g1_mimic_env.calc_ref_foot_height 그대로:
+//     if loco_controller and use_foot_gen:  return loco_controller.foot_z      # 생성기
+//     else:                                 return mc.body_pos_w[:, feet, 2]   # 레퍼런스 발 world-z
+//   그 분기를 가르는 것은 학습 cfg 에 FOOT_GEN 이 있느냐다.
+//     mode1 (stage4_mode1_env_cfg FOOT_GEN foot_source="lut") -> 생성기
+//     mode2 (stage4_mode2_env_cfg FOOT_GEN foot_source="lut") -> 생성기
+//     mode3 (stage4_mode3_env_cfg 에 FOOT_GEN «없음»)         -> 레퍼런스 발 world-z
+//   mode4/5(/6) 는 마스킹이 mode3 과 같고 같은 head 를 쓰므로 mode3 과 같은 원천이다.
+//
+// 종전 배포는 모든 모드에서 생성기를 냈다. mode>=3 은 base_vel 이 0 으로 마스킹돼 eff=0 →
+// 서있기 게이트 → 항상 {stance_z, stance_z} 상수. 즉 클립/VR 이 발을 들어 올리는 동안에도
+// 정책에겐 «두 발 접지» 라고 말하고 있었다 = 학습과 정면으로 다른 obs.
 REGISTER_OBSERVATION(ref_foot_height)
 {
+    if (g_mask_lower()) {                       // mode >= 3: 레퍼런스 발 z 가 원천
+        auto loader = active_demo_loader();
+        if (g_is_demo()) {                      // mode4/5(/6) = 클립 재생
+            if (loader->has_foot_z) {
+                const auto z = loader->foot_z_clip();
+                return std::vector<float>{ z[0], z[1] };
+            }
+        } else if (loader->vr_override && loader->vr_has_foot_z) {   // mode3 = VR live
+            return std::vector<float>{ loader->vr_foot_z[0], loader->vr_foot_z[1] };
+        }
+        // 폴백: VR 미접속 standby, 또는 발-z 를 못 얻은 클립/구버전 publisher.
+        // 이때 레퍼런스는 «기본 서있는 자세» 이므로 두 발 접지가 맞고, 그 값이 곧
+        // 아래 g_loco.foot_z (mode>=3 에서 항상 {stance_z, stance_z}) 다.
+    }
     return std::vector<float>(g_loco.foot_z.begin(), g_loco.foot_z.end());
 }
 
