@@ -1,9 +1,12 @@
-# mjlab_g1_motion — masked-3mode flow student + foot_z (stage2_masked, masked_footz_v0), G1 29-DOF.
-# Source checkpoint: logs/rsl_rl/g1_student/2026-06-23_16-44-46_masked_footz_v0/model_29999.pt
+# mjlab_g1_motion — masked-3mode flow student, **v3 스택** (v3 deploy base + mode1/2/3 residual), G1 29-DOF.
+# Source: flow base logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt
+#   mode1 s4_mode1_torsotilt_k0p85_resume50k/model_52000 · mode2 s4_mode2_v3base_port5_cwc_steps6_30k/model_28000
+#   mode3 s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997 · manifest g1_flow_specialists_v2.yaml (29클립)
+#   sampling_steps=6, actor [1024,1024,1024,512]. 상세·검증수치·배포예산 = 이 슬롯의 ONNX_META.json
 # Policy ONNX: obs[1,1640] -> actions[1,29].  obs = 10 terms (164D single frame) x history 10.
 # WOSE branch: masked_root_pos_b(3) DROPPED (privileged true pelvis pos, unobservable on real G1).
-#   164D yaml + exported/policy.onnx = wose 1640D multihead (flow_44000 + mode1_20000/mode2_18500/
-#   mode3_19500, parity 2.5e-6, 2026-07-10). sim2sim ready — no C++ rebuild needed (obs data-driven).
+#   ✅ obs 레이아웃은 기존 gmt_multihead_* 와 완전히 동일 -> **C++ 재빌드 불필요**(policy_dir 만 교체).
+#   parity onnxruntime vs torch max|Δ| = 2.265e-06, mask slice (-22,-20) == command_mask OK.
 #
 # ⚠ HISTORY LAYOUT = TERM-MAJOR (must match mjlab ObservationManager):
 #   each term keeps its own history(10), flattened oldest->newest, then terms concatenated:
@@ -139,21 +142,34 @@ gait:
 
 # ── deploy 안전층 (State_Mimic이 로드; 없으면/이상하면 전부 비활성). 값은 sim 튜닝. ──
 safety:
-  enable_pos_clamp: true       # L1-2차 C++ 최종 clamp. pos_min/max == action.clip (바이트 동일),
-                               # blend 는 볼록결합 -> 정상경로 no-op. 최종 보루로만 작동.
+  enable_pos_clamp: true       # L1-2차 C++ 최종 clamp (action.clip이 L1-1차)
+                               # pos_min/max == action.clip (바이트 동일) 이고 blend 는 범위 내
+                               # 두 값의 볼록결합이라 정상경로에선 증명 가능한 no-op. blend 버그·
+                               # NaN 가드 누락 대비 최종 보루로만 작동.
   enable_rate_limit: true      # L2 — 명령 rate 하드캡 (아래 vel_max)
   enable_qd_guard: true         # L3 — 측정 qd 감시 (warn=강제 mode1 / crit=Passive)
   # 위치 한계(기계, deploy 순서 29). action.clip과 동일.
   pos_min: [-2.5307,-0.5236,-2.7576,-0.087267,-0.87267,-0.2618,-2.5307,-2.9671,-2.7576,-0.087267,-0.87267,-0.2618,-2.618,-0.52,-0.52,-3.0892,-1.5882,-2.618,-1.0472,-1.97222,-1.61443,-1.61443,-3.0892,-2.2515,-2.618,-1.0472,-1.97222,-1.61443,-1.61443]
   pos_max: [ 2.8798, 2.9671, 2.7576, 2.8798, 0.5236, 0.2618, 2.8798, 0.5236, 2.7576, 2.8798, 0.5236, 0.2618, 2.618, 0.52, 0.52, 2.6704, 2.2515, 2.618, 2.0944, 1.97222, 1.61443, 1.61443, 2.6704, 1.5882, 2.618, 2.0944, 1.97222, 1.61443, 1.61443]
   # ── L2/L3 임계 — COLMOv2 레퍼런스 실측 기준 ──
-  # 하한 앵커 = 6.0 rad/s: COLMOv2 77클립·827,657프레임의 |q̇| 상한 (29관절·전 카테고리 동일).
+  # 하한 앵커 = 6.0 rad/s: COLMOv2 77클립·827,657프레임의 |q̇| 상한. 29관절 전부, 전 카테고리
+  #   (walk/run/dance/fight/jump/push/obstacle/aiming/fallAndGetUp/ground/multipleActions) 동일하게
+  #   정확히 6.00에서 멈춘다 — joint_vel 과 joint_pos 유한차분 둘 다. 리타겟이 속도제한한 궤적이라
+  #   6.0 = "학습이 본 가장 과격한 속도". 정상 동작은 절대 이 위를 요구하지 않는다.
   # 상한 앵커 = 20.0 rad/s: 하드웨어 최소 velocity_limit (hip_roll·knee = 7520_22).
-  #   이 위로 잡으면 Unitree 온보드 펌웨어 보호정지가 먼저 걸려 우리 가드가 무의미해진다.
-  # 사다리:  warn 12 < vel_max 15 < crit 18 < hw 20.  상세 유도 = cwc_scratch/params/deploy.yaml
-  # warn/crit = 측정 q̇ (포락 6.0 의 ×2.0 / ×3.0). vel_max = 명령 target rate 캡 —
-  #   COLMOv2 |dq_des| p99.9=15.3 / max=19.1 -> 15.0 은 프레임 0.126% 에서만 개입.
-  vel_max: 15.0                 # rad/s — 1kHz tick당 0.015 rad 캡. 개입률 0.126%
-  qd_warn: 12.0                 # rad/s — 지속 시 강제 mode1 (mode1 에선 no-op)
-  qd_crit: 18.0                 # rad/s — 지속 시 Passive(damping). hw 20 아래
-  over_ticks: 5                 # 연속 초과 틱(0.1s@50Hz). 접지 충격 스파이크 기각용
+  #   이 위로 잡으면 무릎에서 Unitree 온보드 펌웨어 보호정지가 먼저 걸려 우리 가드가 무의미해진다.
+  #   (구 qd_crit 25.0 이 정확히 그 상태였음 — 켰어도 무릎은 못 잡았다.)
+  # 사다리:  warn 12 < vel_max 15 < crit 18 < hw 20   전부 펌웨어보다 먼저 우리가 잡는다.
+  # ⚠ warn/crit 과 vel_max 는 서로 다른 신호를 보므로 앵커도 다르다.
+  #   warn/crit = 측정 q̇  -> 포락 6.0 (위 앵커). 그 ×2.0 / ×3.0.
+  #   vel_max   = 명령 target rate -> 포락이 훨씬 크다. 완전추종 목표
+  #     q_des = q_ref + (kd/kp)·q̇_ref  (kd/kp = 0.0637s, 전 관절 균일) 로부터
+  #     COLMOv2 |dq_des| = p50 4.8 / p99 12.2 / p99.9 15.3 / max 19.1 rad/s.
+  #   -> vel_max 15.0 은 프레임의 0.126%(1/800)에서만 개입. 18.0 이면 0.006%(사실상 무개입),
+  #      10.0 이면 4.6% 로 정상 동작을 방해한다. 15 = 보호와 무간섭의 절충.
+  #      실기에서 빠른 동작이 굼떠 보이면 18.0 으로 올릴 것 (재빌드 불필요).
+  vel_max: 15.0                 # rad/s — 명령 rate 캡. 1kHz tick당 0.015 rad. 개입률 0.126%
+  qd_warn: 12.0                 # rad/s — 측정 q̇ ×2.0. 지속 시 강제 mode1
+                                #   (mode1 에선 g_req_mode==1 이라 같은 틱에 해제 = no-op, 오탐 무해)
+  qd_crit: 18.0                 # rad/s — 측정 q̇ ×3.0. 지속 시 Passive(damping). hw 20 아래
+  over_ticks: 5                 # 연속 초과 틱(0.1s@50Hz). 접지 충격 스파이크(1~2틱) 기각용
