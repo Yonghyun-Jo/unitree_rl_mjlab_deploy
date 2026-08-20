@@ -476,7 +476,7 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
                 if (trip && !mon_exit_reason_) {
                     mon_exit_reason_ = "bad_orientation";
                     spdlog::warn("[safety] bad_orientation TRIPPED  tilt={:.1f}deg (limit 57.3) -> Passive", tilt_deg);
-                    safety_log_.event(0.0, "bad_orientation", -1, "", tilt_deg, 57.3f, "-> Passive");
+                    safety_log_.event("bad_orientation", -1, "", tilt_deg, 57.3f, "-> Passive");
                 }
                 return trip;
             },
@@ -813,7 +813,7 @@ void State_Mimic::enter()
                     spdlog::error("[safety] qd_crit LATCHED  |qd|={:.2f} rad/s @ {} {} (crit {:.1f} 을 {}틱 연속 초과) -> Passive",
                                   qd_now, qd_j, jname(qd_j), js_qd_crit_, js_over_ticks_);
                 if (!crit_before && crit_l)
-                    safety_log_.event(0.0, "qd_crit", qd_j, jname(qd_j), qd_now, js_qd_crit_, "-> Passive");
+                    safety_log_.event("qd_crit", qd_j, jname(qd_j), qd_now, js_qd_crit_, "-> Passive");
                 // warn 수동복귀: 조작자가 mode1(X/'1')을 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
                 if (js_qd_warn_latched_ && reqd == 1) js_qd_warn_latched_ = false;
                 // 해제 뒤에 로그 → mode1 에서는 같은 틱에 풀리므로(=no-op) 스팸이 안 난다.
@@ -821,7 +821,7 @@ void State_Mimic::enter()
                     spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> mode1 강제. 복귀=키 '1'",
                                  qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
                 if (!warn_before && js_qd_warn_latched_)
-                    safety_log_.event(0.0, "qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> mode1 강제");
+                    safety_log_.event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> mode1 강제");
                 if (js_qd_warn_latched_) g_cmd_mode = 1;   // g_poll_vr 뒤에 덮어써 mode1 유지(soft)
                 // crit은 아래 registered_check가 Passive로 전이시킴(여기선 latch만).
             }
@@ -881,7 +881,7 @@ void State_Mimic::enter()
                     else                    spdlog::info("[diag:policy] {}", d_buf + 7);
                     // 안전층 누적값을 1 Hz 로 시간축에 편다. I/O 는 «여기(50Hz)» 에서만 —
                     // 1 kHz 안전 루프는 이 파일을 건드리지 않는다.
-                    safety_log_.sample(diag.t_now(), mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_,
+                    safety_log_.sample(mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_,
                                        mon_rate_ticks_, mon_rate_max_, mon_rate_joint_,
                                        mon_tilt_max_deg_, &jname);
                     if (d_csv) {

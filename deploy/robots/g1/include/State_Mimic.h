@@ -2,6 +2,7 @@
 
 #include "FSM/State_RLBase.h"
 #include "JointSafety.h"
+#include "SafetyLog.h"
 #include <cnpy.h>
 #include <array>
 #include <atomic>
@@ -36,6 +37,9 @@ private:
     bool policy_thread_running = false;
     std::array<float, 2> time_range_;
 
+    // ── 모드별 발-z 생성 조건 (MaskedLocoController::mode_gait) ──
+    void load_gait_cfg(const YAML::Node& g);
+
     // ── deploy 안전층 config/state (JointSafety.h) ──
     void load_safety_cfg(const YAML::Node& s);
     bool  js_enable_pos_clamp_ = false;
@@ -67,6 +71,8 @@ private:
     float mon_rate_max_  = 0.f;  int mon_rate_joint_  = -1;
     float mon_qd_max_    = 0.f;  int mon_qd_joint_    = -1;
     float mon_tilt_max_deg_ = 0.f;
+    // 안전층 사건을 «파일로» 남긴다. 세는 일은 위 mon_* 가 이미 한다 — 여기선 기록만.
+    g1::SafetyLog safety_log_;
     const char* mon_exit_reason_ = nullptr;   // null = 조작자 전이(p/v) 또는 정상 종료
 };
 
