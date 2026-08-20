@@ -3,6 +3,9 @@
 #include "FSM/State_FixStand.h"
 #include "FSM/State_RLBase.h"
 #include "State_Mimic.h"
+#include <atomic>
+#include <cmath>
+#include <mutex>
 #include <cstdio>
 #include <csignal>
 #include <termios.h>
@@ -32,14 +35,38 @@ std::shared_ptr<Keyboard> FSMState::keyboard = std::make_shared<Keyboard>();
 
 void init_fsm_state(bool allow_lowcmd_conflict)
 {
-    auto lowcmd_sub = std::make_shared<unitree::robot::g1::subscription::LowCmd>();
-    usleep(0.2 * 1e6);
+    // 이미 누군가 rt/lowcmd 를 발행 중 = 다른 컨트롤러가 살아있다(크래시 후 orphan 포함).
+    // 둘 다 모터 명령을 인가하면 토크가 충돌해 policy 와 무관하게 즉시 낙상한다.
+    //
+    // 🔴 «몇 건 왔고 그 명령이 무엇인지» 까지 보고한다. 예전엔 "close it first" 와
+    //    `pgrep -x g1_ctrl` 만 안내했는데, 발행자가 g1_ctrl 이 아니면(로봇 고수준 서비스,
+    //    다른 사용자, ArmSdk 등) pgrep 이 비어서 조작자가 «오탐인가?» 로 오해하고
+    //    --allow-lowcmd-conflict 로 우회하게 된다. 그게 이 검사가 막으려던 바로 그 상황이다.
+    //    (2026-08-20 실제로 그렇게 오해했다.)
+    std::atomic<int> lowcmd_seen{0};
+    unitree_hg::msg::dds_::LowCmd_ lowcmd_sample{};
+    auto lowcmd_sub = std::make_shared<unitree::robot::g1::subscription::LowCmd>(
+        "rt/lowcmd");
+    usleep(0.6 * 1e6);   // timeout_ms_(1000) 보다 짧게 — 그 안에 오면 «지금» 발행 중이다
     if(!lowcmd_sub->isTimeout())
     {
-        // 이미 누군가 rt/lowcmd 를 발행 중 = 다른 컨트롤러가 살아있다(크래시 후 orphan 포함).
-        // 둘 다 모터 명령을 인가하면 토크가 충돌해 policy 와 무관하게 즉시 낙상한다.
+        {   // 마지막 수신 명령을 들여다본다. kp>0 이면 «능동 제어», 전부 0 이면 관성/대기다.
+            std::lock_guard<std::mutex> lk(lowcmd_sub->mutex_);
+            lowcmd_sample = lowcmd_sub->msg_;
+        }
+        float kp_max = 0.f, tau_max = 0.f;
+        for(size_t i = 0; i < 29 && i < lowcmd_sample.motor_cmd().size(); ++i) {
+            kp_max  = std::max(kp_max,  std::abs(lowcmd_sample.motor_cmd()[i].kp()));
+            tau_max = std::max(tau_max, std::abs(lowcmd_sample.motor_cmd()[i].tau()));
+        }
         spdlog::critical("The other process is using the lowcmd channel, please close it first.");
+        spdlog::critical("  수신한 명령: kp_max={:.1f} tau_max={:.2f}  ({})",
+                         kp_max, tau_max,
+                         kp_max > 0.f ? "🔴 능동 제어 중 — 모터를 잡고 있다"
+                                      : "kp=0 — 대기/댐핑 상태지만 채널은 점유 중");
         spdlog::critical("  확인: pgrep -x g1_ctrl   (반드시 -x. pgrep -f 는 검색 명령 자신을 self-match 해 오탐)");
+        spdlog::critical("  ⚠ pgrep 이 비어도 «오탐이 아니다» — 발행자가 g1_ctrl 이 아닐 수 있다");
+        spdlog::critical("     (로봇 고수준 서비스 / 다른 사용자 / ArmSdk 등). 채널에 실제로 명령이 흐르고 있다.");
         spdlog::critical("  정리: pkill -x g1_ctrl   (남의 세션일 수 있으니 확인 후)");
         unitree::robot::go2::shutdown();
         if(!allow_lowcmd_conflict)
