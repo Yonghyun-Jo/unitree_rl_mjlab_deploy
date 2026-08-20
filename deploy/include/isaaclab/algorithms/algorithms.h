@@ -67,6 +67,16 @@ public:
         action.resize(output_shape[1]);
     }
 
+    // 이 모델이 받는 입력을 0 으로 채워 돌려준다. 진단용 부하 주입이 입력 이름/크기를
+    // 손으로 적지 않아도 되게 — 손으로 적으면 모델을 바꿀 때마다 조용히 틀린다.
+    std::unordered_map<std::string, std::vector<float>> zero_obs() const
+    {
+        std::unordered_map<std::string, std::vector<float>> o;
+        for (size_t i = 0; i < input_names.size(); ++i)
+            o[std::string(input_names[i])] = std::vector<float>(input_sizes[i], 0.0f);
+        return o;
+    }
+
     std::vector<float> act(std::unordered_map<std::string, std::vector<float>> obs)
     {
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);

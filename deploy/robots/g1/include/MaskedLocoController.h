@@ -8,11 +8,27 @@
 // (cmd_mode, joystick base_vel, internal counters) — NO privileged sim state. Pure C++
 // (no Eigen) so it compiles/tests stand-alone and ports anywhere. Single robot (N=1).
 #pragma once
+#include "GaitLut.h"
 #include <array>
 #include <algorithm>
 #include <cmath>
 
 struct MaskedLocoController {
+  // ---- 모드별 발-z 생성 조건 (deploy.yaml `gait:` 에서 로드) ----------------------
+  // ⚠ head 마다 학습 시점이 달라 foot_z 생성 조건이 다르다. 하나로 통일하면 반드시 절반이
+  //   어긋난다 — 배포 중인 ONNX 의 각 head 가 무엇으로 학습됐는지는 ONNX_META.json 의
+  //   mode{1,2,3}_ckpt 를 그 시점 stage4_mode{N}_env_cfg.py 의 FOOT_GEN 과 대조해 정한다.
+  // 기본값 = 종전 C++ 동작(quintic, height_scale 1.0, deadzone 없음). yaml 이 없거나
+  //   파싱이 실패하면 이 기본값이 남아 기존 거동이 그대로 유지된다(fail-safe).
+  struct ModeGait {
+    bool  lut             = false;    // true = 데이터 적합 LUT, false = quintic
+    float height_scale    = 1.0f;     // quintic 전용 (LUT 은 표 자체가 진폭을 갖는다)
+    float stance_z        = 0.066f;   // LUT 이면 로드 시 GL_STANCE_Z 로 덮어씀
+    float stand_deadzone  = 0.0f;     // eff < 이 값이면 base_vel = 0 (그 모드에서만)
+  };
+  std::array<ModeGait, 6> mode_gait{};   // index = cmd_mode (1..5). [0]은 미사용.
+  float walk_max = 1.2f, run_min = 1.7f; // LUT gait 히스테리시스 경계
+
   // ---- params (must match golden_loco_controller.json "params") ----
   int   period_steps = 43;
   float stance_z     = 0.066f;
@@ -33,7 +49,9 @@ struct MaskedLocoController {
   float arm_scale = 1.0f;                            // 1=policy, <1=ease arms to default
 
   // ---- state ----
-  int   phase = 0;
+  int   phase   = 0;        // quintic: 정수 위상 (period_steps 로 나눔)
+  float phase_f = 0.0f;     // LUT: 실수 위상 [0,1), 보폭 주파수로 진행
+  bool  is_run  = false;    // LUT: walk/run 1비트 (히스테리시스, 속도로 추론하지 않음)
   std::array<float, 3> bv_last = {0.f, 0.f, 0.f};
   std::array<float, 3> bv_ramp_from = {0.f, 0.f, 0.f};
   float bv_blend = 1.0f;
@@ -112,6 +130,11 @@ struct MaskedLocoController {
 
   // Advance one control step; cache base_vel / foot_z / arm_scale. Call ONCE per step pre-obs.
   void update(const std::array<float, 3>& joystick_bv, int cmd_mode) {
+    // 0) 이번 스텝에 쓸 모드별 발-z 조건을 고른다. gen_foot_z 가 멤버를 읽으므로 여기서
+    //    멤버에 실어 준다(시그니처 유지 -> 기존 golden 테스트 그대로 통과).
+    const ModeGait& mg = mode_gait[std::max(1, std::min(cmd_mode, 5))];
+    height_scale = mg.height_scale;
+    stance_z     = mg.stance_z;
     // 1) base_vel spline (lerp last->target), then mask mode3.
     if (bv_ramp_rem > 0) {
       bv_ramp_rem -= 1;
@@ -122,12 +145,29 @@ struct MaskedLocoController {
       for (int i = 0; i < 3; ++i) bv[i] = bv_ramp_from[i] + (bv[i] - bv_ramp_from[i]) * bv_blend;
     }
     if (cmd_mode >= 3) bv = {0.f, 0.f, 0.f};
+    // 1-b) standing deadzone: 아주 작은 명령은 0 으로 눌러 «서있기» 로 보낸다. 학습(mode2)
+    //      에서 clip 의 vx/wz 가 완전히 0 이 안 돼 계속 구르던 것을 막으려고 넣은 것이라,
+    //      배포에 없으면 같은 명령에도 학습은 서있고 배포는 걷는다 = obs 두 항(base_vel +
+    //      foot_z)이 동시에 어긋난다. 파이썬은 cmd_mode==2 로 하드게이팅하는데, 여기서는
+    //      모드별 표가 그 역할을 한다(mode2 에만 값을 주면 동일).
+    if (mg.stand_deadzone > 0.0f &&
+        effective_speed(bv[0], bv[1], bv[2]) < mg.stand_deadzone) {
+      bv = {0.f, 0.f, 0.f};
+    }
     bv_last = bv;
     base_vel = bv;
-    // 2) foot_z from the SPLINED command.
-    phase = (phase + 1) % period_steps;
-    const float phase01 = float(phase) / period_steps;
-    foot_z = gen_foot_z(phase01, effective_speed(bv[0], bv[1], bv[2]));
+    // 2) foot_z from the SPLINED command. LUT 이면 실수 위상시계(보폭 주파수로 진행),
+    //    아니면 종전 고정주기 quintic. 파이썬과 같이 «활성 분기의 위상만» 진행시킨다.
+    const float eff = effective_speed(bv[0], bv[1], bv[2]);
+    if (mg.lut) {
+      is_run  = gl_select_gait(eff, is_run, walk_max, run_min);
+      phase_f = std::fmod(phase_f + gl_stride_freq(eff, is_run) / 50.0f, 1.0f);  // 50Hz 제어
+      gl_foot_z(phase_f, eff, is_run, foot_z[0], foot_z[1]);
+    } else {
+      phase = (phase + 1) % period_steps;
+      const float phase01 = float(phase) / period_steps;
+      foot_z = gen_foot_z(phase01, eff);
+    }
     // 3) arm-blend: ease-in (1->0 over _in) then release (0->1 over _out).
     if (arm_rem > 0) {
       const int out = arm_blend_out;

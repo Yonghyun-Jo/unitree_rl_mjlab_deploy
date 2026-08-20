@@ -117,6 +117,24 @@ observations:
     scale: [1.0, 1.0]
     history_length: 10
 
+# ── 모드별 발-z 생성 조건 (MaskedLocoController; State_Mimic::load_gait_cfg 가 로드) ──
+# head 마다 학습 시점이 달라 foot_z 생성기가 다르다. 하나로 통일하면 반드시 어느 head 하나가
+# 학습과 다른 발-z 명령을 받는다. 근거 = ONNX_META.json 의 mode{N}_ckpt 를 그 시점
+# stage4_mode{N}_env_cfg.py 의 FOOT_GEN 과 대조 (git show <commit>:<cfg> 로 복원):
+#   mode1 = 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5 -> foot_source="lut" (데이터 적합 표)
+#   mode2 = 2026-07-09_22-43-28_wose_full_mode2_v0       -> quintic, height_scale 1.2, stand_deadzone 0.15
+#   mode3 = 2026-08-06_00-42-02_mode3_cwc_scratch        -> foot_gen 미사용(= 클립 발 world-z).
+#           배포는 그 값을 알 수 없어 생성기를 그대로 쓴다 = 남은 불일치(1640 중 2 dim). 별도 과제.
+# mode4/5(데모 클립)는 미지정 -> C++ 기본값(quintic, height_scale 1.0) = 종전 동작 그대로.
+# ⚠ ONNX 를 새로 구우면 이 표와 tests/test_loco_gait_modes.cpp 의 골든벡터를 같이 갱신할 것.
+#   (mode1/mode2 head 는 v0 / cwc / cop_slip / cwc_scratch 네 변종에서 initializer 바이트 동일 — 확인함.)
+gait:
+  walk_max: 1.2        # lut gait 히스테리시스 — 이 아래면 walk
+  run_min: 1.7         #                        이 위면 run, 사이는 직전 상태 유지
+  mode1: {source: lut}
+  mode2: {source: quintic, height_scale: 1.2, stand_deadzone: 0.15}
+  mode3: {source: quintic}    # 학습과 다름(위 참조) — 종전 배포 동작을 그대로 둔 것
+
 # ── deploy 안전층 (State_Mimic이 로드; 없으면/이상하면 전부 비활성). 값은 sim 튜닝. ──
 safety:
   enable_pos_clamp: true       # L1-2차 C++ 최종 clamp. pos_min/max == action.clip (바이트 동일),
