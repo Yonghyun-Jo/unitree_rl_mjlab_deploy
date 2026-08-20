@@ -274,7 +274,10 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
     auto ref_quat_w  = motion_anchor_quat_w(loader);
 
     auto rot_ = (init_quat * ref_quat_w).conjugate() * real_quat_w;
-    auto rot = rot_.toRotationMatrix().transpose();
+    // ⚠ auto 금지: toRotationMatrix() 는 Matrix3f 를 값으로 반환 -> .transpose() 는 그 임시를
+    //   참조만 하는 표현식이라 auto 로 받으면 임시 소멸 후 해제된 스택을 읽는다(UB).
+    //   -O0 에선 우연히 맞고 -O2/-O3 에선 쓰레기. 실기(-O3)에서만 터진 원인.
+    const Eigen::Matrix3f rot = rot_.toRotationMatrix().transpose();
 
     Eigen::Matrix<float, 6, 1> data;
     data << rot(0, 0), rot(0, 1), rot(1, 0), rot(1, 1), rot(2, 0), rot(2, 1);
@@ -368,7 +371,10 @@ REGISTER_OBSERVATION(masked_root_ori_b)
             aligned = isaaclab::yawQuaternion(real_quat_w);
         }
         auto rot_ = aligned.conjugate() * real_quat_w;
-        auto rot  = rot_.toRotationMatrix().transpose();
+        // ⚠ auto 금지: toRotationMatrix() 는 Matrix3f 를 값으로 반환 -> .transpose() 는 그 임시를
+        //   참조만 하는 표현식이라 auto 로 받으면 임시 소멸 후 해제된 스택을 읽는다(UB).
+        //   -O0 에선 우연히 맞고 -O2/-O3 에선 쓰레기. 실기(-O3)에서만 터진 원인.
+        const Eigen::Matrix3f rot = rot_.toRotationMatrix().transpose();
         out = { rot(0,0), rot(0,1), rot(1,0), rot(1,1), rot(2,0), rot(2,1) };
     }
     return out;
@@ -470,6 +476,7 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
                 if (trip && !mon_exit_reason_) {
                     mon_exit_reason_ = "bad_orientation";
                     spdlog::warn("[safety] bad_orientation TRIPPED  tilt={:.1f}deg (limit 57.3) -> Passive", tilt_deg);
+                    safety_log_.event(0.0, "bad_orientation", -1, "", tilt_deg, 57.3f, "-> Passive");
                 }
                 return trip;
             },
@@ -649,6 +656,7 @@ void State_Mimic::enter()
     }
 
     motion = motion_; // set for specific motion
+    safety_log_.open_from_env();   // G1_SAFETY_CSV 가 있을 때만 켜진다(기본 꺼짐)
     std::remove("/dev/shm/g1_vr_ref");   // clear any stale VR ref so it can't hijack on entry
                                          // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
     { // mode2/3 hold this neutral pose (robot default) until VR provides a reference — never the clip
@@ -804,12 +812,16 @@ void State_Mimic::enter()
                 if (!crit_before && crit_l)     // 래치되는 에지에서 1회만
                     spdlog::error("[safety] qd_crit LATCHED  |qd|={:.2f} rad/s @ {} {} (crit {:.1f} 을 {}틱 연속 초과) -> Passive",
                                   qd_now, qd_j, jname(qd_j), js_qd_crit_, js_over_ticks_);
+                if (!crit_before && crit_l)
+                    safety_log_.event(0.0, "qd_crit", qd_j, jname(qd_j), qd_now, js_qd_crit_, "-> Passive");
                 // warn 수동복귀: 조작자가 mode1(X/'1')을 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
                 if (js_qd_warn_latched_ && reqd == 1) js_qd_warn_latched_ = false;
                 // 해제 뒤에 로그 → mode1 에서는 같은 틱에 풀리므로(=no-op) 스팸이 안 난다.
                 if (!warn_before && js_qd_warn_latched_)
                     spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> mode1 강제. 복귀=키 '1'",
                                  qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
+                if (!warn_before && js_qd_warn_latched_)
+                    safety_log_.event(0.0, "qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> mode1 강제");
                 if (js_qd_warn_latched_) g_cmd_mode = 1;   // g_poll_vr 뒤에 덮어써 mode1 유지(soft)
                 // crit은 아래 registered_check가 Passive로 전이시킴(여기선 latch만).
             }
@@ -867,6 +879,11 @@ void State_Mimic::enter()
                     // 나중에 「로봇이 이상하다」로만 보인다.
                     if (diag.overrun() > 0) spdlog::warn("[diag:policy] {}", d_buf + 7);
                     else                    spdlog::info("[diag:policy] {}", d_buf + 7);
+                    // 안전층 누적값을 1 Hz 로 시간축에 편다. I/O 는 «여기(50Hz)» 에서만 —
+                    // 1 kHz 안전 루프는 이 파일을 건드리지 않는다.
+                    safety_log_.sample(diag.t_now(), mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_,
+                                       mon_rate_ticks_, mon_rate_max_, mon_rate_joint_,
+                                       mon_tilt_max_deg_, &jname);
                     if (d_csv) {
                         char c[512];
                         diag.format_csv(c, sizeof c);
@@ -884,6 +901,7 @@ void State_Mimic::enter()
         load_run = false;
         if (load_th.joinable()) load_th.join();
         if (d_csv) std::fclose(d_csv);
+        safety_log_.close();
     });
 }
 
