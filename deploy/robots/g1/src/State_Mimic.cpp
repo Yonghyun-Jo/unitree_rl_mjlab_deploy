@@ -87,7 +87,21 @@ static std::string g_kb_last = "";
 // deploy base_vel caps — set to the TRAINING base_vel range (20-motion manifest, yaw-local):
 //   vx p99=3.10 (max 5.4) → 3.0 (running OK);  vy |.|p99=1.88 (lateral sparse) → 1.5;
 //   wz |.|p99=4.88 → 2.0 (turning).
-static constexpr float KB_STEP = 0.1f, KB_MAXVX = 3.0f, KB_MAXVY = 1.5f, KB_MAXW = 2.0f;
+// 🔴 base_vel 하드캡 = «학습 봉투» 다. 임의로 키우면 그만큼 OOD 로 나간다.
+//   출처: mjlab_g1_motion/tasks/stage4_mode1_env_cfg.py:39
+//     CMD_BASE_VEL = vx(-1.5, 2.5) · vy(-0.8, 0.8) · wz(-2.0, 2.0)
+//   ⚠ vx 는 «비대칭» 이다 — 전진 2.5 / 후진 1.5. 대칭 클램프로 두면 후진이 학습의 1.67배로 나간다.
+//   종전 값(3.0 / 1.5 / 2.0)의 근거는 «20-motion manifest 클립 속도 p99» 였는데, 지금 mode1 은
+//   클립이 아니라 CMD_BASE_VEL 로 학습한다 = 낡은 근거였다. 후진 2.0배·횡 1.9배 OOD 였다.
+//   ⚠ mode2 봉투는 더 좁다(stage4_mode2_env_cfg.py:41 — vx(-1.0, 1.5)). 여기 값은 mode1 기준이라
+//     mode2 에선 여전히 전진 1.67배가 가능하다. 모드별 봉투 분리는 별건으로 남겨 둔다.
+static constexpr float KB_STEP     = 0.1f;
+static constexpr float VX_MAX_FWD  = 2.5f;   // 전진 상한
+static constexpr float VX_MAX_BWD  = 1.5f;   // 후진 상한(크기)
+static constexpr float KB_MAXVY    = 0.8f;
+static constexpr float KB_MAXW     = 2.0f;
+// vx 전용 비대칭 클램프. 이 함수 밖에서 vx 를 clamp 하지 말 것(대칭으로 새기 쉽다).
+static inline float clamp_vx(float v) { return std::clamp(v, -VX_MAX_BWD, VX_MAX_FWD); }
 
 // ── Optional browser-GUI control channel (mjlab-style viser GUI -> shared memory) ──
 // A Python viser GUI (deploy/robots/g1/tools/masked_gui.py) writes this packed struct to
@@ -209,8 +223,8 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     g_kb_last = k;
     if (k.empty()) return;
     bool vel_changed = false;
-    if      (k == "w") { g_kb_vx = std::clamp(g_kb_vx + KB_STEP, -KB_MAXVX, KB_MAXVX); vel_changed = true; }  // forward
-    else if (k == "s") { g_kb_vx = std::clamp(g_kb_vx - KB_STEP, -KB_MAXVX, KB_MAXVX); vel_changed = true; }  // backward
+    if      (k == "w") { g_kb_vx = clamp_vx(g_kb_vx + KB_STEP); vel_changed = true; }  // forward
+    else if (k == "s") { g_kb_vx = clamp_vx(g_kb_vx - KB_STEP); vel_changed = true; }  // backward
     else if (k == "a") { g_kb_vy = std::clamp(g_kb_vy + KB_STEP, -KB_MAXVY, KB_MAXVY); vel_changed = true; }  // strafe left
     else if (k == "d") { g_kb_vy = std::clamp(g_kb_vy - KB_STEP, -KB_MAXVY, KB_MAXVY); vel_changed = true; }  // strafe right
     else if (k == "q") { g_kb_wz = std::clamp(g_kb_wz + KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CCW (반시계)
@@ -244,22 +258,23 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
 
 // Raw joystick + keyboard base_vel target [vx,vy,wz] (UNmasked; the controller masks mode3).
 // Fed to g_loco.update() each step; base_vel_command obs returns the controller's splined value.
-// ⚠ V_LIN/V_ANG (joystick) and KB_MAXV/W (keyboard) should match the training base_vel
-// distribution (clip pelvis velocity, ~m/s); tune in sim2sim.
+// ⚠ 조이스틱 스케일과 키보드 캡은 «학습 봉투»(CMD_BASE_VEL)와 같아야 한다 — 위 상수 주석 참조.
 static std::array<float, 3> g_joystick_base_vel(isaaclab::ManagerBasedRLEnv* env)
 {
     float jx = 0.0f, jy = 0.0f, jw = 0.0f;
     if (auto joy = env->robot->data.joystick) {
         // full-stick = the deploy cap (training range), consistent with GUI/PICO.
-        constexpr float V_LIN_X = 3.0f, V_LIN_Y = 1.5f, V_ANG = 2.0f, DEAD = 0.08f;
+        constexpr float DEAD = 0.08f;
         // deadzone: a real pad always exists (data.joystick != null); centered-stick drift
         // would otherwise ADD to the GUI/keyboard command and make the robot judder.
         auto dz = [](float v, float d) { return std::abs(v) < d ? 0.0f : v; };
-        jx =  V_LIN_X * dz(joy->ly(), DEAD);
-        jy = -V_LIN_Y * dz(joy->lx(), DEAD);
-        jw = -V_ANG   * dz(joy->rx(), DEAD);
+        // 풀스틱 = 학습 봉투의 끝. vx 는 미는 방향에 따라 스케일이 다르다(전진 2.5 / 후진 1.5).
+        const float sx = dz(joy->ly(), DEAD);
+        jx =  sx * (sx >= 0.0f ? VX_MAX_FWD : VX_MAX_BWD);
+        jy = -KB_MAXVY * dz(joy->lx(), DEAD);
+        jw = -KB_MAXW  * dz(joy->rx(), DEAD);
     }
-    return { std::clamp(g_kb_vx + jx, -KB_MAXVX, KB_MAXVX),
+    return { clamp_vx(g_kb_vx + jx),
              std::clamp(g_kb_vy + jy, -KB_MAXVY, KB_MAXVY),
              std::clamp(g_kb_wz + jw, -KB_MAXW, KB_MAXW) };
 }

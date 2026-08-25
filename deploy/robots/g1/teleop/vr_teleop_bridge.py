@@ -210,7 +210,7 @@ def main() -> None:
     # 풀스틱 캡. 배포 하드캡(State_Mimic.cpp KB_MAXVX/VY/W = 3.0/1.5/2.0, tools/gui_shm.py 와 동일)
     # 안쪽으로 vx/vy 는 여유를 두고, wz 만 하드캡과 같다. ⚠ 하드캡보다 크게 줘도 C++ 에서 잘린다.
     ap.add_argument("--vx", type=float, default=2.5, help="base_vel vx cap (m/s) at full stick")
-    ap.add_argument("--vy", type=float, default=1.2, help="base_vel vy cap")
+    ap.add_argument("--vy", type=float, default=0.8, help="base_vel vy cap")   # 학습 봉투 vy_range=(-0.8, 0.8)
     ap.add_argument("--wz", type=float, default=2.0, help="base_vel wz cap (rad/s)")
     ap.add_argument("--no-body-transform", action="store_true",
                     help="skip Unity->RH + quat reorder (only if publisher already sends processed body)")

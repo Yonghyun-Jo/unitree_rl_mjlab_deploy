@@ -312,12 +312,18 @@ DISPLAY=:1 xmodmap -pke | grep -E "^keycode +(41|<잡힌값>) "     # 41 = f
 
 | 경로 | 풀스틱/슬라이더 최대 (vx, vy, wz) | 위치 |
 |---|---|---|
-| PICO 썸스틱 (브릿지) | **2.5 / 1.2 / 2.0** | `vr_teleop_bridge.py` `--vx/--vy/--wz` 기본값 |
-| 브라우저 GUI 슬라이더 | 3.0 / 1.5 / 2.0 | `tools/gui_shm.py` `VXCAP/VYCAP/WCAP` |
-| 게임패드 스틱 | 3.0 / 1.5 / 2.0 | `State_Mimic.cpp:194` |
-| **C++ 하드캡(최종 클램프)** | **3.0 / 1.5 / 2.0** | `State_Mimic.cpp:47` `KB_MAXVX/VY/W` → `:202` |
+| PICO 썸스틱 (브릿지) | **2.5 / 0.8 / 2.0** | `vr_teleop_bridge.py` `--vx/--vy/--wz` 기본값 |
+| 브라우저 GUI 슬라이더 | +2.5 / −1.5 / 0.8 / 2.0 | `tools/gui_shm.py` `VXCAP/VXCAP_BWD/VYCAP/WCAP` |
+| 게임패드 스틱 | +2.5 / −1.5 / 0.8 / 2.0 | `State_Mimic.cpp` `g_joystick_base_vel` |
+| **C++ 하드캡(최종 클램프)** | **+2.5 / −1.5 / 0.8 / 2.0** | `State_Mimic.cpp` `VX_MAX_FWD/VX_MAX_BWD/KB_MAXVY/KB_MAXW` → `clamp_vx` |
 
-- 하드캡 = **학습 base_vel 범위**(20-motion manifest, yaw-local). 그보다 크게 줘도 C++ 에서 잘린다.
+- 🔴 **하드캡 = 학습 봉투** `stage4_mode1_env_cfg.CMD_BASE_VEL` = `vx(-1.5, 2.5) · vy(-0.8, 0.8) · wz(-2.0, 2.0)`.
+  **vx 는 비대칭이다** — 후진 상한이 전진의 60 % 다.
+- ⚠ 2026-08-25 이전 값(3.0 / 1.5 / 2.0)의 근거는 «20-motion manifest 클립 속도 p99» 였는데,
+  지금 mode1 은 클립이 아니라 `CMD_BASE_VEL` 로 학습한다 = **낡은 근거**였다.
+  그 값으로는 후진이 학습의 **2.0배**, 횡이 **1.9배** OOD 로 나갔다.
+- ⚠ **mode2 봉투는 더 좁다**(`stage4_mode2_env_cfg` — `vx(-1.0, 1.5)`). 위 캡은 mode1 기준이라
+  mode2 에선 여전히 전진 1.67배가 가능하다. 모드별 봉투 분리는 미구현.
 - ⚠ 최종 클램프는 `g_kb_* + 게임패드 스틱`의 **합**에 걸린다 → 패드가 꽂혀 있으면 데드존(0.08)
   밖 드리프트가 PICO 명령에 더해진다.
 - 낮추려면 브릿지 실행에 `--vx 1.5` 처럼 준다(코드 수정 불필요). 2026-08-13 이전 기본값은

@@ -16,9 +16,13 @@ MAGIC = 0x6701
 #   magic  seq  cmd_mode  vx  vy  wz  period_steps  height_scale  turn_k
 FMT = "<iIifffiff"
 
-# Deploy velocity caps = TRAINING base_vel range (match C++ KB_MAXVX/VY/W). Clamped again in C++.
-#   vx p99=3.10 → 3.0 (running);  vy |.|p99=1.88 (lateral sparse) → 1.5;  wz |.|p99=4.88 → 2.0.
-VXCAP, VYCAP, WCAP = 3.0, 1.5, 2.0
+# Deploy velocity caps = TRAINING base_vel range. C++ State_Mimic.cpp 의
+#   VX_MAX_FWD / VX_MAX_BWD / KB_MAXVY / KB_MAXW 와 같아야 한다 (C++ 가 한 번 더 clamp 한다).
+# 출처: mjlab_g1_motion/tasks/stage4_mode1_env_cfg.py:39
+#   CMD_BASE_VEL = vx(-1.5, 2.5) · vy(-0.8, 0.8) · wz(-2.0, 2.0)
+# ⚠ vx 비대칭. 종전 값(3.0/1.5/2.0)은 «클립 속도 p99» 근거였는데 mode1 은 클립이 아니라
+#   CMD_BASE_VEL 로 학습하므로 낡은 근거였다.
+VXCAP, VXCAP_BWD, VYCAP, WCAP = 2.5, 1.5, 0.8, 2.0
 
 
 def clamp(x: float, lo: float, hi: float) -> float:

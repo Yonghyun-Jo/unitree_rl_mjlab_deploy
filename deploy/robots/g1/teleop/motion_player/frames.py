@@ -12,9 +12,13 @@ import numpy as np
 
 from .clips import ClipData, DeployProfile
 
-# 배포 base_vel 캡 — C++ KB_MAXVX / KB_MAXVY / KB_MAXW 와 동일해야 한다.
-CAP_VX = 3.0
-CAP_VY = 1.5
+# 배포 base_vel 캡 — C++ State_Mimic.cpp 의 VX_MAX_FWD / VX_MAX_BWD / KB_MAXVY / KB_MAXW 와
+# 동일해야 한다. 출처는 학습 봉투 stage4_mode1_env_cfg.CMD_BASE_VEL:
+#   vx(-1.5, 2.5) · vy(-0.8, 0.8) · wz(-2.0, 2.0)
+# ⚠ vx 는 비대칭이다. 여기서 대칭으로 두면 C++ 가 다시 자르므로 «보낸 값과 도는 값이 달라진다».
+CAP_VX_FWD = 2.5
+CAP_VX_BWD = 1.5
+CAP_VY = 0.8
 CAP_WZ = 2.0
 
 _IDENTITY_QUAT = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
@@ -101,7 +105,7 @@ def yaw_local_base_vel(quat_wxyz, lin_vel_w, ang_vel_w) -> tuple[float, float, f
 
 
 def clamp_base_vel(bv) -> tuple[float, float, float]:
-    return (min(CAP_VX, max(-CAP_VX, float(bv[0]))),
+    return (min(CAP_VX_FWD, max(-CAP_VX_BWD, float(bv[0]))),
             min(CAP_VY, max(-CAP_VY, float(bv[1]))),
             min(CAP_WZ, max(-CAP_WZ, float(bv[2]))))
 

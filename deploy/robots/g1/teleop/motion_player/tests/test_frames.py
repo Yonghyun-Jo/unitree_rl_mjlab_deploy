@@ -113,7 +113,9 @@ def test_yaw_local_base_vel_90deg():
 
 
 def test_clamp_base_vel():
-    assert frames.clamp_base_vel((99.0, -99.0, 99.0)) == (3.0, -1.5, 2.0)
+    # 학습 봉투 CMD_BASE_VEL: vx 는 비대칭(전진 2.5 / 후진 1.5), vy 0.8, wz 2.0
+    assert frames.clamp_base_vel((99.0, -99.0, 99.0)) == (2.5, -0.8, 2.0)
+    assert frames.clamp_base_vel((-99.0, 99.0, -99.0)) == (-1.5, 0.8, -2.0)
     print("  ok clamp_base_vel")
 
 
@@ -123,9 +125,11 @@ def test_mode3_zeroes_base_vel():
     f = frames.play_frame(c, 0, speed=1.0, mode=3, base_vel_kind="manual", manual_bv=(1.0, 1.0, 1.0),
                           f_entry=0)
     assert f.base_vel == (0.0, 0.0, 0.0), f.base_vel
-    f2 = frames.play_frame(c, 0, speed=1.0, mode=2, base_vel_kind="manual", manual_bv=(1.0, 1.0, 1.0),
+    # mode2 는 그대로 통과시킨다. 봉투 «안» 의 값을 쓴다 — 캡 자체는 test_clamp_base_vel 담당이고,
+    # 여기서 봉투 밖 값을 쓰면 캡이 바뀔 때마다 이 테스트가 같이 깨진다(vy 1.5 -> 0.8 때 실제로 깨졌다).
+    f2 = frames.play_frame(c, 0, speed=1.0, mode=2, base_vel_kind="manual", manual_bv=(1.0, 0.5, 1.0),
                            f_entry=0)
-    assert f2.base_vel == (1.0, 1.0, 1.0), f2.base_vel
+    assert f2.base_vel == (1.0, 0.5, 1.0), f2.base_vel
     print("  ok mode3_zeroes_base_vel")
 
 
