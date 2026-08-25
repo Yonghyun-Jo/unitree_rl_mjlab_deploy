@@ -3,6 +3,7 @@
 #include "FSM/State_RLBase.h"
 #include "JointSafety.h"
 #include "SafetyLog.h"
+#include "StateDump.h"
 #include <cnpy.h>
 #include <array>
 #include <atomic>
@@ -75,6 +76,8 @@ private:
     float mon_tilt_max_deg_ = 0.f;
     // 안전층 사건을 «파일로» 남긴다. 세는 일은 위 mon_* 가 이미 한다 — 여기선 기록만.
     g1::SafetyLog safety_log_;
+    // 계측용 상태 덤프 (env G1_STATE_CSV 가 있을 때만. 기본 꺼짐 → 거동 변화 0)
+    g1::StateDump state_dump_;
     const char* mon_exit_reason_ = nullptr;   // null = 조작자 전이(p/v) 또는 정상 종료
 };
 

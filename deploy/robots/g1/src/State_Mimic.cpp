@@ -770,6 +770,7 @@ void State_Mimic::enter()
 
     motion = motion_; // set for specific motion
     safety_log_.open_from_env();   // G1_SAFETY_CSV 가 있을 때만 켜진다(기본 꺼짐)
+    state_dump_.open_from_env();   // G1_STATE_CSV 가 있을 때만 (sim2sim ↔ 실기 대조 계측)
     std::remove("/dev/shm/g1_vr_ref");   // clear any stale VR ref so it can't hijack on entry
                                          // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
     { // mode2/3 hold this neutral pose (robot default) until VR provides a reference — never the clip
@@ -1090,4 +1091,6 @@ void State_Mimic::run()
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
+    // 계측(기본 꺼짐). 명령을 다 실은 «뒤» 라 이 줄의 q_des 는 실제로 나가는 값과 같다.
+    if (state_dump_.on()) state_dump_.tick(FSMState::lowstate->msg_, lowcmd->msg_);
 }
