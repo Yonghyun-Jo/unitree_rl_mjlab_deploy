@@ -6,6 +6,11 @@
 #include "onnxruntime_cxx_api.h"
 #include <iostream>
 #include <mutex>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace isaaclab
 {
@@ -14,6 +19,10 @@ class Algorithms
 {
 public:
     virtual std::vector<float> act(std::unordered_map<std::string, std::vector<float>> obs) = 0;
+
+    // 기동 시 «obs 계약» 대조. 모델이 요구하는 입력 이름·크기와 실제 obs 를 맞춰 보고
+    // 어긋나면 throw 한다. 기본은 no-op — 모델이 자기 입력을 모르는 구현체도 있을 수 있다.
+    virtual void verify_inputs(const std::unordered_map<std::string, std::vector<float>>&) const {}
 
     std::vector<float> get_action()
     {
@@ -77,14 +86,81 @@ public:
         return o;
     }
 
+    // 이 모델이 요구하는 입력 이름 -> 원소 개수. ONNX 가 스스로 아는 값이라 «진실» 이다.
+    std::unordered_map<std::string, int64_t> input_sizes_by_name() const
+    {
+        std::unordered_map<std::string, int64_t> m;
+        for (size_t i = 0; i < input_names.size(); ++i)
+            m[std::string(input_names[i])] = input_sizes[i];
+        return m;
+    }
+
+    // 🔴 obs 계약 대조 — 기동 시 «한 번» 부른다 (State_*.cpp 의 alg 생성 직후).
+    //
+    // 왜 있나: act() 는 입력 «이름» 이 없으면 throw 하지만 **크기는 안 봤다**.
+    //   Ort::Value::CreateTensor<float>(mem, input_data.data(), input_sizes[i], ...)
+    // 는 개수를 ONNX 에서(input_sizes) 가져오고 버퍼는 obs 에서(deploy.yaml) 가져온다.
+    // 둘이 다르면 작을 땐 **범위 밖을 읽고**(UB) 클 땐 조용히 잘린다 — 어느 쪽도 에러가
+    // 안 나고 「정책이 이상하다」로만 보인다. 그 상태로 50 Hz 를 돌리느니 여기서 죽는다.
+    //
+    // 로봇 무관한 순수 크기 검사라 공용(base)에 둔다 — g1 에서만 하면 나머지 로봇은
+    // 계속 UB 로 남는다.
+    void verify_inputs(const std::unordered_map<std::string, std::vector<float>>& obs) const override
+    {
+        std::ostringstream bad;
+        int n_bad = 0;
+        std::ostringstream table;
+        for (size_t i = 0; i < input_names.size(); ++i) {
+            const std::string name(input_names[i]);
+            const int64_t want = input_sizes[i];
+            auto it = obs.find(name);
+            const bool missing = (it == obs.end());
+            const int64_t got = missing ? -1 : static_cast<int64_t>(it->second.size());
+            table << "    " << (missing || got != want ? "x " : "o ")
+                  << name << ": ONNX " << want
+                  << " vs obs " << (missing ? std::string("(없음)") : std::to_string(got)) << "\n";
+            if (missing) {
+                bad << "\n  - 입력 '" << name << "' 이 obs 에 없다 (deploy.yaml 의 observations 그룹 이름 확인)";
+                ++n_bad;
+            } else if (got != want) {
+                bad << "\n  - 입력 '" << name << "': ONNX 는 " << want
+                    << " 를 요구하는데 obs 는 " << got << " 다 (차이 " << (got - want) << ")";
+                ++n_bad;
+            }
+        }
+        std::cout << "[obs contract] ONNX 입력 " << input_names.size() << " 개 대조\n"
+                  << table.str() << std::flush;
+        if (n_bad == 0) {
+            std::cout << "[obs contract] 통과 — obs 크기가 ONNX 와 일치한다" << std::endl;
+            return;
+        }
+        std::ostringstream msg;
+        msg << "obs 계약 불일치 " << n_bad << " 건 — 기동을 거부한다." << bad.str()
+            << "\n  deploy.yaml 의 observations 항별 (scale 길이 x history_length) 합이"
+               " ONNX 입력과 같아야 한다."
+            << "\n  이대로 돌리면 크기가 작을 땐 «범위 밖 읽기», 클 땐 «조용한 절단» 이라"
+               " 에러 없이 정책이 쓰레기를 먹는다.";
+        throw std::runtime_error(msg.str());
+    }
+
     std::vector<float> act(std::unordered_map<std::string, std::vector<float>> obs)
     {
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
 
-        // make sure all input names are in obs
-        for (const auto& name : input_names) {
-            if (obs.find(name) == obs.end()) {
-                throw std::runtime_error("Input name " + std::string(name) + " not found in observations.");
+        // 이름 + 크기. 크기 검사가 없으면 아래 CreateTensor 가 obs 버퍼를 ONNX 개수만큼
+        // 읽어 범위 밖을 건드린다(UB). 정상 경로에선 기동 시 verify_inputs 가 이미
+        // 걸렀으므로 여기는 최후 보루다 — 정수 비교 하나라 50 Hz 에 무해하다.
+        for (size_t i = 0; i < input_names.size(); ++i) {
+            const std::string name(input_names[i]);
+            auto it = obs.find(name);
+            if (it == obs.end()) {
+                throw std::runtime_error("Input name " + name + " not found in observations.");
+            }
+            if (static_cast<int64_t>(it->second.size()) != input_sizes[i]) {
+                throw std::runtime_error(
+                    "obs 크기 불일치: 입력 '" + name + "' ONNX " + std::to_string(input_sizes[i])
+                    + " vs obs " + std::to_string(it->second.size())
+                    + " (기동 시 verify_inputs 로 걸러졌어야 한다)");
             }
         }
 

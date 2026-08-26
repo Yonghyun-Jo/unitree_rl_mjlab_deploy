@@ -3,6 +3,7 @@
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include <unordered_map>
+#include <cstdlib>      // std::exit — obs 계약 불일치 시 기동 거부
 
 namespace isaaclab
 {
@@ -42,6 +43,18 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
         std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate)
     );
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
+    // 🔴 obs 계약을 «모터가 돌기 전에» 대조한다. deploy.yaml 의 항 합이 ONNX 입력과 다르면
+    //    act() 가 obs 버퍼를 ONNX 개수만큼 읽어 범위 밖을 건드리거나(작을 때) 조용히
+    //    자른다(클 때) — 둘 다 에러 없이 「정책이 이상하다」로만 보인다. 여기서 죽인다.
+    //    (lowcmd 인터록과 같은 방식으로 읽히는 메시지 + exit(1). 우회 플래그는 두지 않는다.)
+    try {
+        env->alg->verify_inputs(env->observation_manager->compute());
+    } catch (const std::exception& e) {
+        spdlog::critical("[obs contract] {}", e.what());
+        spdlog::critical("  정책: {}", (policy_dir / "exported" / "policy.onnx").string());
+        spdlog::critical("  계약: {}", (policy_dir / "params" / "deploy.yaml").string());
+        std::exit(1);
+    }
 
     this->registered_checks.emplace_back(
         std::make_pair(
