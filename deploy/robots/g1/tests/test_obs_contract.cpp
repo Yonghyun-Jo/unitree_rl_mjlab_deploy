@@ -76,8 +76,9 @@ int main(int argc, char** argv)
     std::string msg;
 
     // ① 정확히 맞으면 통과해야 한다 (정상 경로를 막으면 안 된다)
+    //    terms 를 안 넘기는 호출부(= g1 외 5대) 는 계약이 있어도 «크기만» 보고 통과한다.
     chk(!throws([&] { runner.verify_inputs(make(0)); }, msg),
-        "크기가 정확히 맞으면 통과");
+        "크기가 맞고 항 정보를 안 넘기면 통과 (다른 로봇 호출부를 안 죽인다)");
     if (!msg.empty()) std::printf("       (예상 못한 예외: %s)\n", msg.c_str());
 
     // ② 하나 모자라면 죽어야 한다 — 이게 범위 밖 읽기(UB) 였다
@@ -138,7 +139,21 @@ int main(int argc, char** argv)
             chk(!throws([&] { runner.verify_inputs(make(0), OK_SPECS); }, msg),
                 "계약 없는 ONNX 는 경고만 하고 통과 (기존 슬롯이 안 죽는다)");
         } else {
-            std::printf("     (계약이 이미 구워진 ONNX — 아래 verify_terms 로 직접 검증)\n");
+            // 🔴 실제 기동 경로. 배포 항 목록을 «그대로» 먹여 ONNX 안의 계약과 대조한다.
+            chk(!throws([&] { runner.verify_inputs(make(0), OK_SPECS); }, msg),
+                "이 ONNX 의 계약이 실제 배포 항 배치와 일치한다");
+            if (!msg.empty()) std::printf("       (예외: %s)\n", msg.c_str());
+
+            // 그리고 «틀리면 진짜로 죽는지» — 29 짜리 둘을 바꿔 넣는다(합 1640 불변).
+            auto swapped = OK_SPECS;
+            std::swap(swapped[4], swapped[5]);
+            chk(throws([&] { runner.verify_inputs(make(0), swapped); }, msg),
+                "joint_pos/joint_vel 을 바꿔 넣으면 실제로 기동을 거부한다");
+
+            auto renamed = OK_SPECS;
+            renamed[9].train_name = "ref_foot_height";   // 배포 이름을 train_term 에 잘못 적은 경우
+            chk(throws([&] { runner.verify_inputs(make(0), renamed); }, msg),
+                "train_term 에 배포 이름을 적으면 거부한다");
         }
     }
 

@@ -218,6 +218,17 @@ public:
                       << std::endl;
             return;
         }
+        // 호출부가 항 정보를 «안 넘긴» 경우 = 그 로봇의 State 가 아직 계약을 안 쓴다.
+        // 여기서 죽이면 g1 외 5대(공용 base 를 쓰지만 호출부가 terms 를 안 준다)가 자기
+        // ONNX 에 계약이 생기는 순간 통째로 기동 불가가 된다. 크기 검사는 이미 끝났으므로
+        // 경고만 하고 통과시킨다 — «점진 도입» 은 양방향이어야 한다.
+        if (terms.empty()) {
+            std::cout << "[obs contract] \u26a0 ONNX 에 계약이 있는데 호출부가 항 정보를 안 넘겼다."
+                      << " 크기 검사만 수행했다.\n"
+                      << "               이 로봇의 State 에서 verify_inputs(obs, obs_terms) 로"
+                         " 바꾸면 항 목록·순서까지 대조된다." << std::endl;
+            return;
+        }
         const auto want = parse_obs_contract(spec);
         const std::string ver = obs_contract_version();
         std::cout << "[obs contract] ONNX 계약 v" << (ver.empty() ? "?" : ver)

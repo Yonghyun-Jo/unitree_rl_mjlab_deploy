@@ -1,0 +1,47 @@
+{
+  "exported_at": "2026-08-26",
+  "slot": "v4_multihead_m1colmov2_steps6",
+  "note": "v3_multihead_s30k_steps6 에서 **mode1 head 만** 갈아끼운 판. base·mode2·mode3 head 는 바이트 동일(확인함). 🔴 그런데 이번은 «policy_dir 3줄 교체» 가 아니다 — 새 mode1 head 가 2026-08-25 COLMOv2 재적합 표(d94c7d9)로 학습돼 발-z 표 자체가 바뀌었다. GaitLut.h 에 V2 표를 넣고 ModeGait 가 모드별로 고르게 했다(c3e103f). **C++ 재빌드 필요.** mode2 는 재적합 이전(08-20) head 라 V1 표를 그대로 쓴다 — 표를 통일하면 mode2 가 3.2 cm 어긋난다.",
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-08-25_23-30-38_s4_mode1_cad1p15_slowcmd_scratch30k/model_18000.pt",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml (COLMOv2 우선 29클립)",
+  "mode1_ckpt_note": "🔴 이 run 은 export 시점에 **18000 / 30000 진행중**이었다. 사용자가 «오늘 실기까지» 를 택해 중간 체크포인트로 구웠다. 보상 중앙값은 아직 오르는 중이었다 — 12k 38.95 / 14k 41.16 / 16k 42.72 / 18k 43.48 (마지막 2k 구간 +0.76). 30k 완료 후 같은 명령으로 다시 구워 이 슬롯을 덮으면 된다(C++·yaml 변경 없음, ONNX 파일 하나만 교체).",
+  "gait_parity": {
+    "why": "run 이름의 cad1p15·slowcmd 는 CLI 플래그가 아니라 launch 커밋(eb0903c) «이전» 의 코드 변경이다. train_args.json 에 안 보이므로 조상 커밋을 봐야 찾는다.",
+    "table": "d94c7d9 (08-25 20:50) COLMOv2 재적합 -> deploy.yaml mode1 table: 2. STANCE_Z 0.066877 -> 0.035000 (3.2 cm). 옛 표는 «떠 있는 리타겟» 에서 구워져 영원히 뜬 발을 명령했다.",
+    "stand_gate": "09fb616 (08-25 22:01) eff<0.05 -> «명령이 정확히 0» (1e-6). V2 표에 stand_eps 로 묶었다. 이 run 이 학습한 것이 정확히 그 저속 대역이다.",
+    "cadence": "c4fb57e (08-25 22:19) cadence_by_mode[1] = 1.15 -> deploy.yaml mode1 cadence: 1.15",
+    "turn_asym": "17995ba (08-17) -> deploy.yaml mode1 turn_asym: true. mode2 도 학습엔 있으나 이번 배포에선 **일부러 껐다**(한 번에 한 가지만 바꾸기 위해). 켜는 것은 yaml 한 줄, 재빌드 없음.",
+    "turn_k": "eb0903c 가 0.55 -> 0.3 으로 되돌림(혼합 명령이 RUN 으로 새어 붕괴). 배포 C++ 이 이미 0.3 = 일치. 변경 없음."
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 3.338e-06 (tol 1e-4) OK",
+    "mask_slice": "obs[-22:-20] == env.command_mask() OK (export 시 assert)",
+    "obs_contract_sum": "10항 합 = 1640 == obs 1640 OK (export 시 assert, 신규)",
+    "graph": "GEMM 61 = enc 4 + actor 5x6 + heads 27",
+    "initializer_diff_vs_prev": "74개 중 18개 상이 — **전부 mh.heads.0.*(mode1)**. base 19/19 · mh.heads.1.*(mode2) 18/18 · mh.heads.2.*(mode3) 18/18 · heads.0.joint_mask 는 바이트 동일",
+    "runtime_delta_vs_prev": "동일 obs 실추론 max|Δ| — mode1 2.35e+00 / mode2 **0.0000e+00** / mode3 **0.0000e+00**. 두 모드가 정확히 0 = 손 안 댔음의 증거 (mask 1=(0,0) 2=(1,0) 3=(1,1))",
+    "obs_contract_runtime": "test_obs_contract 를 이 ONNX 로 실행 — 실제 배포 항 배치가 계약과 일치, joint_pos/joint_vel 교환은 실제로 기동 거부, train_term 오기도 거부. **계약이 실린 첫 ONNX 다.**",
+    "gait_lut_cpp": "test_gait_lut_v2 660 골든(mjlab 생성) 통과. V1 배열은 종전 헤더와 수 하나까지 동일 = mode2 불변",
+    "sim2sim": "미실행",
+    "real_robot": "미실행"
+  },
+  "deployable_on_orin_nx": true,
+  "budget": {
+    "weights_mb": 37.0,
+    "note": "구조·초기자 이름/형상이 v3_multihead_s30k_steps6 과 완전 동일(가중치 값만 다름) → 스트리밍량·지연 예산 동일: 96.6 MB/추론, 4.83 GB/s @50Hz, Jetson 1코어 추정 8.0 ms (예산 20 ms)."
+  },
+  "known_mismatch": {
+    "lut_turn_asymmetry_mode2": "mode2 는 turn_asym 을 일부러 끈 상태(위 gait_parity 참조). mode1 은 해소됨.",
+    "mode3_foot_z": "mode>=3 의 ref_foot_height 는 aedcc77 이후 «레퍼런스 발 world-z» 를 쓴다 — 해소됨. VR 미접속 standby 때만 생성기 stance 값."
+  },
+  "export_cmd": "cd ~/mjlab1.4/mjlab_g1_motion && ~/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-08-25_23-30-38_s4_mode1_cad1p15_slowcmd_scratch30k/model_18000.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/v4_multihead_m1colmov2_steps6/policy.onnx",
+  "revert": "config/config.yaml 의 Mimic_Masked policy_dir 를 v3_multihead_s30k_steps6 으로 되돌리면 종전 배포로 복귀. 🔴 C++ 은 되돌릴 필요 없다 — ModeGait 미지정 기본값이 V1·1.0·asym off = 종전 거동이라 옛 슬롯의 deploy.yaml 이 그대로 옛 거동을 낸다."
+}
