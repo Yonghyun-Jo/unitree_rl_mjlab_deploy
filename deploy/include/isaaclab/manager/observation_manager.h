@@ -60,6 +60,22 @@ public:
 
 
 
+    // deploy.yaml 이 «선언한» 그룹별 obs 폭 (항마다 dim x history_length 의 합).
+    // 런타임 상태와 무관하다 — 그래서 기동 직후, 아직 어떤 항도 값을 못 내는 시점에도
+    // ONNX 입력과 대조할 수 있다. compute() 로 재면 State::enter() 전에는 motion 이 없는
+    // 항이 빈 벡터를 내서 «실제보다 작게» 나온다(그게 계약 검사의 오진 원인이었다).
+    std::unordered_map<std::string, std::size_t> declared_sizes() const
+    {
+        std::unordered_map<std::string, std::size_t> out;
+        for (const auto& g : group_obs_term_cfgs_) {
+            std::size_t n = 0;
+            for (const auto& t : g.second)
+                n += static_cast<std::size_t>(t.dim()) * static_cast<std::size_t>(t.history_length);
+            out[g.first] = n;
+        }
+        return out;
+    }
+
     const std::vector<float> compute_group(const std::string& group_name)
     {
         std::vector<float> obs;

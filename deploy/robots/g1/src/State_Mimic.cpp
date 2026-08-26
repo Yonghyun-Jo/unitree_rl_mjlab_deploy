@@ -572,7 +572,16 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
         std::vector<isaaclab::ObsTermSpec> obs_terms;
         for (const auto& t : env->observation_manager->group_terms("obs"))
             obs_terms.push_back({t.name, t.train_name, t.dim(), t.history_length});
-        env->alg->verify_inputs(env->observation_manager->compute(), obs_terms);
+        // 🔴 «선언» 을 대조한다 — compute() 가 아니다. 여기는 State::enter() 이전이라
+        //    motion 이 아직 안 붙었고, masked_joint_command 같은 항은 빈 벡터를 낸다.
+        //    compute() 로 재면 1640 대신 1060 이 나와 멀쩡한 정책이 기동 거부된다
+        //    (2026-08-26 sim2sim 에서 실제로 발생). 폭은 deploy.yaml 이 이미 선언하고
+        //    있고 그것이 ONNX 와 맞는지가 이 검사의 질문이다. 실행 중 실제 크기는
+        //    OrtRunner::act() 의 크기 가드가 매 스텝 따로 지킨다.
+        std::unordered_map<std::string, std::vector<float>> declared;
+        for (const auto& kv : env->observation_manager->declared_sizes())
+            declared[kv.first] = std::vector<float>(kv.second);
+        env->alg->verify_inputs(declared, obs_terms);
     } catch (const std::exception& e) {
         spdlog::critical("[obs contract] {}", e.what());
         spdlog::critical("  정책: {}", (policy_dir / "exported" / "policy.onnx").string());

@@ -31,8 +31,17 @@ struct ObservationTermCfg
     std::string name;
     std::string train_name;
 
-    // 한 프레임의 차원 (history 곱하기 전). reset() 뒤에 유효.
-    int dim() const { return buff_.empty() ? 0 : static_cast<int>(buff_.front().size()); }
+    // 한 프레임의 차원 (history 곱하기 전).
+    // 🔴 «선언값»(deploy.yaml 의 scale 길이)을 먼저 본다. 버퍼는 그 항이 실제로 값을 낸
+    //    뒤에야 채워지는데, 어떤 항은 State::enter() 에서 motion 이 붙기 전까지 빈 벡터를
+    //    낸다(masked_joint_command 는 active_demo_loader() 가 비면 0 개). 버퍼를 자로 쓰면
+    //    기동 시점에 dim 0 이 되어 «계약 위반» 으로 오진한다 — 2026-08-26 sim2sim 에서
+    //    실제로 1640 대신 1060 (58x10 이 통째로 빠짐) 이 나와 기동이 거부됐다.
+    //    scale 은 12개 슬롯 전부가 항마다 완비하고 있고(확인함), 그 길이가 곧 선언 폭이다.
+    int dim() const {
+        if (!scale.empty()) return static_cast<int>(scale.size());
+        return buff_.empty() ? 0 : static_cast<int>(buff_.front().size());
+    }
 
     void reset(std::vector<float> obs)
     {
