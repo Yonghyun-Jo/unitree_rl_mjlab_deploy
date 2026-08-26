@@ -48,7 +48,11 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
     //    자른다(클 때) — 둘 다 에러 없이 「정책이 이상하다」로만 보인다. 여기서 죽인다.
     //    (lowcmd 인터록과 같은 방식으로 읽히는 메시지 + exit(1). 우회 플래그는 두지 않는다.)
     try {
-        env->alg->verify_inputs(env->observation_manager->compute());
+        // deploy.yaml 이 선언한 항 목록을 그대로 넘긴다 (선언 순서 = obs 배치 순서).
+        std::vector<isaaclab::ObsTermSpec> obs_terms;
+        for (const auto& t : env->observation_manager->group_terms("obs"))
+            obs_terms.push_back({t.name, t.train_name, t.dim(), t.history_length});
+        env->alg->verify_inputs(env->observation_manager->compute(), obs_terms);
     } catch (const std::exception& e) {
         spdlog::critical("[obs contract] {}", e.what());
         spdlog::critical("  정책: {}", (policy_dir / "exported" / "policy.onnx").string());

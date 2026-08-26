@@ -29,23 +29,27 @@ observations:
     scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     history_length: 1
   base_ang_vel:
+    train_term: base_ang_vel
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0]
     history_length: 1
   joint_pos_rel:
+    train_term: joint_pos
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     history_length: 1
   joint_vel_rel:
+    train_term: joint_vel
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     history_length: 1
   last_action:
+    train_term: actions
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,

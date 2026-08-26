@@ -2,6 +2,7 @@
 // All rights reserved.
 
 #pragma once
+#include <string>
 
 #include <deque>
 #include <vector>
@@ -23,6 +24,15 @@ struct ObservationTermCfg
     std::vector<float> scale;
     int history_length = 1;
     bool scale_first = false;
+    // obs 계약 대조용(순수 기술 정보 — 계산에는 안 쓴다).
+    //   name       = deploy.yaml 의 항 이름 (= C++ REGISTER_OBSERVATION 이름)
+    //   train_name = 학습(mjlab) 쪽 같은 항의 이름. deploy.yaml 의 `train_term:` 에서 온다.
+    //                둘은 «다르다» — 10 중 8 이 다르고, 그 대응관계가 여태 아무 데도 없었다.
+    std::string name;
+    std::string train_name;
+
+    // 한 프레임의 차원 (history 곱하기 전). reset() 뒤에 유효.
+    int dim() const { return buff_.empty() ? 0 : static_cast<int>(buff_.front().size()); }
 
     void reset(std::vector<float> obs)
     {

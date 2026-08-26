@@ -6,6 +6,8 @@
 #include "onnxruntime_cxx_api.h"
 #include <iostream>
 #include <mutex>
+#include <algorithm>
+#include <cctype>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -15,6 +17,44 @@
 namespace isaaclab
 {
 
+// obs 계약의 항 하나. 배포 쪽(deploy.yaml)이 채워 verify_inputs 에 넘긴다.
+struct ObsTermSpec
+{
+    std::string deploy_name;   // deploy.yaml 항 이름 (= C++ REGISTER_OBSERVATION 이름)
+    std::string train_name;    // 학습(mjlab) 쪽 같은 항의 이름. deploy.yaml `train_term:`
+    int dim = 0;               // 한 프레임 차원 (history 곱하기 전)
+    int history = 1;
+};
+
+// ONNX metadata_props["obs_contract"] 형식: "이름:차원:history,이름:차원:history,..."
+// 적힌 «순서» 가 곧 obs 배치 순서다. 항 이름은 식별자라 ':' ',' 와 안 부딪힌다.
+struct ObsContractTerm { std::string name; int dim = 0; int history = 1; };
+
+inline std::vector<ObsContractTerm> parse_obs_contract(const std::string& spec)
+{
+    std::vector<ObsContractTerm> out;
+    std::stringstream ss(spec);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        // 공백 제거 (사람이 손으로 고칠 수도 있으니)
+        item.erase(std::remove_if(item.begin(), item.end(),
+                                  [](unsigned char c) { return std::isspace(c); }),
+                   item.end());
+        if (item.empty()) continue;
+        const auto a = item.find(':');
+        const auto b = item.find(':', a == std::string::npos ? 0 : a + 1);
+        if (a == std::string::npos || b == std::string::npos) {
+            throw std::runtime_error("obs_contract 형식 오류 (이름:차원:history 여야 한다): '" + item + "'");
+        }
+        ObsContractTerm t;
+        t.name = item.substr(0, a);
+        t.dim = std::stoi(item.substr(a + 1, b - a - 1));
+        t.history = std::stoi(item.substr(b + 1));
+        out.push_back(t);
+    }
+    return out;
+}
+
 class Algorithms
 {
 public:
@@ -22,7 +62,8 @@ public:
 
     // 기동 시 «obs 계약» 대조. 모델이 요구하는 입력 이름·크기와 실제 obs 를 맞춰 보고
     // 어긋나면 throw 한다. 기본은 no-op — 모델이 자기 입력을 모르는 구현체도 있을 수 있다.
-    virtual void verify_inputs(const std::unordered_map<std::string, std::vector<float>>&) const {}
+    virtual void verify_inputs(const std::unordered_map<std::string, std::vector<float>>&,
+                               const std::vector<ObsTermSpec>& = {}) const {}
 
     std::vector<float> get_action()
     {
@@ -105,7 +146,25 @@ public:
     //
     // 로봇 무관한 순수 크기 검사라 공용(base)에 둔다 — g1 에서만 하면 나머지 로봇은
     // 계속 UB 로 남는다.
-    void verify_inputs(const std::unordered_map<std::string, std::vector<float>>& obs) const override
+    // ONNX 에 구워진 obs 계약. 없으면 빈 문자열 (구버전 ONNX -> 경고 후 크기 검사만).
+    std::string obs_contract() const
+    {
+        auto md = session->GetModelMetadata();
+        Ort::AllocatorWithDefaultOptions alloc;
+        auto v = md.LookupCustomMetadataMapAllocated("obs_contract", alloc);
+        return v ? std::string(v.get()) : std::string();
+    }
+
+    std::string obs_contract_version() const
+    {
+        auto md = session->GetModelMetadata();
+        Ort::AllocatorWithDefaultOptions alloc;
+        auto v = md.LookupCustomMetadataMapAllocated("obs_contract_version", alloc);
+        return v ? std::string(v.get()) : std::string();
+    }
+
+    void verify_inputs(const std::unordered_map<std::string, std::vector<float>>& obs,
+                       const std::vector<ObsTermSpec>& terms = {}) const override
     {
         std::ostringstream bad;
         int n_bad = 0;
@@ -131,7 +190,8 @@ public:
         std::cout << "[obs contract] ONNX 입력 " << input_names.size() << " 개 대조\n"
                   << table.str() << std::flush;
         if (n_bad == 0) {
-            std::cout << "[obs contract] 통과 — obs 크기가 ONNX 와 일치한다" << std::endl;
+            std::cout << "[obs contract] 크기 일치" << std::endl;
+            verify_terms(terms);        // 항 목록·순서·차원·history 까지 (계약이 있으면)
             return;
         }
         std::ostringstream msg;
@@ -140,6 +200,66 @@ public:
                " ONNX 입력과 같아야 한다."
             << "\n  이대로 돌리면 크기가 작을 땐 «범위 밖 읽기», 클 땐 «조용한 절단» 이라"
                " 에러 없이 정책이 쓰레기를 먹는다.";
+        throw std::runtime_error(msg.str());
+    }
+
+    // 🔴 항 목록·순서·차원·history 대조. 크기(합)만 맞고 «순서가 뒤바뀐» 경우를 잡는다.
+    //    joint_pos_rel / joint_vel_rel / last_action 이 전부 29 라 합만 보면 서로 교환돼도
+    //    통과한다 — 그래서 이름까지 본다.
+    //
+    // 계약이 없는 ONNX(구버전)는 경고만 하고 통과시킨다. 기존 배포 슬롯을 한꺼번에
+    // 못 쓰게 만들지 않기 위한 점진 도입이다.
+    void verify_terms(const std::vector<ObsTermSpec>& terms) const
+    {
+        const std::string spec = obs_contract();
+        if (spec.empty()) {
+            std::cout << "[obs contract] \u26a0 이 ONNX 에는 계약이 없다 (구버전). 크기 검사만 수행했다.\n"
+                      << "               학습 쪽 export 를 다시 하면 항 목록·순서까지 대조된다."
+                      << std::endl;
+            return;
+        }
+        const auto want = parse_obs_contract(spec);
+        const std::string ver = obs_contract_version();
+        std::cout << "[obs contract] ONNX 계약 v" << (ver.empty() ? "?" : ver)
+                  << " — 항 " << want.size() << " 개\n";
+
+        std::ostringstream bad;
+        int n_bad = 0;
+        const size_t n = std::max(want.size(), terms.size());
+        for (size_t i = 0; i < n; ++i) {
+            const bool has_w = i < want.size(), has_g = i < terms.size();
+            const std::string wn = has_w ? want[i].name : "(없음)";
+            const std::string gn = has_g ? (terms[i].train_name.empty()
+                                            ? "(train_term 미선언)" : terms[i].train_name) : "(없음)";
+            const std::string dn = has_g ? terms[i].deploy_name : "-";
+            bool okrow = has_w && has_g && wn == gn
+                         && want[i].dim == terms[i].dim
+                         && want[i].history == terms[i].history;
+            char row[256];
+            std::snprintf(row, sizeof row, "   %2zu %s %-22s %-22s %3d x%-3d\n",
+                          i + 1, okrow ? "o" : "x", wn.c_str(), dn.c_str(),
+                          has_w ? want[i].dim : (has_g ? terms[i].dim : 0),
+                          has_w ? want[i].history : (has_g ? terms[i].history : 0));
+            std::cout << row;
+            if (okrow) continue;
+            ++n_bad;
+            if (!has_w)      bad << "\n  - " << (i + 1) << "번: 배포에만 있는 항 '" << dn << "'";
+            else if (!has_g) bad << "\n  - " << (i + 1) << "번: 학습에만 있는 항 '" << wn << "'";
+            else if (wn != gn)
+                bad << "\n  - " << (i + 1) << "번: 학습은 '" << wn << "' 인데 배포는 '" << dn
+                    << "' (train_term=" << gn << ") — 순서가 다르거나 train_term 이 틀렸다";
+            else
+                bad << "\n  - " << (i + 1) << "번 '" << wn << "': 학습 " << want[i].dim << "x"
+                    << want[i].history << " vs 배포 " << terms[i].dim << "x" << terms[i].history;
+        }
+        if (n_bad == 0) {
+            std::cout << "[obs contract] 통과 — 항 목록·순서·차원·history 가 학습과 일치" << std::endl;
+            return;
+        }
+        std::ostringstream msg;
+        msg << "obs 계약 불일치 " << n_bad << " 건 — 기동을 거부한다." << bad.str()
+            << "\n  ONNX 에 구워진 계약(학습이 만든 것)과 deploy.yaml 의 observations 가 다르다."
+            << "\n  합이 같아도 «순서» 가 다르면 정책이 뒤섞인 obs 를 먹는다 — 에러 없이 낙상으로만 보인다.";
         throw std::runtime_error(msg.str());
     }
 

@@ -131,6 +131,11 @@ protected:
             term_cfg.history_length = term_yaml_cfg["history_length"].as<int>(1);
 
             auto term_name = it->first.as<std::string>();
+            term_cfg.name = term_name;
+            // 학습 쪽 이름. 없으면 빈 문자열 -> 계약 대조에서 «미선언» 으로 보고된다.
+            if(term_yaml_cfg["train_term"]) {
+                term_cfg.train_name = term_yaml_cfg["train_term"].as<std::string>();
+            }
             if(observations_map()[term_name] == nullptr) {
                 throw std::runtime_error("Observation term '" + term_name + "' is not registered.");
             }
@@ -152,6 +157,17 @@ protected:
         return terms;
     }
 
+public:
+    // 그룹의 항 목록 (선언 순서 = obs 배치 순서). obs 계약 대조가 읽는다.
+    // 밖에서 deploy.yaml 을 다시 파싱하면 파서가 둘로 갈려 언젠가 어긋난다 — 여기서만 판다.
+    const std::vector<ObservationTermCfg>& group_terms(const std::string& group) const
+    {
+        static const std::vector<ObservationTermCfg> kEmpty;
+        auto it = group_obs_term_cfgs_.find(group);
+        return it == group_obs_term_cfgs_.end() ? kEmpty : it->second;
+    }
+
+protected:
     const YAML::Node cfg;
     ManagerBasedRLEnv* env;
 

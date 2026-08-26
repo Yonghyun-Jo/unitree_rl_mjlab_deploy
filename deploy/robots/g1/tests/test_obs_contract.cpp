@@ -99,6 +99,88 @@ int main(int argc, char** argv)
         }, msg),
         "ONNX 가 요구하는 입력이 obs 에 없으면 throw");
 
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 항 계약 (이름·순서·차원·history). 크기만 보면 못 잡는 것들이다.
+    // ─────────────────────────────────────────────────────────────────────
+    std::printf("\n-- 계약 파서 --\n");
+    {
+        const auto t = isaaclab::parse_obs_contract("a:3:10, b:29:10 ,c:2:1");
+        chk(t.size() == 3, "3개 항을 읽는다");
+        chk(t[0].name == "a" && t[0].dim == 3 && t[0].history == 10, "이름·차원·history 파싱");
+        chk(t[2].history == 1, "history 1 도 읽는다");
+        chk(throws([&] { isaaclab::parse_obs_contract("a:3"); }, msg), "형식이 틀리면 throw");
+    }
+
+    // 실제 배포 obs 레이아웃 (deploy.yaml v3 슬롯). 학습 이름 기준.
+    const char* GOOD =
+        "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,"
+        "joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10";
+
+    auto specs = [](std::initializer_list<const char*> train_names,
+                    std::initializer_list<int> dims) {
+        std::vector<isaaclab::ObsTermSpec> v;
+        auto d = dims.begin();
+        for (auto n : train_names) { v.push_back({std::string("deploy_") + n, n, *d++, 10}); }
+        return v;
+    };
+    const auto OK_SPECS = specs(
+        {"base_ang_vel","projected_gravity","command","motion_root_ori_b","joint_pos",
+         "joint_vel","actions","base_vel","mask","foot_z"},
+        {3,3,58,6,29,29,29,3,2,2});
+
+    std::printf("\n-- 항 대조 (계약이 없는 ONNX = 구버전) --\n");
+    {
+        // 배포 중인 ONNX 에는 아직 계약이 없다 -> 경고만 하고 통과해야 한다.
+        const bool has = !runner.obs_contract().empty();
+        std::printf("     이 ONNX 의 계약: %s\n", has ? runner.obs_contract().c_str() : "(없음)");
+        if (!has) {
+            chk(!throws([&] { runner.verify_inputs(make(0), OK_SPECS); }, msg),
+                "계약 없는 ONNX 는 경고만 하고 통과 (기존 슬롯이 안 죽는다)");
+        } else {
+            std::printf("     (계약이 이미 구워진 ONNX — 아래 verify_terms 로 직접 검증)\n");
+        }
+    }
+
+    std::printf("\n-- 항 대조 (계약을 직접 먹여서) --\n");
+    {
+        // verify_terms 는 ONNX 메타데이터를 읽으므로 여기서는 파서+비교 로직을
+        // 같은 규칙으로 재현해 검증한다. (메타데이터 주입은 export 쪽 책임)
+        auto want = isaaclab::parse_obs_contract(GOOD);
+        auto cmp = [&](const std::vector<isaaclab::ObsTermSpec>& got) {
+            if (want.size() != got.size()) return false;
+            for (size_t i = 0; i < want.size(); ++i)
+                if (want[i].name != got[i].train_name || want[i].dim != got[i].dim
+                    || want[i].history != got[i].history) return false;
+            return true;
+        };
+        chk(cmp(OK_SPECS), "정상 배치는 계약과 일치");
+
+        // 🔴 이것이 (a) 로는 절대 못 잡는 사고: 29 짜리 셋이 서로 뒤바뀜. 합은 1640 그대로.
+        auto swapped = OK_SPECS;
+        std::swap(swapped[4], swapped[5]);          // joint_pos <-> joint_vel
+        chk(!cmp(swapped), "29 짜리 joint_pos/joint_vel 교환을 잡는다 (합은 1640 그대로)");
+        int tot = 0;
+        for (const auto& t : swapped) tot += t.dim * t.history;
+        chk(tot == 1640, "  실제로 합은 1640 로 같다 = 크기검사만으론 통과했을 것");
+
+        auto wrong_dim = OK_SPECS;
+        wrong_dim[2].dim = 57;
+        chk(!cmp(wrong_dim), "차원 불일치를 잡는다");
+
+        auto wrong_hist = OK_SPECS;
+        wrong_hist[0].history = 5;
+        chk(!cmp(wrong_hist), "history 불일치를 잡는다");
+
+        auto missing = OK_SPECS;
+        missing.pop_back();
+        chk(!cmp(missing), "항이 하나 빠지면 잡는다");
+
+        auto undeclared = OK_SPECS;
+        undeclared[3].train_name = "";              // deploy.yaml 에 train_term 미선언
+        chk(!cmp(undeclared), "train_term 미선언을 잡는다");
+    }
+
     std::printf("%s\n", g_fail ? "실패 있음" : "모두 통과");
     return g_fail ? 1 : 0;
 }

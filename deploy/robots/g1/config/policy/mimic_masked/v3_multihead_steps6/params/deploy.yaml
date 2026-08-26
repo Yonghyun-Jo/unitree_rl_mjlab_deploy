@@ -64,16 +64,19 @@ actions:
 # all history_length: 10, all scale 1.0 (policy group has no per-term scale in training).
 observations:
   base_ang_vel:           # 3
+    train_term: base_ang_vel
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0]
     history_length: 10
   projected_gravity:      # 3
+    train_term: projected_gravity
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0]
     history_length: 10
   masked_joint_command:   # 58  (q_ref+q̇_ref, lower[:12]/upper[12:] zeroed per cmd_mode)
+    train_term: command
     params: {command_name: motion}
     clip: null
     scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
@@ -82,39 +85,46 @@ observations:
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]   # q̇_ref 29
     history_length: 10
   masked_root_ori_b:      # 6  (anchor ori Rot6D; all zeroed in mode1)
+    train_term: motion_root_ori_b
     params: {command_name: motion}
     clip: null
     scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     history_length: 10
   joint_pos_rel:          # 29
+    train_term: joint_pos
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     history_length: 10
   joint_vel_rel:          # 29
+    train_term: joint_vel
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     history_length: 10
   last_action:            # 29
+    train_term: actions
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
             1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     history_length: 10
   base_vel_command:       # 3  (yaw-local [vx,vy,wz]; zeroed in mode3; joystick source)
+    train_term: base_vel
     params: {}
     clip: null
     scale: [1.0, 1.0, 1.0]
     history_length: 10
   command_mask:           # 2  ([mask_upper, mask_lower])
+    train_term: mask
     params: {}
     clip: null
     scale: [1.0, 1.0]
     history_length: 10
   ref_foot_height:        # 2  ([z_L,z_R] foot-trajectory command; MaskedLocoController gen)
+    train_term: foot_z
     params: {}
     clip: null
     scale: [1.0, 1.0]
