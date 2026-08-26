@@ -757,14 +757,27 @@ void State_Mimic::load_gait_cfg(const YAML::Node& g)
             auto& mg = g_loco.mode_gait[m];
             const std::string src = n["source"] ? n["source"].as<std::string>() : "quintic";
             mg.lut = (src == "lut");
+            // 표 판번호 — 이 head 가 «어느 시점의 구운 표» 로 학습됐나. 미지정 = 1 = 종전 배포 표.
+            if (n["table"])     mg.table     = n["table"].as<int>();
+            if (n["cadence"])   mg.cadence   = n["cadence"].as<float>();
+            if (n["turn_asym"]) mg.turn_asym = n["turn_asym"].as<bool>();
+            if (mg.table != 1 && mg.table != 2) {
+                spdlog::warn("[gait] mode{}: table={} 은 없는 판번호 -> 1 로 되돌린다", m, mg.table);
+                mg.table = 1;
+            }
             // LUT 은 표가 stance 높이를 갖고 있다 — 파이썬도 foot_source=="lut" 이면
             // stance_z 를 gait_lut.STANCE_Z 로 덮어쓴다. 같은 순서로 덮고, yaml 이 명시하면 그것이 이긴다.
-            if (mg.lut) mg.stance_z = GL_STANCE_Z;
+            // 🔴 «그 모드의 표» 의 stance 다. V1 6.6877 cm ↔ V2 3.5000 cm 로 3.2 cm 차이가 나므로
+            //    표를 골라 놓고 stance 를 안 따라가면 발-z obs 가 통째로 어긋난다.
+            if (mg.lut) mg.stance_z = MaskedLocoController::table_of(mg).stance_z;
             if (n["stance_z"])       mg.stance_z       = n["stance_z"].as<float>();
             if (n["height_scale"])   mg.height_scale   = n["height_scale"].as<float>();
             if (n["stand_deadzone"]) mg.stand_deadzone = n["stand_deadzone"].as<float>();
-            spdlog::info("[gait] mode{}: source={} height_scale={:.2f} stance_z={:.5f} deadzone={:.2f}",
-                         m, mg.lut ? "lut" : "quintic", mg.height_scale, mg.stance_z, mg.stand_deadzone);
+            spdlog::info("[gait] mode{}: source={} table=V{} cadence={:.3f} asym={} "
+                         "height_scale={:.2f} stance_z={:.5f} deadzone={:.2f}",
+                         m, mg.lut ? "lut" : "quintic", mg.table, mg.cadence,
+                         mg.turn_asym ? "on" : "off",
+                         mg.height_scale, mg.stance_z, mg.stand_deadzone);
         }
         spdlog::info("[gait] walk_max={:.2f} run_min={:.2f} (lut gait 히스테리시스)",
                      g_loco.walk_max, g_loco.run_min);

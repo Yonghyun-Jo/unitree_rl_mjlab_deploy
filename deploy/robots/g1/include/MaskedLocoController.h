@@ -23,9 +23,17 @@ struct MaskedLocoController {
   struct ModeGait {
     bool  lut             = false;    // true = 데이터 적합 LUT, false = quintic
     float height_scale    = 1.0f;     // quintic 전용 (LUT 은 표 자체가 진폭을 갖는다)
-    float stance_z        = 0.066f;   // LUT 이면 로드 시 GL_STANCE_Z 로 덮어씀
+    float stance_z        = 0.066f;   // LUT 이면 로드 시 그 표의 stance_z 로 덮어씀
     float stand_deadzone  = 0.0f;     // eff < 이 값이면 base_vel = 0 (그 모드에서만)
+    // ▼ 2026-08-26 추가. 셋 다 «학습 시점» 이 정하는 값이라 모드별이어야 한다.
+    int   table           = 1;        // 구운 표 판번호: 1 = V1(motions), 2 = V2(COLMOv2)
+    float cadence         = 1.0f;     // 학습 loco_controller.cadence_by_mode[mode]
+    bool  turn_asym       = false;    // gait_lut.turn_asym — 회전 시 바깥발을 더 든다
   };
+  // 모드의 표를 고른다. 기본(미지정) = V1 = 2026-08-26 이전 배포 거동 그대로.
+  static const GlTable& table_of(const ModeGait& mg) {
+    return (mg.table == 2) ? GL_T_V2 : GL_T_V1;
+  }
   std::array<ModeGait, 6> mode_gait{};   // index = cmd_mode (1..5). [0]은 미사용.
   float walk_max = 1.2f, run_min = 1.7f; // LUT gait 히스테리시스 경계
 
@@ -160,9 +168,12 @@ struct MaskedLocoController {
     //    아니면 종전 고정주기 quintic. 파이썬과 같이 «활성 분기의 위상만» 진행시킨다.
     const float eff = effective_speed(bv[0], bv[1], bv[2]);
     if (mg.lut) {
+      // 표·케이던스·정지임계는 그 head 가 «무엇으로 학습됐는가» 다 — 모드에서 읽는다.
+      // 파이썬: f = gait_lut.stride_freq(eff, is_run) * cadence_by_mode[mode] (loco_controller:183)
+      const GlTable& T = table_of(mg);
       is_run  = gl_select_gait(eff, is_run, walk_max, run_min);
-      phase_f = std::fmod(phase_f + gl_stride_freq(eff, is_run) / 50.0f, 1.0f);  // 50Hz 제어
-      gl_foot_z(phase_f, eff, is_run, foot_z[0], foot_z[1]);
+      phase_f = std::fmod(phase_f + gl_stride_freq(T, eff, is_run) * mg.cadence / 50.0f, 1.0f);
+      gl_foot_z(T, phase_f, eff, is_run, mg.turn_asym, bv[2], foot_z[0], foot_z[1]);
     } else {
       phase = (phase + 1) % period_steps;
       const float phase01 = float(phase) / period_steps;
