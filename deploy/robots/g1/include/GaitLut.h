@@ -195,6 +195,15 @@ inline void gl_foot_z(const GlTable& T, float phase, float eff, bool is_run,
     }
 }
 
+// 위상이 이번 스텝에 target 을 «지났는가». 위상은 [0,1) 를 감으므로 wrap 을 본다.
+// target 이 [0,1) 밖이면 절대 안 지난다 = 위상조건 없음(예산 소진만으로 끝남).
+// 파이썬 loco_controller._phase_crossed 와 1:1.
+inline bool gl_phase_crossed(float prev, float cur, float target) {
+    if (!(target >= 0.0f && target < 1.0f)) return false;
+    if (cur < prev) return (prev < target) || (cur >= target);   // wrap
+    return (prev < target) && (cur >= target);
+}
+
 // ── 종전 시그니처 (표 인자 없음) = V1 + asym 없음 = 2026-08-26 이전 배포 거동 그대로.
 inline float gl_stride_freq(float eff, bool is_run) {
     return gl_stride_freq(GL_T_V1, eff, is_run);

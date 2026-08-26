@@ -760,6 +760,9 @@ void State_Mimic::load_gait_cfg(const YAML::Node& g)
     try {
         if (g["walk_max"]) g_loco.walk_max = g["walk_max"].as<float>();
         if (g["run_min"])  g_loco.run_min  = g["run_min"].as<float>();
+        // 정착 파라미터 — 파이썬도 이 둘은 스칼라, settle_steps 만 모드별.
+        if (g["settle_eff"])   g_loco.settle_eff   = g["settle_eff"].as<float>();
+        if (g["settle_phase"]) g_loco.settle_phase = g["settle_phase"].as<float>();
         for (int m = 1; m <= 5; ++m) {
             const YAML::Node n = g["mode" + std::to_string(m)];
             if (!n || !n.IsMap()) continue;
@@ -770,6 +773,7 @@ void State_Mimic::load_gait_cfg(const YAML::Node& g)
             if (n["table"])     mg.table     = n["table"].as<int>();
             if (n["cadence"])   mg.cadence   = n["cadence"].as<float>();
             if (n["turn_asym"]) mg.turn_asym = n["turn_asym"].as<bool>();
+            if (n["settle_steps"]) mg.settle_steps = n["settle_steps"].as<int>();
             if (mg.table != 1 && mg.table != 2) {
                 spdlog::warn("[gait] mode{}: table={} 은 없는 판번호 -> 1 로 되돌린다", m, mg.table);
                 mg.table = 1;
@@ -782,10 +786,10 @@ void State_Mimic::load_gait_cfg(const YAML::Node& g)
             if (n["stance_z"])       mg.stance_z       = n["stance_z"].as<float>();
             if (n["height_scale"])   mg.height_scale   = n["height_scale"].as<float>();
             if (n["stand_deadzone"]) mg.stand_deadzone = n["stand_deadzone"].as<float>();
-            spdlog::info("[gait] mode{}: source={} table=V{} cadence={:.3f} asym={} "
+            spdlog::info("[gait] mode{}: source={} table=V{} cadence={:.3f} asym={} settle={} "
                          "height_scale={:.2f} stance_z={:.5f} deadzone={:.2f}",
                          m, mg.lut ? "lut" : "quintic", mg.table, mg.cadence,
-                         mg.turn_asym ? "on" : "off",
+                         mg.turn_asym ? "on" : "off", mg.settle_steps,
                          mg.height_scale, mg.stance_z, mg.stand_deadzone);
         }
         spdlog::info("[gait] walk_max={:.2f} run_min={:.2f} (lut gait 히스테리시스)",
@@ -1130,5 +1134,28 @@ void State_Mimic::run()
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
     // 계측(기본 꺼짐). 명령을 다 실은 «뒤» 라 이 줄의 q_des 는 실제로 나가는 값과 같다.
-    if (state_dump_.on()) state_dump_.tick(FSMState::lowstate->msg_, lowcmd->msg_);
+    if (state_dump_.on()) {
+        // 발-z 생성기의 내부 시계를 같이 남긴다 — 이 틱에 «명령한» 보폭 주파수를 재계산이 아니라
+        // 생성기가 실제로 쓴 것과 같은 순수함수로 뽑는다(gl_stride_freq).
+        const auto& mg = g_loco.mode_gait[std::max(1, std::min(g_cmd_mode, 5))];
+        g1::GaitAux ga;
+        ga.lut       = mg.lut ? 1 : 0;
+        ga.phase     = mg.lut ? g_loco.phase_f
+                              : float(g_loco.phase) / std::max(1, g_loco.period_steps);
+        ga.eff       = g_loco.effective_speed(g_loco.base_vel[0], g_loco.base_vel[1],
+                                              g_loco.base_vel[2]);
+        ga.stride_hz = mg.lut
+            ? gl_stride_freq(MaskedLocoController::table_of(mg), ga.eff, g_loco.is_run) * mg.cadence
+            : 50.0f / float(std::max(1, g_loco.period_steps));
+        ga.foot_z_l  = g_loco.foot_z[0];
+        ga.foot_z_r  = g_loco.foot_z[1];
+        ga.bv_x      = g_loco.base_vel[0];
+        ga.bv_y      = g_loco.base_vel[1];
+        ga.bv_wz     = g_loco.base_vel[2];
+        ga.arm_scale = g_loco.arm_scale;
+        ga.switch_a  = g_loco.switch_alpha;
+        ga.is_run    = g_loco.is_run ? 1 : 0;
+        ga.cmd_mode  = g_cmd_mode;
+        state_dump_.tick(FSMState::lowstate->msg_, lowcmd->msg_, ga);
+    }
 }

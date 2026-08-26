@@ -29,6 +29,11 @@ struct MaskedLocoController {
     int   table           = 1;        // 구운 표 판번호: 1 = V1(motions), 2 = V2(COLMOv2)
     float cadence         = 1.0f;     // 학습 loco_controller.cadence_by_mode[mode]
     bool  turn_asym       = false;    // gait_lut.turn_asym — 회전 시 바깥발을 더 든다
+    // ▼ 2026-08-26. 정지 정착(settle): 명령이 «움직임 -> 정지» 로 바뀌면 즉시 양발을 붙이지 않고
+    //   위상 시계를 settle_phase 까지 더 돌려 «한 걸음 더» 구르게 한다. 그 자리가 두 발이 가장
+    //   함께 낮은 위상이라 발이 모인 채 멈춘다. 0 = 끔 = 종전 거동 비트 동일.
+    //   🔴 모드별이다 — 학습 시점이 정하는 값(cadence/table/turn_asym 과 같은 이유).
+    int   settle_steps    = 0;        // 상한 step 수. 위상을 못 지나도 여기서 반드시 끝난다.
   };
   // 모드의 표를 고른다. 기본(미지정) = V1 = 2026-08-26 이전 배포 거동 그대로.
   static const GlTable& table_of(const ModeGait& mg) {
@@ -36,6 +41,14 @@ struct MaskedLocoController {
   }
   std::array<ModeGait, 6> mode_gait{};   // index = cmd_mode (1..5). [0]은 미사용.
   float walk_max = 1.2f, run_min = 1.7f; // LUT gait 히스테리시스 경계
+  // 정착 파라미터 — 파이썬 loco_controller 와 같은 층위(steps 만 모드별, 이 둘은 스칼라).
+  float settle_eff   = 0.15f;   // 정착 중 LUT 조회 속도 (작은 걸음: 진폭 ~3 cm)
+  float settle_phase = 0.07f;   // 이 위상을 지나면 종료. <0 또는 >=1 = 위상조건 없음(예산만)
+  // 정착 상태 (배포는 로봇 한 대라 스칼라). was_standing 은 «이미 서 있었다» 로 시작해야
+  // 첫 스텝에 정착이 안 열린다 (mode3 는 base_vel 이 항상 0 이다).
+  bool  settling      = false;
+  int   settle_rem    = 0;
+  bool  was_standing  = true;
 
   // ---- params (must match golden_loco_controller.json "params") ----
   int   period_steps = 43;
@@ -168,12 +181,29 @@ struct MaskedLocoController {
     //    아니면 종전 고정주기 quintic. 파이썬과 같이 «활성 분기의 위상만» 진행시킨다.
     const float eff = effective_speed(bv[0], bv[1], bv[2]);
     if (mg.lut) {
-      // 표·케이던스·정지임계는 그 head 가 «무엇으로 학습됐는가» 다 — 모드에서 읽는다.
-      // 파이썬: f = gait_lut.stride_freq(eff, is_run) * cadence_by_mode[mode] (loco_controller:183)
+      // 표·케이던스·정지임계·정착은 그 head 가 «무엇으로 학습됐는가» 다 — 모드에서 읽는다.
+      // 파이썬: loco_controller.update 의 lut 분기와 1:1 (정착 상태기계 포함).
       const GlTable& T = table_of(mg);
-      is_run  = gl_select_gait(eff, is_run, walk_max, run_min);
-      phase_f = std::fmod(phase_f + gl_stride_freq(T, eff, is_run) * mg.cadence / 50.0f, 1.0f);
-      gl_foot_z(T, phase_f, eff, is_run, mg.turn_asym, bv[2], foot_z[0], foot_z[1]);
+      // ── 정착 창: «움직임 -> 정지» 로 바뀌는 순간 연다 ──
+      const bool stand = (eff <= T.stand_eps);          // 파이썬 foot_gen.is_standing 과 같은 비교
+      if (stand && !was_standing && mg.settle_steps > 0) settle_rem = mg.settle_steps;
+      if (!stand) settle_rem = 0;                       // 명령이 돌아오면 즉시 취소
+      was_standing = stand;
+      settling = (settle_rem > 0);
+      // 정착 중에는 «명령 0» 대신 저속 한 행을 조회해 낮은 스윙 궤적을 받는다.
+      float eff_g = settling ? settle_eff : eff;
+      is_run  = gl_select_gait(eff_g, is_run, walk_max, run_min);
+      const float prev_ph = phase_f;
+      phase_f = std::fmod(phase_f + gl_stride_freq(T, eff_g, is_run) * mg.cadence / 50.0f, 1.0f);
+      // 두 발이 «가장 함께 낮은» 위상을 지나면 종료. 못 지나도 예산이 다하면 끝난다
+      // («정지를 눌렀는데 안 멈춤» 을 만들지 않는다 — 조작성 우선).
+      if (settling) {
+        if (gl_phase_crossed(prev_ph, phase_f, settle_phase)) settle_rem = 0;
+        else if (settle_rem > 0) settle_rem -= 1;
+      }
+      settling = (settle_rem > 0);
+      eff_g = settling ? settle_eff : eff;
+      gl_foot_z(T, phase_f, eff_g, is_run, mg.turn_asym, bv[2], foot_z[0], foot_z[1]);
     } else {
       phase = (phase + 1) % period_steps;
       const float phase01 = float(phase) / period_steps;
