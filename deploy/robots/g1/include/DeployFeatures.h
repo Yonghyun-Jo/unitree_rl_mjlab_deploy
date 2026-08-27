@@ -34,6 +34,9 @@ inline const std::vector<std::string>& known()
         "ref_foot_height_ref",
         // 슬롯을 G1_POLICY_SLOT 으로 갈아끼울 수 있다 (하루 여러 정책 시험)
         "policy_slot_env",
+        // 정지 정착: 명령이 0 이 되면 위상을 settle_phase 까지 더 돌려 «한 걸음 더» 구른다.
+        // gait: settle_eff · settle_phase (스칼라) + 모드별 settle_steps — 0f9b31e
+        "gait_settle",
     };
     return k;
 }
