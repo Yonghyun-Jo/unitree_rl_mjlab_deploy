@@ -1,0 +1,18 @@
+{
+  "slot": "dance1_subject2",
+  "note": "Mimic_Dance1_subject2 전용(단일 클립). multihead 계보와 별개이고 지금도 config.yaml 이 직접 가리킨다. ⚠ 이 상태에는 safety 블록이 없어 «안전층 0개» 로 돈다 — 실기에서 게임패드 R1+A/B/Y/X 를 누르지 말 것.",
+  "provenance": "🔴 이 META 는 2026-08-27 에 **git 이력에서 복원**한 것이다. 배포 당시에는 ONNX_META.json 규약이 없었다. 체크포인트·manifest·검증수치는 «모른다» — 지어내지 않는다. 아는 것은 아래 deployed_* 뿐이고, 근거는 config.yaml 의 policy_dir 커밋 이력이다.",
+  "obs_dim": "154",
+  "deployed_at": "2026-01-27 (repo init — 유니트리 원본에 딸려 온 슬롯)",
+  "deployed_commit": "cbb1ade",
+  "deployed_subject": "init",
+  "retired": false,
+  "flow_base_checkpoint": "(불명 — 배포 당시 기록 없음)",
+  "mode1_ckpt": "(불명)",
+  "mode2_ckpt": "(불명)",
+  "mode3_ckpt": "(불명)",
+  "verify": {
+    "note": "배포 당시 검증 기록이 남아 있지 않다."
+  },
+  "requires": "(선언 없음 — 이 슬롯은 config 계약 이전 판이라 기동 시 검사가 생략된다)"
+}

@@ -79,5 +79,21 @@ cleanup() {
 trap cleanup EXIT INT TERM
 sleep 1
 
+# 🔴 «이 시험이 어느 정책이었나» 를 로그 옆에 남긴다.
+#    안 남기면 나중에 CSV·그래프만 보고 어느 슬롯이었는지 알 방법이 없다 — 하루에 후보를
+#    여러 개 돌리면 특히. 대시보드(real_robot)가 실험 시작시각으로 이 마커를 찾아 붙인다.
+#    CSV 와 같은 디렉터리라 robot.sh pull 이 같이 회수한다.
+LOGDIR="${G1_LOG_DIR:-$HOME/dyros_ws/piene_ws/g1_logs}"
+if mkdir -p "$LOGDIR" 2>/dev/null; then
+  MARK="$LOGDIR/trial_$(date +%Y%m%d_%H%M%S).txt"
+  {
+    echo "slot=${POLICY:-$(grep -oP 'mimic_masked/\K[^/]+' "$G1DIR/config/config.yaml" | head -1)}"
+    echo "net=$NET"
+    echo "started=$(date -Is)"
+    echo "host=$(hostname)"
+    echo "git=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  } > "$MARK" 2>/dev/null && echo "[run] trial marker -> $MARK"
+fi
+
 echo "[run] starting g1_ctrl --network=$NET  (terminal keyboard: 1/2/3, WASD/QE, p=stop)"
 "$G1DIR/build/g1_ctrl" --network="$NET"

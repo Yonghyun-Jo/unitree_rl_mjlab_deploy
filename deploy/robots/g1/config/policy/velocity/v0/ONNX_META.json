@@ -1,0 +1,18 @@
+{
+  "slot": "v0",
+  "note": "velocity(보행 명령) 정책. multihead 계보와 별개. ⚠ safety 블록이 없어 «안전층 0개» 로 돈다 — 실기에서 키보드 'v' 를 누르지 말 것.",
+  "provenance": "🔴 이 META 는 2026-08-27 에 **git 이력에서 복원**한 것이다. 배포 당시에는 ONNX_META.json 규약이 없었다. 체크포인트·manifest·검증수치는 «모른다» — 지어내지 않는다. 아는 것은 아래 deployed_* 뿐이고, 근거는 config.yaml 의 policy_dir 커밋 이력이다.",
+  "obs_dim": "98",
+  "deployed_at": "(config.yaml 은 부모 `config/policy/velocity` 를 가리킨다 — parser_policy_dir 이 exported/ 를 가진 마지막 하위폴더를 고르므로 실제로 이 v0 가 쓰인다)",
+  "deployed_commit": "",
+  "deployed_subject": "",
+  "retired": false,
+  "flow_base_checkpoint": "(불명 — 배포 당시 기록 없음)",
+  "mode1_ckpt": "(불명)",
+  "mode2_ckpt": "(불명)",
+  "mode3_ckpt": "(불명)",
+  "verify": {
+    "note": "배포 당시 검증 기록이 남아 있지 않다."
+  },
+  "requires": "(선언 없음 — 이 슬롯은 config 계약 이전 판이라 기동 시 검사가 생략된다)"
+}

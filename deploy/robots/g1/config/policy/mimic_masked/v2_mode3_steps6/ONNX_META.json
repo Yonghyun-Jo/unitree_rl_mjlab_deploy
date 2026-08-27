@@ -1,0 +1,19 @@
+{
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[4096, 4096, 4096, 2048]",
+  "obs_dim": "1640",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-04_21-25-29_v2_cap4096_4L_steps12_30k/model_29500.pt",
+  "mode1_ckpt": "none",
+  "mode2_ckpt": "none",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-06_22-34-43_s4_mode3_v2_cwc_fp16/model_29999.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deployable_on_orin_nx": false,
+  "reason": "추론 1회 1052MB 스트리밍 → 50Hz 에 52.6 GB/s 필요. Orin NX 총 대역폭 102.4 GB/s, CPU 1코어 ≈12 GB/s.",
+  "stream_mb_per_inference": 1052,
+  "required_bandwidth_50hz": "52.6 GB/s",
+  "latency_com1_1thread": "16.8 ms (실기와 무관 — 기계가 다름)",
+  "latency_jetson_cpu1_est": "88 ms",
+  "latency_jetson_gpu_est": "14.0 ms (GPU EP 미구축)",
+  "sim2sim_use": "계약·거동 검증 전용. sim 속도를 낮춰 돌리지 말 것. steps 비교는 mjlab record_eval 에서.",
+  "local_only": "🔴 이 슬롯은 **로컬 전용**이다 (2026-08-27). policy.onnx 가 177 MB 로 GitHub 100 MB 한도를 넘어 커밋할 수 없다 — .gitignore 에 넣었다. com1 sim2sim 은 되지만 **실기 배포는 불가**하다(로봇이 pull 로 못 받는다). 실기에 올리려면 ① 더 작게 다시 굽거나 ② Git LFS 를 붙여야 한다. 재생성은 아래 export_cmd."
+}

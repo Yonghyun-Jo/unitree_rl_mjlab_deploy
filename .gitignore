@@ -19,3 +19,10 @@ simulate/build
 .gmr/
 __pycache__/
 *.pyc
+
+# 🔴 로컬 전용 정책 슬롯 — GitHub 100 MB 한도 초과라 커밋할 수 없다.
+#    v2_mode3_steps6/exported/policy.onnx 는 177 MB (다른 슬롯은 8~37 MB).
+#    com1 sim2sim 은 되지만 «실기 배포는 불가» 하다 — 로봇이 pull 로 못 받는다.
+#    재생성은 그 슬롯 ONNX_META.json 의 export_cmd 한 줄.
+deploy/robots/g1/config/policy/mimic_masked/v2_mode3_steps6/exported/
+deploy/robots/g1/config/policy/mimic_masked/v2_mode3_steps6/params/*.npz
