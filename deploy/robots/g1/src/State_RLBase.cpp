@@ -66,7 +66,8 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
         spdlog::critical("[obs contract] {}", e.what());
         spdlog::critical("  정책: {}", (policy_dir / "exported" / "policy.onnx").string());
         spdlog::critical("  계약: {}", (policy_dir / "params" / "deploy.yaml").string());
-        std::exit(1);
+        spdlog::default_logger()->flush();
+        std::_Exit(1);
     }
 
     this->registered_checks.emplace_back(

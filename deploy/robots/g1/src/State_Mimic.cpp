@@ -3,9 +3,11 @@
 #include "LoopDiag.h"
 #include "unitree_articulation.h"
 #include "MaskedLocoController.h"   // deploy-clean foot_z gen + base_vel spline + arm-blend
+#include "DeployFeatures.h"         // 슬롯이 요구하는 C++ 기능 ↔ 이 바이너리가 아는 기능
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include <atomic>
+#include <cstdlib>     // getenv (G1_POLICY_SLOT)
 #include <cstring>
 #include <thread>
 #include <algorithm>   // std::clamp
@@ -495,11 +497,79 @@ REGISTER_OBSERVATION(masked_root_pos_b)
 }
 
 
+namespace {
+// 후행 '/' 를 뗀다. std::filesystem 은 "a/b/" 의 parent_path() 를 "a/b" 로, filename() 을
+// «빈 문자열» 로 준다 — config.yaml 의 policy_dir 이 '/' 로 끝나기 때문에 이 함정에 세 번
+// 빠졌다(슬롯이 자기 안에 중첩 · slot_name 이 빈 문자열 · 슬롯 목록이 빈 목록).
+inline std::filesystem::path trim_sep(std::filesystem::path p)
+{
+    std::string s = p.string();
+    while (!s.empty() && (s.back() == '/' || s.back() == '\\')) s.pop_back();
+    return std::filesystem::path(s);
+}
+// 기동 실패로 즉시 죽는다. std::exit 은 정적 소멸자를 돌리는데, 이 시점엔 아직 join 안 된
+// 스레드가 있어 «terminate called without an active exception» 으로 abort(core dump)된다.
+// 조작자에겐 위의 critical 메시지가 전부이므로, 로그만 비우고 깨끗한 종료코드로 끝낸다.
+[[noreturn]] inline void die_startup()
+{
+    spdlog::default_logger()->flush();
+    std::_Exit(1);
+}
+}  // namespace
+
 State_Mimic::State_Mimic(int state_mode, std::string state_string)
 : FSMState(state_mode, state_string) 
 {
     auto cfg = param::config["FSM"][state_string];
-    auto policy_dir = param::parser_policy_dir(cfg["policy_dir"].as<std::string>());
+    // 🔴 슬롯 전환 — 하루에 여러 정책을 시험할 때 «파일을 안 고치고» 바꾼다.
+    //    G1_POLICY_SLOT=<슬롯이름> 이면 그 슬롯을, 없으면 config.yaml 의 policy_dir 을 쓴다.
+    //    왜 환경변수인가: ① 로봇에서 코드·설정을 고치지 않는다(한 방향 규칙) ② 재빌드·pull 이
+    //    없다 ③ param.h(공용 base, 6대 공유)를 안 건드린다. 같은 파일이 이미 G1_SAFETY_CSV ·
+    //    G1_STATE_CSV · G1_FOOTZ_SRC 를 같은 방식으로 쓴다.
+    //    🔴 «Mimic_Masked 에만» 적용한다. State_Mimic 은 Mimic_Dance1_subject2 로도 생성되는데
+    //    (policy_dir = config/policy/mimic/dance1_subject2/), 거기까지 가로채면 슬롯 이름을
+    //    엉뚱한 부모(mimic/dance1_subject2/)에 붙여 «없는 경로» 를 만든다. 실제로 그랬다 —
+    //    테스트가 잡았다. 슬롯 시험의 대상은 multihead 정책 하나뿐이다.
+    std::string slot_name;
+    std::string policy_cfg = cfg["policy_dir"].as<std::string>();
+    if (const char* env_slot = std::getenv("G1_POLICY_SLOT")) {
+        if (*env_slot && state_string != "Mimic_Masked") {
+            spdlog::info("[slot] G1_POLICY_SLOT 은 Mimic_Masked 에만 적용된다 — '{}' 는 config.yaml 대로",
+                         state_string);
+        } else if (*env_slot) {
+            slot_name = env_slot;
+            // 슬롯 «이름» 만 주면 되도록 부모(mimic_masked/)를 이어 붙인다.
+            // 🔴 config 값이 '/' 로 끝난다 — 그대로 parent_path() 하면 «자기 자신» 이 나와
+            //    슬롯이 자기 안에 중첩된다(.../v4_.../v3_...). 후행 구분자를 먼저 떼야 한다.
+            //    테스트가 잡았다.
+            std::filesystem::path base = trim_sep(policy_cfg).parent_path();
+            policy_cfg = (base / slot_name).string() + "/";
+            spdlog::warn("[slot] G1_POLICY_SLOT='{}' -> {} (config.yaml 대신 이것을 쓴다)",
+                         slot_name, policy_cfg);
+        }
+    }
+    // 🔴 존재 확인은 parser_policy_dir «앞» 에서 한다 — 그 함수는 exported/ 가 없으면
+    //    디렉터리를 순회하는데, 경로 자체가 없으면 filesystem_error 를 던져 abort 된다
+    //    (오타 하나에 core dump = 「내가 뭘 잘못 쳤나」를 알 수 없다). 테스트가 잡았다.
+    {
+        std::filesystem::path probe = policy_cfg;
+        if (probe.is_relative()) probe = param::proj_dir / probe;
+        if (!std::filesystem::exists(probe)) {
+            spdlog::critical("[slot] 그런 슬롯이 없다: {}", probe.string());
+            spdlog::critical("       G1_POLICY_SLOT='{}' 오타이거나, 아직 push/pull 이 안 된 슬롯이다.",
+                             slot_name.empty() ? std::string("(미지정)") : slot_name);
+            spdlog::critical("       있는 슬롯 목록:");
+            std::error_code ec;
+            std::filesystem::path parent = trim_sep(probe).parent_path();
+            for (const auto& e : std::filesystem::directory_iterator(parent, ec))
+                if (e.is_directory() && std::filesystem::exists(e.path() / "exported"))
+                    spdlog::critical("         - {}", e.path().filename().string());
+            die_startup();
+        }
+    }
+    auto policy_dir = param::parser_policy_dir(policy_cfg);
+    // 같은 이유로 filename() 도 빈 문자열이 된다 -> 후행 구분자를 뗀 뒤 이름을 뽑는다.
+    if (slot_name.empty()) slot_name = trim_sep(policy_dir).filename().string();
 
     auto articulation = std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate);
 
@@ -558,6 +628,26 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     }
 
     auto dcfg = YAML::LoadFile(policy_dir / "params" / "deploy.yaml");
+    // 🔴 config 계약: 이 슬롯이 요구하는 C++ 기능을 이 바이너리가 아는가.
+    //    yaml 파서는 «모르는 키를 그냥 지나친다» — 그래서 옛 바이너리로 새 슬롯을 돌리면
+    //    에러 없이 옛 거동이 나온다(2026-08-26 gait table/cadence/turn_asym 이 그럴 뻔했다).
+    //    obs 계약과 같은 자리에서 같은 방식으로 죽인다. requires: 가 없는 옛 슬롯은 통과.
+    if (dcfg["requires"] && dcfg["requires"].IsSequence()) {
+        std::vector<std::string> req;
+        for (const auto& n : dcfg["requires"]) req.push_back(n.as<std::string>());
+        const auto miss = g1_features::missing(req);
+        if (!miss.empty()) {
+            spdlog::critical("[deploy 계약] {}", g1_features::explain(miss, slot_name));
+            die_startup();
+        }
+        std::string joined;
+        for (const auto& f : req) joined += (joined.empty() ? "" : " ") + f;
+        spdlog::info("[deploy 계약] 슬롯 '{}' 요구 기능 {}개 전부 지원: {}",
+                     slot_name, req.size(), joined);
+    } else {
+        spdlog::info("[deploy 계약] 슬롯 '{}' 은 requires: 를 선언하지 않았다 (옛 슬롯 — 검사 생략)",
+                     slot_name);
+    }
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
         dcfg,
         articulation
@@ -586,7 +676,7 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
         spdlog::critical("[obs contract] {}", e.what());
         spdlog::critical("  정책: {}", (policy_dir / "exported" / "policy.onnx").string());
         spdlog::critical("  계약: {}", (policy_dir / "params" / "deploy.yaml").string());
-        std::exit(1);
+        die_startup();
     }
     load_safety_cfg(dcfg["safety"]);   // fail-safe: 없거나/이상하면 전부 비활성 (아래 정의)
     load_gait_cfg(dcfg["gait"]);       // fail-safe: 없으면 종전 quintic 기본값 유지 (아래 정의)

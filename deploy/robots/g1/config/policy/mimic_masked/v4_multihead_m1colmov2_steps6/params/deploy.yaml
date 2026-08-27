@@ -24,6 +24,16 @@
 #   The other 5 (base_ang_vel, projected_gravity, joint_pos_rel, joint_vel_rel, last_action)
 #   already exist in deploy/include/isaaclab/envs/mdp/observations/observations.h.
 
+# ── 이 슬롯이 요구하는 C++ 기능 (DeployFeatures.h) ───────────────────────────────
+# 🔴 yaml 파서는 «모르는 키를 그냥 지나친다». 그래서 아래 gait: 의 table/cadence/turn_asym 을
+#    모르는 바이너리로 이 슬롯을 돌리면 **에러 없이 옛 거동**(V1 표·cadence 1.0)이 나온다.
+#    이 선언이 그걸 기동 시점에 막는다 — 모르는 기능이 하나라도 있으면 exit(1) + 재빌드 안내.
+#    새 키/블록으로 «거동» 을 바꾸면 여기에 기능 이름을 추가할 것.
+requires:
+  - obs_contract        # 기동 시 ONNX 메타데이터의 obs 계약을 deploy.yaml 과 대조
+  - gait_mode_table     # gait: 의 모드별 table(V1/V2) · cadence · turn_asym
+  - ref_foot_height_ref # mode>=3 의 발-z 를 레퍼런스(클립/VR)에서 얻는다
+
 joint_ids_map: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28]
 step_dt: 0.02
 
