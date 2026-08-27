@@ -902,7 +902,7 @@ void State_Mimic::enter()
 
     motion = motion_; // set for specific motion
     safety_log_.open_from_env();   // G1_SAFETY_CSV 가 있을 때만 켜진다(기본 꺼짐)
-    state_dump_.open_from_env();   // G1_STATE_CSV 가 있을 때만 (sim2sim ↔ 실기 대조 계측)
+    state_dump_.open_from_env("G1_STATE_CSV", GaitAux::header());   // G1_STATE_CSV 가 있을 때만 (sim2sim ↔ 실기 대조 계측)
     std::remove("/dev/shm/g1_vr_ref");   // clear any stale VR ref so it can't hijack on entry
                                          // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
     { // mode2/3 hold this neutral pose (robot default) until VR provides a reference — never the clip
@@ -1224,28 +1224,6 @@ void State_Mimic::run()
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
     // 계측(기본 꺼짐). 명령을 다 실은 «뒤» 라 이 줄의 q_des 는 실제로 나가는 값과 같다.
-    if (state_dump_.on()) {
-        // 발-z 생성기의 내부 시계를 같이 남긴다 — 이 틱에 «명령한» 보폭 주파수를 재계산이 아니라
-        // 생성기가 실제로 쓴 것과 같은 순수함수로 뽑는다(gl_stride_freq).
-        const auto& mg = g_loco.mode_gait[std::max(1, std::min(g_cmd_mode, 5))];
-        g1::GaitAux ga;
-        ga.lut       = mg.lut ? 1 : 0;
-        ga.phase     = mg.lut ? g_loco.phase_f
-                              : float(g_loco.phase) / std::max(1, g_loco.period_steps);
-        ga.eff       = g_loco.effective_speed(g_loco.base_vel[0], g_loco.base_vel[1],
-                                              g_loco.base_vel[2]);
-        ga.stride_hz = mg.lut
-            ? gl_stride_freq(MaskedLocoController::table_of(mg), ga.eff, g_loco.is_run) * mg.cadence
-            : 50.0f / float(std::max(1, g_loco.period_steps));
-        ga.foot_z_l  = g_loco.foot_z[0];
-        ga.foot_z_r  = g_loco.foot_z[1];
-        ga.bv_x      = g_loco.base_vel[0];
-        ga.bv_y      = g_loco.base_vel[1];
-        ga.bv_wz     = g_loco.base_vel[2];
-        ga.arm_scale = g_loco.arm_scale;
-        ga.switch_a  = g_loco.switch_alpha;
-        ga.is_run    = g_loco.is_run ? 1 : 0;
-        ga.cmd_mode  = g_cmd_mode;
-        state_dump_.tick(FSMState::lowstate->msg_, lowcmd->msg_, ga);
-    }
+    if (state_dump_.on())
+        state_dump_.tick(FSMState::lowstate->msg_, lowcmd->msg_, g_loco.probe(g_cmd_mode));
 }

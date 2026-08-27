@@ -10,8 +10,39 @@
 #pragma once
 #include "GaitLut.h"
 #include <array>
+#include <cstdio>
 #include <algorithm>
 #include <cmath>
+
+// 이 컨트롤러의 «내부 시계» 한 장. 계측(StateDump)이 CSV 로 남긴다.
+// 🔴 열 이름(header)과 값(write)이 **이 구조체 안에 나란히** 있다 — 필드를 늘릴 때
+//    둘 중 하나만 고치면 tests/test_state_dump.cpp 가 열 개수 불일치로 잡는다.
+// 🔴 값은 전부 «컨트롤러가 실제로 쓴 것» 이다. 계측이 다시 계산하지 않는다 —
+//    재계산하면 update() 의 로직이 바뀔 때 조용히 다른 값을 찍는다.
+struct GaitAux {
+  float phase     = 0.f;   // LUT 실수 위상 [0,1) (quintic 이면 phase/period_steps)
+  float stride_hz = 0.f;   // update() 가 이 스텝에 실제로 쓴 보폭 주파수 [Hz]
+  float eff       = 0.f;   // update() 가 실제로 표에 넣은 속도 (정착 중이면 settle_eff)
+  float foot_z_l  = 0.f;
+  float foot_z_r  = 0.f;
+  float bv_x = 0.f, bv_y = 0.f, bv_wz = 0.f;   // 스플라인 «후» base_vel (obs 로 나가는 그 값)
+  float arm_scale = 1.f;
+  float switch_a  = 1.f;   // 모드전환 crossfade 가중
+  int   is_run    = 0;
+  int   cmd_mode  = 0;
+  int   lut       = 0;     // 1 = LUT 분기, 0 = quintic 분기
+  int   settling  = 0;     // 1 = 정지 정착 중 (한 걸음 더 굴러 발을 모으는 구간)
+
+  static const char* header() {
+    return ",phase,stride_hz,eff,foot_z_l,foot_z_r,bv_x,bv_y,bv_wz,"
+           "arm_scale,switch_a,is_run,cmd_mode,lut,settling";
+  }
+  void write(std::FILE* f) const {
+    std::fprintf(f, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d",
+                 phase, stride_hz, eff, foot_z_l, foot_z_r,
+                 bv_x, bv_y, bv_wz, arm_scale, switch_a, is_run, cmd_mode, lut, settling);
+  }
+};
 
 struct MaskedLocoController {
   // ---- 모드별 발-z 생성 조건 (deploy.yaml `gait:` 에서 로드) ----------------------
@@ -72,12 +103,38 @@ struct MaskedLocoController {
   // ---- state ----
   int   phase   = 0;        // quintic: 정수 위상 (period_steps 로 나눔)
   float phase_f = 0.0f;     // LUT: 실수 위상 [0,1), 보폭 주파수로 진행
+  float last_stride_hz = 0.0f;  // update() 가 «실제로 쓴» 보폭 주파수 [Hz].
+  float last_eff       = 0.0f;  // update() 가 «실제로 표에 넣은» 속도. 정착 중이면 settle_eff.
+                                // 둘 다 계측이 재계산하지 않게 기록해 둔다(probe()가 읽는다).
   bool  is_run  = false;    // LUT: walk/run 1비트 (히스테리시스, 속도로 추론하지 않음)
   std::array<float, 3> bv_last = {0.f, 0.f, 0.f};
   std::array<float, 3> bv_ramp_from = {0.f, 0.f, 0.f};
   float bv_blend = 1.0f;
   int   bv_ramp_rem = 0;
   int   arm_rem = 0;
+
+  // 계측용 스냅샷. 🔴 전부 «멤버 직독» 이다 — 이름이 바뀌면 여기서 컴파일이 깨져
+  //    (조용히 틀린 값이 아니라) 고치는 자리 바로 옆에서 알려 준다.
+  //    호출부(State_Mimic)가 컨트롤러 내부를 알 필요가 없다.
+  GaitAux probe(int cmd_mode) const {
+    const ModeGait& mg = mode_gait[std::max(1, std::min(cmd_mode, 5))];
+    GaitAux g;
+    g.lut       = mg.lut ? 1 : 0;
+    g.phase     = mg.lut ? phase_f : float(phase) / float(std::max(1, period_steps));
+    g.stride_hz = last_stride_hz;                      // 재계산 아님 — update() 가 쓴 값
+    g.eff       = last_eff;                            // 재계산 아님 (정착 중이면 settle_eff)
+    g.settling  = settling ? 1 : 0;
+    g.foot_z_l  = foot_z[0];
+    g.foot_z_r  = foot_z[1];
+    g.bv_x      = base_vel[0];
+    g.bv_y      = base_vel[1];
+    g.bv_wz     = base_vel[2];
+    g.arm_scale = arm_scale;
+    g.switch_a  = switch_alpha;
+    g.is_run    = is_run ? 1 : 0;
+    g.cmd_mode  = cmd_mode;
+    return g;
+  }
 
   // ---- mode-switch crossfade (mode -> {2,3,4,5}) -------------------------------------------
   // Ease the OUTPUT action from the frozen pre-switch pose to the live action over
@@ -194,7 +251,9 @@ struct MaskedLocoController {
       float eff_g = settling ? settle_eff : eff;
       is_run  = gl_select_gait(eff_g, is_run, walk_max, run_min);
       const float prev_ph = phase_f;
-      phase_f = std::fmod(phase_f + gl_stride_freq(T, eff_g, is_run) * mg.cadence / 50.0f, 1.0f);
+      last_stride_hz = gl_stride_freq(T, eff_g, is_run) * mg.cadence;
+      last_eff       = eff_g;   // ⚠ eff 가 아니다 — 정착 중에는 settle_eff 로 표를 조회한다
+      phase_f = std::fmod(phase_f + last_stride_hz / 50.0f, 1.0f);
       // 두 발이 «가장 함께 낮은» 위상을 지나면 종료. 못 지나도 예산이 다하면 끝난다
       // («정지를 눌렀는데 안 멈춤» 을 만들지 않는다 — 조작성 우선).
       if (settling) {
@@ -206,6 +265,8 @@ struct MaskedLocoController {
       gl_foot_z(T, phase_f, eff_g, is_run, mg.turn_asym, bv[2], foot_z[0], foot_z[1]);
     } else {
       phase = (phase + 1) % period_steps;
+      last_stride_hz = 50.0f / float(std::max(1, period_steps));
+      last_eff       = eff;
       const float phase01 = float(phase) / period_steps;
       foot_z = gen_foot_z(phase01, eff);
     }
