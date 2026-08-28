@@ -28,6 +28,7 @@ struct GaitAux {
   float bv_x = 0.f, bv_y = 0.f, bv_wz = 0.f;   // 스플라인 «후» base_vel (obs 로 나가는 그 값)
   float arm_scale = 1.f;
   float switch_a  = 1.f;   // 모드전환 crossfade 가중
+  float swing_sc  = 1.f;   // 이 스텝에 실제로 적용된 최소 스윙 배율 (1 = 안 걸림)
   int   is_run    = 0;
   int   cmd_mode  = 0;
   int   lut       = 0;     // 1 = LUT 분기, 0 = quintic 분기
@@ -35,12 +36,13 @@ struct GaitAux {
 
   static const char* header() {
     return ",phase,stride_hz,eff,foot_z_l,foot_z_r,bv_x,bv_y,bv_wz,"
-           "arm_scale,switch_a,is_run,cmd_mode,lut,settling";
+           "arm_scale,switch_a,swing_sc,is_run,cmd_mode,lut,settling";
   }
   void write(std::FILE* f) const {
-    std::fprintf(f, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d",
+    std::fprintf(f, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d",
                  phase, stride_hz, eff, foot_z_l, foot_z_r,
-                 bv_x, bv_y, bv_wz, arm_scale, switch_a, is_run, cmd_mode, lut, settling);
+                 bv_x, bv_y, bv_wz, arm_scale, switch_a, swing_sc,
+                 is_run, cmd_mode, lut, settling);
   }
 };
 
@@ -110,6 +112,8 @@ struct MaskedLocoController {
   float phase_f = 0.0f;     // LUT: 실수 위상 [0,1), 보폭 주파수로 진행
   float last_stride_hz = 0.0f;  // update() 가 «실제로 쓴» 보폭 주파수 [Hz].
   float last_eff       = 0.0f;  // update() 가 «실제로 표에 넣은» 속도. 정착 중이면 settle_eff.
+  float last_swing_sc  = 1.0f;  // 최소 스윙 배율. gl_foot_z 가 «실제로 적용한» 값을 받아 둔다 —
+                                // 계측이 eff+표로 되계산하면 표가 바뀔 때 조용히 갈린다.
                                 // 둘 다 계측이 재계산하지 않게 기록해 둔다(probe()가 읽는다).
   bool  is_run  = false;    // LUT: walk/run 1비트 (히스테리시스, 속도로 추론하지 않음)
   std::array<float, 3> bv_last = {0.f, 0.f, 0.f};
@@ -136,6 +140,7 @@ struct MaskedLocoController {
     g.bv_wz     = base_vel[2];
     g.arm_scale = arm_scale;
     g.switch_a  = switch_alpha;
+    g.swing_sc  = last_swing_sc;                       // 재계산 아님 — gl_foot_z 가 쓴 값
     g.is_run    = is_run ? 1 : 0;
     g.cmd_mode  = cmd_mode;
     return g;
@@ -267,11 +272,13 @@ struct MaskedLocoController {
       }
       settling = (settle_rem > 0);
       eff_g = settling ? settle_eff : eff;
-      gl_foot_z(T, phase_f, eff_g, is_run, mg.turn_asym, bv[2], foot_z[0], foot_z[1], mg.min_swing);
+      gl_foot_z(T, phase_f, eff_g, is_run, mg.turn_asym, bv[2], foot_z[0], foot_z[1],
+                mg.min_swing, &last_swing_sc);
     } else {
       phase = (phase + 1) % period_steps;
       last_stride_hz = 50.0f / float(std::max(1, period_steps));
       last_eff       = eff;
+      last_swing_sc  = 1.0f;    // quintic 분기엔 최소 스윙이 없다
       const float phase01 = float(phase) / period_steps;
       foot_z = gen_foot_z(phase01, eff);
     }

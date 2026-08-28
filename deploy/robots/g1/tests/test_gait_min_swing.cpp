@@ -112,6 +112,28 @@ static int run_all(float MS) {
         CHECK(std::fabs(a - MS) < 1e-4f, "V1 에서 동작 안 함");
     }
 
+    {   // ⑨ 계측이 «실제로 적용된 배율» 을 받아 간다 — 분석이 되계산하지 않게.
+        //    이게 없으면 로그를 보고 «이 걸음이 키워졌나» 를 표로 되풀어야 하고,
+        //    표가 바뀌는 순간 그 재계산은 조용히 틀린 값을 준다.
+        float zl, zr, sc = -1.f;
+        gl_foot_z(GL_T_V2, 0.3f, 0.10f, false, false, 0.f, zl, zr, MS, &sc);
+        const float A0 = amp_at(GL_T_V2, 0.10f, false, 0.0f);
+        CHECK(std::fabs(sc - MS / A0) < 1e-3f, "저속에서 배율이 min_swing/A 가 아니다");
+        CHECK(sc > 1.0f, "저속인데 배율이 1 이다");
+
+        sc = -1.f;                                     // 이미 큰 속도 = 정확히 no-op
+        gl_foot_z(GL_T_V2, 0.3f, 0.80f, false, false, 0.f, zl, zr, MS, &sc);
+        CHECK(sc == 1.0f, "고속에서 배율이 정확히 1 이 아니다");
+
+        sc = -1.f;                                     // 끔 = 항상 1
+        gl_foot_z(GL_T_V2, 0.3f, 0.10f, false, false, 0.f, zl, zr, 0.0f, &sc);
+        CHECK(sc == 1.0f, "min_swing 을 껐는데 배율이 1 이 아니다");
+
+        sc = -1.f;                                     // 정지 게이트로 빠져도 채워야 한다
+        gl_foot_z(GL_T_V1, 0.3f, 0.0f, false, false, 0.f, zl, zr, MS, &sc);
+        CHECK(sc == 1.0f, "정지 게이트에서 배율이 안 채워졌다");
+    }
+
     return fails;
 }
 

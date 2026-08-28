@@ -207,9 +207,13 @@ inline void gl_turn_asym(const GlTable& T, float wz, bool is_run, float& s_l, fl
 // 위상 [0,1) + 유효속도 + gait -> 발 높이 [z_L, z_R].
 //   use_asym=false, wz=0 이면 2026-08-17 이전 거동과 비트 동일(zL = zR 반주기 시프트).
 //   정지 게이트 임계는 표가 갖는다(T.stand_eps).
+// out_swing_scale — 이 스텝에 «실제로 적용된» 최소 스윙 배율. 계측이 나중에 eff+표로
+//   다시 계산하지 않게 여기서 받아 간다(표가 바뀌면 재계산은 조용히 갈린다).
+//   1.0 = 안 걸림. 정지 게이트로 빠지면 1.0.
 inline void gl_foot_z(const GlTable& T, float phase, float eff, bool is_run,
                       bool use_asym, float wz, float& z_l, float& z_r,
-                      float min_swing = 0.0f) {
+                      float min_swing = 0.0f, float* out_swing_scale = nullptr) {
+    if (out_swing_scale) *out_swing_scale = 1.0f;
     if (eff < T.stand_eps) { z_l = T.stance_z; z_r = T.stance_z; return; }
     const float* P    = is_run ? T.run_p : T.walk_p;
     const float* grid = is_run ? T.run_v : T.walk_v;
@@ -220,6 +224,7 @@ inline void gl_foot_z(const GlTable& T, float phase, float eff, bool is_run,
     // asym 이 좌우로 «분배» 한다(asym 은 평균 보존이라 순서가 바뀌면 평균이 안 맞는다).
     float s0, base0;
     gl_swing_adjust(T, eff, is_run, min_swing, s0, base0);
+    if (out_swing_scale) *out_swing_scale = s0;
     if (s0 != 1.0f) {
         z_l = base0 + (z_l - base0) * s0;
         z_r = base0 + (z_r - base0) * s0;

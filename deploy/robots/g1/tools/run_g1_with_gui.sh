@@ -15,6 +15,12 @@
 #      (deploy.yaml 의 requires: ↔ DeployFeatures.h). 재빌드 여부를 사람이 판단하지 않는다.
 #     ./run_g1_with_gui.sh --list          있는 슬롯 목록만 보고 끝
 #
+#   gait 계측 (발-z 명령·eff·최소스윙 배율·정착 여부를 50 Hz 로 CSV):
+#     ./run_g1_with_gui.sh eth0 --policy v1b --dump
+#   🔴 이게 없으면 실기 로그에는 «어떤 걸음이 왜 그랬는지» 가 안 남는다 — 온보드 로거는
+#      관절각만 찍지 발-z 명령을 모른다. min_swing 같은 걸 판정하려면 켜야 한다.
+#      1 kHz 스레드는 이걸 켜도 파일을 만지지 않는다(StateDump.h 가 링+쓰기스레드로 갈랐다).
+#
 # The viser GUI runs in the background (writes /dev/shm/g1_masked_gui); g1_ctrl runs in the
 # foreground so its terminal keyboard still works as a backup. GUI + g1_ctrl MUST be on the
 # same host (shared /dev/shm) — true for the standard tethered control-PC deploy. The browser
@@ -51,11 +57,12 @@ list_slots() {
   done
 }
 
-NET="lo"; POLICY=""
+NET="lo"; POLICY=""; DUMP=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --policy) POLICY="${2:-}"; shift 2 ;;
     --policy=*) POLICY="${1#*=}"; shift ;;
+    --dump) DUMP=1; shift ;;
     --list) list_slots; exit 0 ;;
     -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
     *) NET="$1"; shift ;;
@@ -127,5 +134,24 @@ if mkdir -p "$LOGDIR" 2>/dev/null; then
   } > "$MARK" 2>/dev/null && echo "[run] trial marker -> $MARK"
 fi
 
+# gait 계측. 🔴 쓰는 동안엔 «.part» 다 — 자동 회수(g1-autorecover)가 30초마다 *.csv 를
+#    --remove-source-files 로 가져가므로, 실행 중인 파일이 .csv 면 낚아채여 지워진다.
+#    끝난 뒤 이름을 바꾸면 그때부터 회수 대상이 된다.
+DUMP_PART=""
+if [[ "$DUMP" == "1" && -n "${LOGDIR:-}" && -d "$LOGDIR" ]]; then
+  DUMP_PART="$LOGDIR/gait_$(date +%Y%m%d_%H%M%S).csv.part"
+  export G1_STATE_CSV="$DUMP_PART"
+  echo "[run] gait 계측 ON -> $DUMP_PART  (끝나면 .csv 로 바뀌어 회수된다)"
+fi
+
 echo "[run] starting g1_ctrl --network=$NET  (terminal keyboard: 1/2/3, WASD/QE, p=stop)"
 "$G1DIR/build/g1_ctrl" --network="$NET"
+RC=$?
+
+if [[ -n "$DUMP_PART" && -s "$DUMP_PART" ]]; then
+  mv -f "$DUMP_PART" "${DUMP_PART%.part}"
+  echo "[run] gait 계측 -> ${DUMP_PART%.part}  ($(wc -l < "${DUMP_PART%.part}") 줄)"
+elif [[ -n "$DUMP_PART" ]]; then
+  echo "[run] ⚠ gait 계측 파일이 비었다 ($DUMP_PART)"
+fi
+exit $RC
