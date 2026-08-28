@@ -26,8 +26,8 @@ static float amp_at(const GlTable& T, float eff, bool run, float ms) {
     return hi - lo;
 }
 
-int main() {
-    const float MS = 0.06f;
+// 배포에서 실제로 쓰는 값 전부를 덮는다 — 테스트에 없는 값이 슬롯에 들어가면 잠긴 게 아니다.
+static int run_all(float MS) {
 
     {   // ① 기본값(0) 은 정확히 no-op — 옛 슬롯·mode2 가 한 비트도 안 변해야 한다
         for (float e : {0.05f, 0.1f, 0.3f, 0.8f, 1.5f}) {
@@ -46,7 +46,7 @@ int main() {
         }
     }
     {   // ③ 이미 큰 속도는 안 건드린다 (진폭 > min_swing 이면 s=1)
-        for (float e : {0.80f, 1.00f, 1.20f}) {
+        for (float e : {0.80f, 1.00f, 1.20f}) {   // 8 cm 에서도 원래 진폭이 더 크다
             const float a0 = amp_at(GL_T_V2, e, false, 0.0f);
             const float a1 = amp_at(GL_T_V2, e, false, MS);
             CHECK(a0 > MS, "전제: 이 속도는 원래 min_swing 보다 크다");
@@ -112,6 +112,15 @@ int main() {
         CHECK(std::fabs(a - MS) < 1e-4f, "V1 에서 동작 안 함");
     }
 
-    printf(fails ? "[test_gait_min_swing] %d FAIL\n" : "[test_gait_min_swing] ALL PASS\n", fails);
+    return fails;
+}
+
+int main() {
+    for (float ms : {0.06f, 0.08f}) {           // v1b = 6 cm, v1c = 8 cm
+        const int before = fails;
+        run_all(ms);
+        if (fails > before) printf("  ↑ min_swing=%.2f 에서 실패\n", ms);
+    }
+    printf(fails ? "[test_gait_min_swing] %d FAIL\n" : "[test_gait_min_swing] ALL PASS (6cm, 8cm)\n", fails);
     return fails ? 1 : 0;
 }
