@@ -340,6 +340,53 @@ def cmd_check(args):
     return 1 if bad else 0
 
 
+def cmd_migrate_robot(args):
+    """일회성 — 로봇을 «가중치가 git 에 있던» 상태에서 «git 밖» 으로 넘긴다.
+
+    🔴 순서가 전부다. 그냥 pull 하면 git 이 «추적하던 파일이 커밋에서 사라졌다» 고 보고
+       로봇 워킹트리에서 **바이너리를 지운다**. 그러면 241 MB 를 WiFi 로 다시 보내야 한다.
+       그래서 pull 전에 빼두고 pull 뒤에 되돌린다 — 전송 0 MB.
+       (보관소로 나간 옛 슬롯 10개는 일부러 안 빼둔다. 로봇에서 지워지는 게 맞다.)
+    """
+    keep = args.slots or sorted(set(read_active().values()))
+    if not keep:
+        print("🔴 남길 슬롯이 없다"); return 1
+    root = "%s/deploy/robots/g1/config/policy/mimic_masked" % ROBOT_WS
+    tar = "/tmp/policy_weights_migrate.tar"
+    pats = " ".join("%s/exported %s/params/*.npz" % (k, k) for k in keep)
+
+    def ssh(cmd, quiet=False):
+        r = subprocess.run(["ssh", "-o", "ConnectTimeout=15", ROBOT, cmd],
+                           capture_output=True, text=True)
+        if not quiet:
+            sys.stdout.write(r.stdout)
+        if r.returncode != 0:
+            sys.stderr.write(r.stderr)
+        return r.returncode, r.stdout.strip()
+
+    print("① 로봇에서 오늘 슬롯 %d 개의 가중치를 빼둔다" % len(keep))
+    rc, _ = ssh("cd %s && tar cf %s %s && tar tf %s | wc -l" % (root, tar, pats, tar))
+    if rc:
+        print("🔴 tar 실패 — 중단한다 (아직 아무것도 안 바뀌었다)"); return 1
+
+    print("② 코드 pull")
+    r = subprocess.run([os.path.expanduser("~/piene_automation/robot_bridge/robot.sh"),
+                        "sync-code", "unitree_rl_mjlab_deploy"])
+    if r.returncode != 0:
+        print("🔴 pull 실패 — 로봇에서 `tar xf %s` 로 되돌려라" % tar); return 1
+
+    print("③ 되돌린다")
+    rc, _ = ssh("cd %s && tar xf %s && echo 복원완료" % (root, tar))
+    if rc:
+        print("🔴 복원 실패 — 로봇에서 직접 `cd %s && tar xf %s`" % (root, tar)); return 1
+
+    print("④ 확인")
+    ssh("cd %s && for s in %s; do printf '  %%-30s %%s\\n' $s "
+        "\"$(md5sum $s/exported/policy.onnx 2>/dev/null | cut -c1-12)\"; done; "
+        "echo; du -sh . ; df -h / | tail -1" % (root, " ".join(keep)))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd")
@@ -355,6 +402,8 @@ def main():
     p.add_argument("--dry-run", action="store_true"); p.set_defaults(fn=cmd_push)
     sub.add_parser("index").set_defaults(fn=cmd_index)
     sub.add_parser("check").set_defaults(fn=cmd_check)
+    p = sub.add_parser("migrate-robot"); p.add_argument("slots", nargs="*")
+    p.set_defaults(fn=cmd_migrate_robot)
     a = ap.parse_args()
     if not getattr(a, "fn", None):
         ap.print_help(); return 1
