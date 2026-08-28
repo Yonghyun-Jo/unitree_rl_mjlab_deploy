@@ -864,6 +864,7 @@ void State_Mimic::load_gait_cfg(const YAML::Node& g)
             if (n["cadence"])   mg.cadence   = n["cadence"].as<float>();
             if (n["turn_asym"]) mg.turn_asym = n["turn_asym"].as<bool>();
             if (n["settle_steps"]) mg.settle_steps = n["settle_steps"].as<int>();
+            if (n["min_swing"])    mg.min_swing    = n["min_swing"].as<float>();
             if (mg.table != 1 && mg.table != 2) {
                 spdlog::warn("[gait] mode{}: table={} 은 없는 판번호 -> 1 로 되돌린다", m, mg.table);
                 mg.table = 1;
@@ -877,9 +878,9 @@ void State_Mimic::load_gait_cfg(const YAML::Node& g)
             if (n["height_scale"])   mg.height_scale   = n["height_scale"].as<float>();
             if (n["stand_deadzone"]) mg.stand_deadzone = n["stand_deadzone"].as<float>();
             spdlog::info("[gait] mode{}: source={} table=V{} cadence={:.3f} asym={} settle={} "
-                         "height_scale={:.2f} stance_z={:.5f} deadzone={:.2f}",
+                         "min_swing={:.3f} height_scale={:.2f} stance_z={:.5f} deadzone={:.2f}",
                          m, mg.lut ? "lut" : "quintic", mg.table, mg.cadence,
-                         mg.turn_asym ? "on" : "off", mg.settle_steps,
+                         mg.turn_asym ? "on" : "off", mg.settle_steps, mg.min_swing,
                          mg.height_scale, mg.stance_z, mg.stand_deadzone);
         }
         spdlog::info("[gait] walk_max={:.2f} run_min={:.2f} (lut gait 히스테리시스)",

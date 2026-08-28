@@ -65,6 +65,11 @@ struct MaskedLocoController {
     //   함께 낮은 위상이라 발이 모인 채 멈춘다. 0 = 끔 = 종전 거동 비트 동일.
     //   🔴 모드별이다 — 학습 시점이 정하는 값(cadence/table/turn_asym 과 같은 이유).
     int   settle_steps    = 0;        // 상한 step 수. 위상을 못 지나도 여기서 반드시 끝난다.
+    // ▼ 2026-08-28. 최소 스윙 클리어런스 [m]. 표 진폭이 이보다 작으면 «모양은 유지한 채» 키운다.
+    //   V2 재적합이 스탠스를 바로잡으면서 저속 스윙이 같이 낮아졌다(eff 0.10 = 2.68 cm).
+    //   초고마찰 바닥에서 그 높이는 발이 끌린다. 정책은 명령을 충실히 따르므로(실측 추종비
+    //   1.03~1.23) 고칠 것은 정책이 아니라 명령이다. 0 = 끔 = 종전 거동 비트 동일.
+    float min_swing       = 0.0f;
   };
   // 모드의 표를 고른다. 기본(미지정) = V1 = 2026-08-26 이전 배포 거동 그대로.
   static const GlTable& table_of(const ModeGait& mg) {
@@ -262,7 +267,7 @@ struct MaskedLocoController {
       }
       settling = (settle_rem > 0);
       eff_g = settling ? settle_eff : eff;
-      gl_foot_z(T, phase_f, eff_g, is_run, mg.turn_asym, bv[2], foot_z[0], foot_z[1]);
+      gl_foot_z(T, phase_f, eff_g, is_run, mg.turn_asym, bv[2], foot_z[0], foot_z[1], mg.min_swing);
     } else {
       phase = (phase + 1) % period_steps;
       last_stride_hz = 50.0f / float(std::max(1, period_steps));

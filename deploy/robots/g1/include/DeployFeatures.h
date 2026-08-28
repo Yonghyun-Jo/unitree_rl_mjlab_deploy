@@ -37,6 +37,9 @@ inline const std::vector<std::string>& known()
         // 정지 정착: 명령이 0 이 되면 위상을 settle_phase 까지 더 돌려 «한 걸음 더» 구른다.
         // gait: settle_eff · settle_phase (스칼라) + 모드별 settle_steps — 0f9b31e
         "gait_settle",
+        // 2026-08-28: gait: mode{N}.min_swing — 저속 스윙 최소 클리어런스.
+        //   모르는 바이너리는 이 키를 «조용히 무시» 하고 발을 낮게 든다 -> 거부해야 한다.
+        "gait_min_swing",
     };
     return k;
 }

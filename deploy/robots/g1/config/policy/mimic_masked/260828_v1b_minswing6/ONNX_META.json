@@ -1,0 +1,60 @@
+{
+  "exported_at": "2026-08-28",
+  "slot": "260828_v1b_minswing6",
+  "trial": "v1",
+  "trial_day": "2026-08-28",
+  "note": "260828_v1_settle55k 과 **ONNX 가 바이트 동일**한 A/B 짝. 바뀐 것은 deploy.yaml 의 mode1.min_swing: 0.06 한 줄뿐이다. 실기 바닥이 초고마찰인데 저속 스윙이 2.7~3.5 cm 라 발이 끌리는 문제 -> 표 진폭이 6 cm 미만이면 «궤적의 골을 고정한 채» 6 cm 로 키운다. 🔴 이 head 는 min_swing 없이 학습됐다 = OOD 다. 좋으면 학습측 표에 같은 규칙을 넣고 재학습한다.",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-08-27_13-15-29_s4_mode1_settle_graft_resume44k_to60k/model_55500.pt",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml (COLMOv2 우선 29클립)",
+  "mode1_lineage": "s4_mode1_cad1p15_slowcmd_scratch30k(30k 완주) -> settle 접붙여 resume30k_to60k -> keep_lastgood_44000 -> resume44k_to60k @55500. 학습은 60k 목표였으나 55.5k 에서 멈춰 있다(eval 대기) — 이어 돌면 재수출할 것.",
+  "gait_parity": {
+    "근거": "학습 launch 커밋 d03a144 의 stage4_mode1_env_cfg.FOOT_GEN 과 값 단위로 대조했다.",
+    "FOOT_GEN": "foot_source=lut, stance_z=0.066, turn_k=0.3, walk_max=1.2, run_min=1.7, cadence_scale=1.15, settle_steps={1:100}, settle_eff=0.15, settle_phase=0.07",
+    "table": "그 시점 gait_lut_data = COLMOv2 (STANCE_Z 0.035000, WALK_F [0.6468 0.7042 0.9434 0.998 1.1111]) = 배포 GL_T_V2 와 일치 -> mode1 table: 2",
+    "settle": "🔴 새로 켠 것. settle_phase 0.07 은 **V2 표의 성질**이라 V1(mode2)에 켜려면 다시 재야 한다 — 그래서 mode2 는 settle=0 그대로.",
+    "turn_k": "학습 0.3 = 배포 C++ 기본 0.3 (일치, 변경 없음)"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 4.053e-06 (tol 1e-4) OK",
+    "mask_slice": "obs[-22:-20] == env.command_mask() OK (export assert)",
+    "obs_contract_sum": "10항 합 = 1640 == obs 1640 OK (export assert)",
+    "graph": "GEMM 61 = enc 4 + actor 5x6 + heads 27",
+    "initializer_diff_vs_v4": "74개 중 18개 상이 — **전부 mh.heads.0.*(mode1)**. base 19/19 · heads.1(mode2) 18/18 · heads.2(mode3) 18/18 바이트 동일",
+    "runtime_delta_vs_v4": "동일 obs 실추론 max|Δ| — mode1 2.99e+00 / mode2 **0.0** / mode3 **0.0**",
+    "startup": "xvfb sim2sim 기동 실측 — requires 4개 전부 지원 · obs 계약 통과 · [gait] mode1: table=V2 cadence=1.150 asym=on **settle=100** stance_z=0.03500 / mode2: table=V1 cadence=1.000 asym=off settle=0 (불변)",
+    "cpp_tests": "7종 통과 (test_settle_stop 포함)",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "deployable_on_orin_nx": true,
+  "budget": {
+    "weights_mb": 37.0,
+    "note": "구조·초기자 이름/형상이 v4 와 완전 동일(값만 다름) -> 지연·스트리밍 예산 동일. 온보드 6-step 50 Hz 실측치(추론 13.5 ms · work p95 15.3 · overrun 0 · 예산 20)가 그대로 적용된다."
+  },
+  "known_mismatch": {
+    "lut_turn_asymmetry_mode2": "mode2 는 turn_asym 을 일부러 껐다(한 번에 한 가지만 바꾸기 위해). 켜려면 yaml 한 줄, 재빌드 없음.",
+    "settle_mode2": "mode2 head 는 정착 없이 학습됐다 — settle=0 이 맞다."
+  },
+  "export_cmd": "cd ~/mjlab1.4/mjlab_g1_motion && ~/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-08-27_13-15-29_s4_mode1_settle_graft_resume44k_to60k/model_55500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260828_v1_settle55k/policy.onnx",
+  "revert": "슬롯 전환이므로 되돌릴 것이 없다 — 다른 --policy 로 다시 돌리면 된다. config.yaml 기본값은 여전히 v4_multihead_m1colmov2_steps6.",
+  "ab_pair": {
+    "기준": "260828_v1_settle55k (min_swing 없음)",
+    "이 슬롯": "min_swing 0.06",
+    "onnx": "두 슬롯 policy.onnx 바이트 동일 — 거동 차이는 전부 이 한 줄에서 온다"
+  }
+}

@@ -159,6 +159,36 @@ inline float gl_interp2(const float* P, int nb, const float* grid, int n,
     return r0 * (1.0f - a) + r1 * a;
 }
 
+// 최소 스윙 클리어런스. 표 진폭 A(eff) 가 min_swing 보다 작으면 «골을 고정한 채» 키운다.
+//   s = max(1, min_swing / A(eff))   ·   z' = base + (z - base) * s
+// 이미 큰 속도에는 정확히 s=1 (no-op). min_swing <= 0 이면 끔 = 종전 거동 비트 동일.
+// ⚠ A 와 base 는 gl_interp2 와 **같은 구간·같은 가중치**로 보간한다. 다르면 위상마다
+//   배율이 어긋나 궤적 모양이 일그러진다(테스트 ⑤가 그걸 잠근다).
+inline void gl_swing_adjust(const GlTable& T, float eff, bool is_run, float min_swing,
+                            float& s, float& base) {
+    s = 1.0f; base = T.stance_z;
+    if (!(min_swing > 0.0f)) return;
+    const float* P    = is_run ? T.run_p : T.walk_p;
+    const float* grid = is_run ? T.run_v : T.walk_v;
+    const int    n    = is_run ? T.nr    : T.nw;
+    float v = std::max(grid[0], std::min(grid[n - 1], eff));
+    int idx = 0;
+    while (idx < n && grid[idx] < v) ++idx;
+    const int   j = std::max(0, std::min(idx - 1, n - 2));
+    const float a = (v - grid[j]) / (grid[j + 1] - grid[j]);
+    // 🔴 «행별 진폭을 보간» 하면 안 된다 — 두 행의 마루·골이 서로 다른 위상에 있어서
+    //   보간된 궤적의 진폭과 다르다. 그래서 두 행을 먼저 섞고 «그 궤적» 을 훑는다.
+    //   gl_interp2 는 위상축을 bin 사이 선형보간하므로 연속 최대 = bin 최대 (정확하다).
+    float lo = P[j * T.nb] * (1.0f - a) + P[(j + 1) * T.nb] * a, hi = lo;
+    for (int i = 1; i < T.nb; ++i) {
+        const float z = P[j * T.nb + i] * (1.0f - a) + P[(j + 1) * T.nb + i] * a;
+        lo = std::min(lo, z); hi = std::max(hi, z);
+    }
+    base = lo;
+    const float A = hi - lo;
+    if (A > 1e-6f) s = std::max(1.0f, min_swing / A);
+}
+
 // 회전 비대칭 배율 [s_L, s_R] (gait_lut.turn_asym). wz=0 에서 정확히 1.0/1.0.
 // 부호: +wz = CCW = 좌회전 -> 왼발이 «안쪽»(낮게 든다). 두 배율의 평균은 정확히 1 이라
 // 두 발 평균 스윙은 안 변하고 «분배»만 바뀐다.
@@ -178,13 +208,22 @@ inline void gl_turn_asym(const GlTable& T, float wz, bool is_run, float& s_l, fl
 //   use_asym=false, wz=0 이면 2026-08-17 이전 거동과 비트 동일(zL = zR 반주기 시프트).
 //   정지 게이트 임계는 표가 갖는다(T.stand_eps).
 inline void gl_foot_z(const GlTable& T, float phase, float eff, bool is_run,
-                      bool use_asym, float wz, float& z_l, float& z_r) {
+                      bool use_asym, float wz, float& z_l, float& z_r,
+                      float min_swing = 0.0f) {
     if (eff < T.stand_eps) { z_l = T.stance_z; z_r = T.stance_z; return; }
     const float* P    = is_run ? T.run_p : T.walk_p;
     const float* grid = is_run ? T.run_v : T.walk_v;
     const int    n    = is_run ? T.nr    : T.nw;
     z_r = gl_interp2(P, T.nb, grid, n, phase,        eff);
     z_l = gl_interp2(P, T.nb, grid, n, phase + 0.5f, eff);   // L = R 반주기 시프트
+    // 최소 스윙 클리어런스 — asym «앞» 에 둔다. 여기서 두 발을 같이 올리고, 그 위에서
+    // asym 이 좌우로 «분배» 한다(asym 은 평균 보존이라 순서가 바뀌면 평균이 안 맞는다).
+    float s0, base0;
+    gl_swing_adjust(T, eff, is_run, min_swing, s0, base0);
+    if (s0 != 1.0f) {
+        z_l = base0 + (z_l - base0) * s0;
+        z_r = base0 + (z_r - base0) * s0;
+    }
     if (use_asym) {
         float s_l = 1.0f, s_r = 1.0f;
         gl_turn_asym(T, wz, is_run, s_l, s_r);
