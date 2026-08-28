@@ -1,0 +1,76 @@
+{
+  "exported_at": "2026-08-28",
+  "slot": "260828_v2c_minswing8",
+  "trial": "v2c",
+  "trial_day": "2026-08-28",
+  "note": "v2(맨바닥 정착 head)에 **저속 최소 스윙 클리어런스 0.08** 를 얹은 판. ONNX 는 260828_v2_settle_scratch35k 와 **같은 파일**(심링크) — 거동 차이는 전부 deploy.yaml 의 mode1.min_swing 한 줄에서 온다. v1b/v1c 가 v1 에 대해 하는 것과 정확히 같은 짝이라, «접붙이기 vs 맨바닥» × «클리어런스 유무» 2×2 가 된다.",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-08-27_23-09-25_s4_mode1_settle_scratch_to60k/model_35500.pt",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml (COLMOv2 우선 29클립)",
+  "mode1_lineage": "맨바닥 계보: settle_cad1p15_scratch30k(LR 버그로 iter 9563 사망) -> settle_scratch_resume7p5k_to30k -> settle_scratch_resume7p5k_v2 @keep_resume_20500 -> settle_scratch_to60k @35500. 🔴 학습이 **com2 에서 진행중**이다(35.5k / 39.5k) — 이 ONNX 는 중간 스냅샷이고, 끝나면 재수출할 것.",
+  "gait_parity": {
+    "근거": "학습 launch 커밋 d03a144 의 stage4_mode1_env_cfg.FOOT_GEN 과 값 단위로 대조했다.",
+    "FOOT_GEN": "foot_source=lut, stance_z=0.066, turn_k=0.3, walk_max=1.2, run_min=1.7, cadence_scale=1.15, settle_steps={1:100}, settle_eff=0.15, settle_phase=0.07",
+    "table": "그 시점 gait_lut_data = COLMOv2 (STANCE_Z 0.035000, WALK_F [0.6468 0.7042 0.9434 0.998 1.1111]) = 배포 GL_T_V2 와 일치 -> mode1 table: 2",
+    "settle": "🔴 새로 켠 것. settle_phase 0.07 은 **V2 표의 성질**이라 V1(mode2)에 켜려면 다시 재야 한다 — 그래서 mode2 는 settle=0 그대로.",
+    "turn_k": "학습 0.3 = 배포 C++ 기본 0.3 (일치, 변경 없음)"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 4.590e-06 (tol 1e-4) OK",
+    "mask_slice": "obs[-22:-20] == env.command_mask() OK (export assert)",
+    "obs_contract_sum": "10항 합 = 1640 == obs 1640 OK (export assert)",
+    "graph": "GEMM 61 = enc 4 + actor 5x6 + heads 27",
+    "initializer_diff_vs_v4": "74개 중 18개 상이 — **전부 mh.heads.0.*(mode1)**. base 19/19 · heads.1(mode2) 18/18 · heads.2(mode3) 18/18 바이트 동일",
+    "runtime_delta_vs_v4": "동일 obs 실추론 max|Δ| — mode1 2.99e+00 / mode2 **0.0** / mode3 **0.0**",
+    "startup": "xvfb sim2sim 기동 실측 — requires 4개 전부 지원 · obs 계약 통과 · [gait] mode1: table=V2 cadence=1.150 asym=on settle=100 stance_z=0.03500 (v1 과 동일)",
+    "cpp_tests": "7종 통과 (test_settle_stop 포함)",
+    "sim2sim_walk": "미실행 — v1b 에서 같은 코드경로가 통과했고, 여기선 ONNX 만 v2 로 다르다",
+    "real_robot": "배포 완료 · 시험 대기 (2026-08-28)",
+    "initializer_diff_vs_v1": "74개 중 18개 상이 — **전부 mh.heads.0.*(mode1)**. base·heads.1·heads.2 바이트 동일",
+    "runtime_delta_vs_v1": "동일 obs 실추론 max|Δ| — mode1 1.49e+00 / mode2 **0.0** / mode3 **0.0**",
+    "config_identical_to_v1": "deploy.yaml 의 주석을 뺀 «설정» 이 v1 과 완전히 동일 (diff 없음) = A/B 변수는 head 하나",
+    "min_swing_table": "V2 표 실측(gl_swing_adjust) — 진폭 cm: eff 0.05/0.10 2.68 · 0.15 3.06 · 0.20 3.48 · 0.30 4.61 · 0.40 5.96 -> min_swing 적용 후 전부 8 cm. 골(접지 높이)은 소수점까지 불변. 0.50 이상(6.64 cm 이상)과 RUN 은 s=1 정확히 no-op."
+  },
+  "deployable_on_orin_nx": true,
+  "budget": {
+    "weights_mb": 37.0,
+    "note": "구조·초기자 이름/형상이 v4 와 완전 동일(값만 다름) -> 지연·스트리밍 예산 동일. 온보드 6-step 50 Hz 실측치(추론 13.5 ms · work p95 15.3 · overrun 0 · 예산 20)가 그대로 적용된다."
+  },
+  "known_mismatch": [
+    {
+      "lut_turn_asymmetry_mode2": "mode2 는 turn_asym 을 일부러 껐다(한 번에 한 가지만 바꾸기 위해). 켜려면 yaml 한 줄, 재빌드 없음.",
+      "settle_mode2": "mode2 head 는 정착 없이 학습됐다 — settle=0 이 맞다."
+    },
+    "🔴 min_swing 없이 학습된 head 에 min_swing 을 건다 = 저속에서 «그 높이» 를 본 적이 없다(학습에선 그 높이가 eff 0.4~0.6 과 짝지어져 있었다). OOD 를 감수하는 판이다."
+  ],
+  "export_cmd": "cd ~/mjlab1.4/mjlab_g1_motion && ~/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-08-27_23-09-25_s4_mode1_settle_scratch_to60k/model_35500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260828_v2_settle_scratch35k/policy.onnx",
+  "revert": "슬롯 전환이므로 되돌릴 것이 없다 — --policy 로 v1 과 왕복하면 된다.",
+  "trained_on": "com2 (원격). 체크포인트는 Syncthing 으로 받았다 — export 전에 무결성 확인함: 바이트 크기가 완전한 체크포인트와 동일(43,840,679) · torch 로 열림 · iter=35500 · NaN/Inf 없음.",
+  "ab_partner": "260828_v1_settle55k",
+  "ab_pair": {
+    "base": "260828_v2_settle_scratch35k (min_swing 없음)",
+    "this": "260828_v2c_minswing8 (min_swing 0.08)",
+    "diff": "deploy.yaml mode1.min_swing 한 줄. ONNX 는 물리적으로 같은 파일이다.",
+    "grid": "v1/v1b/v1c (접붙이기) ↔ v2/v2b/v2c (맨바닥) — 같은 min_swing 축으로 비교 가능"
+  },
+  "storage": "exported/policy.onnx 와 params/*.npz 는 260828_v2_settle_scratch35k 로 가는 **상대 심링크**다. 복사하면 슬롯당 61 MB 가 늘고 로봇은 그걸 노트북 경유 WiFi 로 받는다. 원본 슬롯을 지우면 같이 깨지며, robot.sh verify 의 «policy_dir/motion_file 실재» 검사가 그걸 잡는다.",
+  "deployed": {
+    "at": "2026-08-28T12:20+09:00",
+    "host": "ubuntu (G1 Orin NX, aarch64)",
+    "rebuild_needed": "아니오 — 바이너리는 이미 gait_min_swing 을 안다(369cb82). 슬롯만 추가."
+  }
+}
