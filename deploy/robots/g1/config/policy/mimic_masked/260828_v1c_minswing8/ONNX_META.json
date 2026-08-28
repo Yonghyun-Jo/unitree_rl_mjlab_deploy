@@ -39,7 +39,7 @@
     "startup": "xvfb sim2sim 기동 실측 — requires 4개 전부 지원 · obs 계약 통과 · [gait] mode1: table=V2 cadence=1.150 asym=on **settle=100** stance_z=0.03500 / mode2: table=V1 cadence=1.000 asym=off settle=0 (불변)",
     "cpp_tests": "7종 통과 (test_settle_stop 포함)",
     "sim2sim_walk": "미실행 — 사용자가 확인",
-    "real_robot": "미실행"
+    "real_robot": "배포 완료 · 시험 대기 (2026-08-28 11:55)"
   },
   "deployable_on_orin_nx": true,
   "budget": {
@@ -57,5 +57,15 @@
     "6cm": "260828_v1b_minswing6 (실기 OK)",
     "이 슬롯": "min_swing 0.08",
     "onnx": "세 슬롯 policy.onnx 바이트 동일 — 거동 차이는 전부 그 한 줄에서 온다"
+  },
+  "deployed": {
+    "at": "2026-08-28T11:55+09:00",
+    "host": "ubuntu (G1 Orin NX, aarch64)",
+    "ws": "~/dyros_ws/piene_ws/unitree_rl_mjlab_deploy",
+    "git": "369cb82",
+    "build": "g++ 9.4 / Eigen 3.3.7 / -O3 -DNDEBUG (com1 과 동일 플래그)",
+    "setcap": "cap_sys_nice+ep OK",
+    "gate": "robot.sh verify 전부 통과 — 네이티브 자기시험 10종(aarch64·-O3), 안전층 3층 ON, rt/lowstate 1042 Hz, rt/lowcmd 발행자 없음",
+    "binary_features": "gait_min_swing 지원 확인 (strings 대조)"
   }
 }
