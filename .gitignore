@@ -20,9 +20,22 @@ simulate/build
 __pycache__/
 *.pyc
 
-# 🔴 로컬 전용 정책 슬롯 — GitHub 100 MB 한도 초과라 커밋할 수 없다.
-#    v2_mode3_steps6/exported/policy.onnx 는 177 MB (다른 슬롯은 8~37 MB).
-#    com1 sim2sim 은 되지만 «실기 배포는 불가» 하다 — 로봇이 pull 로 못 받는다.
-#    재생성은 그 슬롯 ONNX_META.json 의 export_cmd 한 줄.
-deploy/robots/g1/config/policy/mimic_masked/v2_mode3_steps6/exported/
-deploy/robots/g1/config/policy/mimic_masked/v2_mode3_steps6/params/*.npz
+# 🔴 배포 슬롯의 «무게» 는 git 에 넣지 않는다 (2026-08-28).
+#
+#    슬롯 하나가 60 MB(ONNX 37 + npz 26)이고 하루에 여러 개가 생긴다. git 은 히스토리에서
+#    그걸 **영원히 안 지운다** — 워킹트리에서 지워도 .git 은 그대로고, 새로 clone 하는
+#    쪽(로봇)은 매번 전부 받는다. 이 규칙을 만들기 직전 .git 736 MB 중 581 MB 가 정책
+#    파일이었고, 그날 하루에만 241 MB 가 들어갔다.
+#
+#    그래서 한 슬롯을 둘로 나눈다:
+#      git   = 실험의 «정체»  deploy.yaml · ONNX_META.json   (수십 KB, 영구 보존)
+#      보관소 = 실험의 «무게»  exported/** · params/*.npz     (~/experiments/_realrobot/center_g1/_policies)
+#    슬롯을 치워도 **무슨 실험이었는지는 git 에 남는다.**
+#
+#    로봇으로는 git 이 아니라 rsync 로 간다 (끊겨도 이어받는다):
+#      deploy/scripts/policy_slot.py push
+#
+#    ⚠ mimic/ 와 velocity/ 는 제외 — 고정이고 작다(13 MB · 0.9 MB). 매일 늘어나는 건
+#      mimic_masked/ 뿐이라 규칙도 거기에만 건다.
+deploy/robots/g1/config/policy/mimic_masked/*/exported/
+deploy/robots/g1/config/policy/mimic_masked/*/params/*.npz

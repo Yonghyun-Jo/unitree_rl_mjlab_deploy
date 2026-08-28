@@ -4,8 +4,12 @@
 #   real robot: ./run_g1_with_gui.sh eth0       (your robot ethernet iface)
 #
 #   정책 갈아끼우기 (하루에 여러 후보를 시험할 때):
-#     ./run_g1_with_gui.sh eth0 --policy v4_multihead_m1colmov2_steps6
-#   슬롯 «이름» 만 주면 된다. 주지 않으면 config.yaml 의 policy_dir.
+#     ./run_g1_with_gui.sh eth0 --policy v1          ← 오늘의 별칭 (ACTIVE.yaml)
+#     ./run_g1_with_gui.sh eth0 --policy 260828_v1_settle55k   ← 실제 슬롯 이름도 된다
+#   별칭은 config/policy/ACTIVE.yaml 이 정한다 (policy_slot.py activate 로 바꾼다).
+#   🔴 기록(trial 마커)에는 **별칭이 아니라 실제 슬롯 이름**이 남는다 — v1 은 날마다
+#      다른 것을 가리키므로 별칭으로 기록하면 나중에 못 읽는다.
+#   주지 않으면 config.yaml 의 policy_dir.
 #   🔴 파일을 안 고치고, pull 도 재빌드도 없다 — 후보 슬롯을 아침에 한 번 push 해 두면 끝.
 #      슬롯이 지금 바이너리보다 새 기능을 요구하면 g1_ctrl 이 기동을 거부하고 알려준다
 #      (deploy.yaml 의 requires: ↔ DeployFeatures.h). 재빌드 여부를 사람이 판단하지 않는다.
@@ -21,14 +25,29 @@ G1DIR="$(cd "$HERE/.." && pwd)"
 REPO="$(cd "$G1DIR/../../.." && pwd)"
 UV="${UV:-$HOME/.local/bin/uv}"
 SLOTDIR="$G1DIR/config/policy/mimic_masked"
+ACTIVE="$G1DIR/config/policy/ACTIVE.yaml"
+
+# 별칭 -> 실제 슬롯 이름. ACTIVE.yaml 은 «키: 값» 한 줄짜리 평평한 형식이라 sed 로 읽는다
+# (로봇에 pyyaml 이 있다고 가정하지 않는다). 없으면 조용히 빈 문자열.
+resolve_alias() {
+  [[ -f "$ACTIVE" ]] || return 0
+  sed -n "s/^[[:space:]]*$1[[:space:]]*:[[:space:]]*\([^#[:space:]]*\).*/\1/p" "$ACTIVE" | head -1
+}
 
 list_slots() {
+  local aliases=""
+  if [[ -f "$ACTIVE" ]]; then
+    echo "오늘의 별칭 ($(sed -n 's/^day:[[:space:]]*//p' "$ACTIVE" | head -1)):"
+    sed -n 's/^\([a-z][a-z0-9]*\)[[:space:]]*:[[:space:]]*\([^#[:space:]]\+\).*/  \1 -> \2/p' "$ACTIVE" | grep -v '^  day ->'
+    echo
+  fi
   echo "슬롯 ($SLOTDIR):"
   for d in "$SLOTDIR"/*/; do
-    [[ -f "$d/exported/policy.onnx" ]] || continue
     n="$(basename "$d")"
+    [[ -f "$d/params/deploy.yaml" ]] || continue
+    if [[ -e "$d/exported/policy.onnx" ]]; then st="활성"; else st="보관 (policy_slot.py restore $n)"; fi
     req="$(sed -n '/^requires:/,/^[^ #-]/p' "$d/params/deploy.yaml" 2>/dev/null | grep -c '^  - ' || true)"
-    printf "  %-46s  requires %s개\n" "$n" "${req:-0}"
+    printf "  %-46s  requires %s개  %s\n" "$n" "${req:-0}" "$st"
   done
 }
 
@@ -44,8 +63,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "$POLICY" ]]; then
-  if [[ ! -f "$SLOTDIR/$POLICY/exported/policy.onnx" ]]; then
-    echo "[run] 🔴 그런 슬롯이 없다: $POLICY"; echo; list_slots; exit 1
+  # 실제 슬롯이 아니면 별칭으로 본다. 실제 이름이 먼저 이긴다(별칭과 슬롯 이름이 겹쳐도 안전).
+  if [[ ! -d "$SLOTDIR/$POLICY" ]]; then
+    RESOLVED="$(resolve_alias "$POLICY")"
+    if [[ -n "$RESOLVED" ]]; then
+      echo "[run] 별칭 $POLICY -> $RESOLVED   (ACTIVE.yaml)"
+      POLICY="$RESOLVED"
+    fi
+  fi
+  if [[ ! -d "$SLOTDIR/$POLICY" ]]; then
+    echo "[run] 🔴 그런 슬롯도 별칭도 없다: $POLICY"; echo; list_slots; exit 1
+  fi
+  if [[ ! -e "$SLOTDIR/$POLICY/exported/policy.onnx" ]]; then
+    echo "[run] 🔴 슬롯 '$POLICY' 은 «보관» 상태다 — 가중치가 이 기계에 없다."
+    echo "[run]    com1 에서:  deploy/scripts/policy_slot.py restore $POLICY && policy_slot.py push $POLICY"
+    exit 1
   fi
   export G1_POLICY_SLOT="$POLICY"
   echo "[run] policy slot = $POLICY   (config.yaml 대신 이것을 쓴다)"
