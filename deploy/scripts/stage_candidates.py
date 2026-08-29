@@ -382,6 +382,42 @@ def write_meta(slot_root, slot, cand, cfg, day, export_cmd, verify, onnx_meta, f
     return meta
 
 
+CONFIG_YAML = os.path.join(REPO, "deploy/robots/g1/config/config.yaml")
+_CFG_KEYS = ("motion_file", "motion_file_light", "motion_file_demo6", "policy_dir")
+
+
+def config_slot_refs(text):
+    """config.yaml 이 가리키는 mimic_masked 슬롯 이름들 (motion_file* · policy_dir)."""
+    return set(re.findall(r"config/policy/mimic_masked/([^/\s]+)/", text))
+
+
+def retarget_config_yaml(first_slot, dry):
+    """🔴 저장 규칙: «config.yaml 기본 슬롯을 보관하지 말 것 — 옮길 거면 policy_dir·motion_file* 를
+    같이 옮기고 복귀 경로를 주석에 남긴다». --policy 별칭은 policy_dir 만 바꾸고 motion_file* 는
+    config.yaml 그대로 읽으므로(State_Mimic.cpp:576), 옛 슬롯이 보관소로 나가면 npz_load 가 죽는다
+    (2026-08-29 실제: 260828_v1_settle55k 를 보관한 뒤 v1 기동이 abort). 그래서 그날 첫 슬롯
+    (npz 실사본)으로 네 줄을 옮긴다."""
+    text = open(CONFIG_YAML, encoding="utf-8").read()
+    before = config_slot_refs(text)
+    new_text, n = re.subn(r"(config/policy/mimic_masked/)[^/\s]+(/)",
+                          lambda m: m.group(1) + first_slot + m.group(2), text)
+    # 값이 바뀌는 첫 줄(motion_file) 위에 복귀 주석 한 줄
+    prev = sorted(before - {first_slot})
+    if prev and new_text != text:
+        note = ("    # 🔴 %s stage_candidates.py 가 %s 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).\n"
+                "    #    복귀 = 아래 4줄을 %s 로 되돌리고 `policy_slot.py restore %s` (보관소에 있다).\n"
+                % (_dt.date.today().isoformat(), first_slot, prev[0], prev[0]))
+        new_text = re.sub(r"^(\s*motion_file:\s*config/policy/mimic_masked/)", lambda m: note + m.group(1),
+                          new_text, count=1, flags=re.M)
+    if new_text == text:
+        return before, False
+    if not dry:
+        open(CONFIG_YAML, "w", encoding="utf-8").write(new_text)
+    log("   config.yaml Mimic_Masked motion_file*·policy_dir → %s (%d 곳, 이전 %s)"
+        % (first_slot, n, ", ".join(prev) or "-"))
+    return before, True
+
+
 def requires_of(deploy_yaml_text):
     m = re.search(r"^requires:\n((?:  - .*\n)+)", deploy_yaml_text, re.M)
     if not m:
@@ -484,14 +520,22 @@ def main():
     else:
         log("   (dry-run) activate " + " ".join(assign))
 
+    # ④-b config.yaml 의 기본 슬롯(motion_file*·policy_dir)을 그날 첫 슬롯으로 — 보관 «전에»
+    log("\n■ config.yaml")
+    refs, moved = retarget_config_yaml(first_slot, dry)
+    if not moved:
+        log("   변경 없음 (이미 %s 를 가리킴)" % ", ".join(sorted(refs)))
+    still_ref = config_slot_refs(open(CONFIG_YAML, encoding="utf-8").read()) if not dry else {first_slot}
+
     # ⑤ 옛 활성 슬롯 → 보관소
     new_set = {s for _, s in made}
     old = sorted(set(prev_active.values()) - new_set)
     if old and not a.no_archive:
         log("\n■ 옛 활성 슬롯 보관 (%d 개) — 가중치는 보관소로, 정체는 git 에 남는다" % len(old))
         for s in old:
-            if s == cfg["template_slot"] and first_slot and not dry:
-                pass                      # 템플릿의 npz 는 이미 «실사본» 으로 복사했으므로 보관해도 된다
+            if s in still_ref:
+                log("   ⚠ %s 는 config.yaml 이 아직 가리킨다 — 보관하지 않는다" % s)
+                continue
             if not dry:
                 sh([sys.executable, SLOT_PY, "archive", s], cwd=REPO, check=False)
             else:
@@ -505,7 +549,8 @@ def main():
         sh([sys.executable, SLOT_PY, "check"], cwd=REPO, check=False)
         sh([sys.executable, SLOT_PY, "index"], cwd=REPO, check=False)
         if not a.no_commit:
-            files = [os.path.relpath(ACTIVE, REPO), os.path.relpath(INDEX, REPO)]
+            files = [os.path.relpath(ACTIVE, REPO), os.path.relpath(INDEX, REPO),
+                     os.path.relpath(CONFIG_YAML, REPO)]
             for _, s in made:
                 for rel in ("params/deploy.yaml", "ONNX_META.json"):
                     files.append(os.path.relpath(os.path.join(SLOTDIR, s, rel), REPO))

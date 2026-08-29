@@ -107,8 +107,10 @@ FSM:
     # keyboard '4' = 제자리 상체 데모. LAFAN dance1_subject3 4~20s(제자리 상체 제스처) +
     # 끝→처음 1.0s Hermite 복귀 구간(총 17.0s). 시작이 4s인 이유 = 3.6s까지 남아있는 T-pose
     # (양팔 수평) 제외. 복귀 구간이 있어야 modulo 루프 이음매가 안 튄다(raw cut은 1.56rad 점프).
-    motion_file: config/policy/mimic_masked/260828_v1_settle55k/params/g1_dance1_subject3_upper16s.npz
-    motion_file_light: config/policy/mimic_masked/260828_v1_settle55k/params/g1_aiming_stand10s.npz  # keyboard '5' = 서서 상체만 test demo
+    # 🔴 2026-08-29 stage_candidates.py 가 260829_v1_ms8_noslip1_30k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 260828_v1_settle55k 로 되돌리고 `policy_slot.py restore 260828_v1_settle55k` (보관소에 있다).
+    motion_file: config/policy/mimic_masked/260829_v1_ms8_noslip1_30k/params/g1_dance1_subject3_upper16s.npz
+    motion_file_light: config/policy/mimic_masked/260829_v1_ms8_noslip1_30k/params/g1_aiming_stand10s.npz  # keyboard '5' = 서서 상체만 test demo
     # keyboard '6' = LAFAN dance1_subject2 통짜 재생(131.5s, 전신+이동). ⚠ mode4/5 와 달리
     #   ① 손질 안 한 원본이라 131.5s 마다 modulo 루프 이음매에서 0.91 rad 점프가 난다
     #   ② 제자리가 아니라 pelvis 가 4.8 m 이동하고 z 가 0.40 m 까지 내려간다(깊은 자세)
@@ -117,8 +119,8 @@ FSM:
     #   |q̇| 이 6.0 rad/s 로 제한돼 있다. 구세대 motions/ 판은 30.0 rad/s 라 안전층에 걸린다.
     #   🔴 gmt_multihead_cwc_scratch 로 복귀할 땐 이 줄도 그 슬롯의 g1_dance1_subject2.npz
     #      (= 구세대 24클립 매니페스트가 학습한 판) 로 같이 되돌릴 것.
-    motion_file_demo6: config/policy/mimic_masked/260828_v1_settle55k/params/g1_dance1_subject2_colmov2.npz
-    policy_dir: config/policy/mimic_masked/260828_v1_settle55k/
+    motion_file_demo6: config/policy/mimic_masked/260829_v1_ms8_noslip1_30k/params/g1_dance1_subject2_colmov2.npz
+    policy_dir: config/policy/mimic_masked/260829_v1_ms8_noslip1_30k/
     # v3 스택에서 **mode1 head 만** 교체 = s4_mode1_cad1p15_slowcmd_scratch30k/model_18000.
     # base·mode2·mode3 는 바이트 동일(실추론 Δ 정확히 0 으로 확인). 되돌리려면 이 한 줄을
     # v3_multihead_s30k_steps6 으로 — C++ 은 안 건드려도 된다(ModeGait 기본값 = 종전 거동).
