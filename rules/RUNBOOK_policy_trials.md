@@ -23,6 +23,12 @@
 
 ### 아침 (com1, 한 번)
 
+> ⚡ **2026-08-29 부터는 한 명령이다.** 후보를 `candidates/<day>.yaml` 에 적고
+> `python3 deploy/scripts/stage_candidates.py candidates/<day>.yaml --robot`
+> → export · 슬롯 · `ACTIVE.yaml`(v1/v2/…) · 옛 활성 슬롯 보관 · 커밋 · rsync · `robot.sh deploy`.
+> 로봇이 안 닿으면 세 명령(`git push` · `policy_slot.py push` · `robot.sh deploy`)을 찍어 준다.
+> 규칙 = Obsidian `procedures/g1_realrobot_candidates.md`. 아래는 그 스크립트가 하는 일의 원본.
+
 후보 슬롯을 **전부** 만들어 커밋·push 한다. 슬롯 하나 = 배포 단위.
 
 ```
