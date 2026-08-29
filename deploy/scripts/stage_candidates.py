@@ -288,7 +288,26 @@ def render_deploy_yaml(tmpl_text, cand, slot, cfg, fg_train):
 
 
 def npz_list(params_dir):
+    if not os.path.isdir(params_dir):
+        return []
     return sorted(f for f in os.listdir(params_dir) if f.endswith(".npz"))
+
+
+STORE = os.environ.get("G1_POLICY_STORE",
+                       os.path.expanduser("~/experiments/_realrobot/center_g1/_policies"))
+
+
+def npz_source_dir(template_slot, day_slots):
+    """npz 를 어디서 가져오나 — 템플릿이 보관소로 나간 뒤에도(어제 슬롯을 템플릿으로 쓰는 게
+    보통이다) 같은 명령이 계속 돌아야 한다. 순서: 템플릿 워킹트리 → 보관소의 템플릿 사본 →
+    그날 이미 만들어진 첫 슬롯."""
+    cands = [os.path.join(SLOTDIR, template_slot, "params"),
+             os.path.join(STORE, template_slot, "params")]
+    cands += [os.path.join(SLOTDIR, s, "params") for s in day_slots]
+    for d in cands:
+        if npz_list(d):
+            return d
+    return None
 
 
 def place_weights(slot_root, onnx_src, tmpl_params, first_slot, slot, dry):
@@ -396,8 +415,12 @@ def main():
     if not os.path.exists(tmpl_yaml):
         die("템플릿 슬롯의 deploy.yaml 이 없다: %s" % tmpl_yaml)
     tmpl_text = open(tmpl_yaml, encoding="utf-8").read()
-    if not npz_list(os.path.join(tmpl_root, "params")):
-        die("템플릿 슬롯에 npz 가 없다 — policy_slot.py restore %s 먼저" % cfg["template_slot"])
+    day_existing = sorted(d for d in os.listdir(SLOTDIR) if d.startswith(day + "_")) if os.path.isdir(SLOTDIR) else []
+    npz_dir = npz_source_dir(cfg["template_slot"], day_existing)
+    if npz_dir is None:
+        die("npz 를 찾을 수 없다 — 템플릿 %s 워킹트리·보관소·오늘 슬롯 어디에도 없다 (policy_slot.py restore %s)"
+            % (cfg["template_slot"], cfg["template_slot"]))
+    log("npz 출처: %s" % os.path.relpath(npz_dir, REPO) if npz_dir.startswith(REPO) else "npz 출처: %s" % npz_dir)
     for c in cands:
         for k in ("alias", "label", "mode1_ckpt"):
             if not c.get(k):
@@ -438,7 +461,7 @@ def main():
             first_slot = slot
         if not dry:
             os.makedirs(root, exist_ok=True)
-        place_weights(root, onnx_abs, os.path.join(tmpl_root, "params"), first_slot, slot, dry)
+        place_weights(root, onnx_abs, npz_dir, first_slot, slot, dry)
         text, parity_note = render_deploy_yaml(tmpl_text, c, slot, cfg, fg_train)
         if not dry:
             os.makedirs(os.path.join(root, "params"), exist_ok=True)
