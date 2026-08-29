@@ -249,6 +249,13 @@ def render_deploy_yaml(tmpl_text, cand, slot, cfg, fg_train):
     text = re.sub(r"^(\s*#\s*mode1 head = ).*$",
                   lambda m: m.group(1) + "%s (launch commit %s)" % (run, commit[:7] or "?"),
                   text, count=1, flags=re.M)
+    # gait 블록 머리의 계보 주석 («mode1 = <run> @<it>» + «->» 이어지는 줄들) 도 이 슬롯 기준으로
+    fg_s = ", ".join("%s %s" % (k, (v if not isinstance(v, dict) else "{%s}" % ", ".join(
+        "%d: %g" % (a, b) for a, b in v.items()))) for k, v in fg_train.items()) or "(launch 커밋을 못 읽음)"
+    text = re.sub(r"^#   mode1 = .*\n(?:#\s{10}->.*\n|#\s{13}.*\n)*",
+                  "#   mode1 = %s @%s (launch commit %s)\n#          -> 그 커밋의 stage4_mode1_env_cfg.FOOT_GEN: %s\n"
+                  % (run, it, commit[:7] or "?", fg_s),
+                  text, count=1, flags=re.M)
 
     # mode1 줄 재구성 (템플릿의 나머지 키는 그대로, min_swing 만 후보값)
     m = _MODE1_LINE.search(text)
@@ -371,6 +378,8 @@ def main():
     ap.add_argument("--no-archive", action="store_true", help="직전 ACTIVE 슬롯을 보관소로 안 보낸다")
     ap.add_argument("--no-commit", action="store_true")
     ap.add_argument("--robot", action="store_true", help="가중치 rsync + robot.sh deploy 까지")
+    ap.add_argument("--rerender-yaml", action="store_true",
+                    help="이미 있는 슬롯의 params/deploy.yaml 을 템플릿에서 다시 그린다(생성물이라 안전)")
     a = ap.parse_args()
     dry = a.dry_run
 
@@ -407,7 +416,14 @@ def main():
         root = os.path.join(SLOTDIR, slot)
         log("\n■ %s  (%s)" % (slot, c["mode1_ckpt"]))
         if os.path.exists(os.path.join(root, "ONNX_META.json")) and os.path.exists(os.path.join(root, "exported", "policy.onnx")):
-            log("   이미 있다 — 건너뜀 (별칭만 갱신)")
+            if a.rerender_yaml:
+                text, parity_note = render_deploy_yaml(tmpl_text, c, slot, cfg,
+                                                       foot_gen_at(training_commit(c["mode1_ckpt"])))
+                if not dry:
+                    open(os.path.join(root, "params", "deploy.yaml"), "w", encoding="utf-8").write(text)
+                log("   이미 있다 — deploy.yaml 만 다시 그림  %s" % parity_note)
+            else:
+                log("   이미 있다 — 건너뜀 (별칭만 갱신)")
             made.append((c["alias"], slot))
             if first_slot is None:
                 first_slot = slot

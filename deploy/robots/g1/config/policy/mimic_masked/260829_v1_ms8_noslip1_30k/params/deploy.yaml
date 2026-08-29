@@ -149,9 +149,8 @@ observations:
 # head 마다 학습 시점이 달라 foot_z 생성기가 다르다. 하나로 통일하면 반드시 어느 head 하나가
 # 학습과 다른 발-z 명령을 받는다. 근거 = ONNX_META.json 의 mode{N}_ckpt 를 그 시점
 # stage4_mode{N}_env_cfg.py 의 FOOT_GEN 과 대조 (git show <commit>:<cfg> 로 복원):
-#   mode1 = 2026-08-21_16-29-26_s4_mode1_k0p85_symgen_resume15k_to30k @29999
-#          -> stage4_mode1_env_cfg.py:42 FOOT_GEN = foot_source="lut", stance_z 0.066,
-#             turn_k 0.3, walk_max 1.2, run_min 1.7. (height_scale 미지정 = 1.0)
+#   mode1 = 2026-08-28_12-08-17_s4_mode1_minswing8_noslip1_parallel1_scratch30k @29999 (launch commit 1ab6ec6)
+#          -> 그 커밋의 stage4_mode1_env_cfg.FOOT_GEN: cadence_scale 1.15, settle_eff 0.15, settle_phase 0.07, turn_k 0.3, stance_z 0.066, settle_steps {1: 100}, min_swing {1: 0.08}
 #   mode2 = 2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k @29999
 #          -> stage4_mode2_env_cfg.py:48 FOOT_GEN = 위와 동일 + stand_deadzone 0.15.
 #   mode3 = 2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k @89997 (종전 그대로)
