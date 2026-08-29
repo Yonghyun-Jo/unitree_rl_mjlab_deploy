@@ -135,6 +135,12 @@ requires:
 
 ## 4. 결과를 남긴다 — 대시보드 Real Robot
 
+> ⚡ 2026-08-29: **Live 아래 «📋 Trial Plan»** 이 오늘의 v1/v2 를 슬롯별로 보여 준다 — 무엇(META `note`) ·
+> sim2sim(별점·메모, `python3 -m common.rr_plan sim2sim v1 --stars N --memo …` 또는 화면) · 실기(돌린 실험
+> 링크). **Experiments** 의 각 실험에는 마커 `slot=` 로 «이 실험은 무엇이었나 / sim2sim / 같은 슬롯 실기 N회»
+> 가 자동으로 붙는다. 판정 뒤 `python3 -m common.rr_plan sync` 가 실기 요약을 META `verify.real_robot` 에
+> 되쓰고, 그걸 커밋하면 실험 자산이 슬롯과 함께 git 에 남는다. 전 과정 스킬 = `/realrobot-trial`.
+
 `robot.sh pull` 이 CSV 와 **시험 마커**(`trial_*.txt`)를 같이 회수한다. 마커에는 그 실행의
 슬롯·네트워크·커밋이 들어 있고, 이것이 **「이 실험이 어느 정책이었나」의 유일한 원장**이다
 (CSV 에는 슬롯 이름이 안 들어간다).
