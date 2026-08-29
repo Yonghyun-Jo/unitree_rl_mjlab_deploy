@@ -557,7 +557,7 @@ def main():
             for s in old:
                 files.append(os.path.relpath(os.path.join(SLOTDIR, s), REPO))   # 보관으로 빠진 무게(untracked 라 no-op)
             sh(["git", "add", "--"] + [f for f in files if os.path.exists(os.path.join(REPO, f))], cwd=REPO)
-            st = subprocess.run(["git", "status", "--porcelain", "--", POLICY], cwd=REPO,
+            st = subprocess.run(["git", "status", "--porcelain", "--", POLICY, CONFIG_YAML], cwd=REPO,
                                 text=True, capture_output=True).stdout.strip()
             if st:
                 msg = "deploy(%s): 실기 후보 %s" % (day, ", ".join("%s=%s" % (al, s) for al, s in made))
