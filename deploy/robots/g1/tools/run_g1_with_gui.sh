@@ -94,6 +94,28 @@ if [[ ! -x "$G1DIR/build/g1_ctrl" ]]; then
   echo "[run] g1_ctrl not built. Run: (cd $G1DIR && mkdir -p build && cd build && cmake .. && make -j4)"; exit 1
 fi
 
+# 🔴 중복 프로세스 게이트 (2026-08-29). «정책 무관 즉시 발산» 의 1순위 원인이 여기서 걸린다.
+#   - g1_ctrl 이 이미 떠 있으면 rt/lowcmd 를 둘이 쓴다 → 로봇/시뮬이 두 명령을 번갈아 받는다.
+#   - sim(lo) 인데 unitree_mujoco 가 2개 이상이면 lowstate 가 «다른 로봇» 것과 섞여 들어온다.
+#     2026-08-29 실측: 시뮬 5개가 살아 있는 채로 v1/v2 를 띄워 둘 다 «발산» — 정책은 무죄였다.
+#   사람 기억에 맡기지 않는다. 여기서 거부하고 정리 명령을 찍는다.
+if pgrep -x g1_ctrl >/dev/null; then
+  echo "[run] 🔴 g1_ctrl 이 이미 떠 있다 (PID $(pgrep -x g1_ctrl | tr '\n' ' ')) — 두 제어기는 정책과 무관하게 발산한다."
+  echo "[run]    먼저:  pkill -x g1_ctrl"
+  exit 1
+fi
+if [[ "$NET" == "lo" ]]; then
+  NSIM="$(pgrep -x unitree_mujoco | wc -l)"
+  if [[ "$NSIM" -eq 0 ]]; then
+    echo "[run] 🔴 unitree_mujoco 가 없다 — sim2sim 은 시뮬을 먼저 띄운다:  ./simulate/build/unitree_mujoco"
+    exit 1
+  elif [[ "$NSIM" -gt 1 ]]; then
+    echo "[run] 🔴 unitree_mujoco 가 ${NSIM}개다 (PID $(pgrep -x unitree_mujoco | tr '\n' ' ')) — lowstate 가 섞여 들어와 정책과 무관하게 발산한다."
+    echo "[run]    먼저:  pkill -x unitree_mujoco && ./simulate/build/unitree_mujoco   (정확히 1개)"
+    exit 1
+  fi
+fi
+
 # g1_ctrl 은 키보드 텔레옵(1/2/3, WASD)을 위해 tty 를 -icanon -echo 로 바꾸는데, Ctrl-C 로 죽으면
 # 되돌리지 못하고 셸이 raw 로 남는다(g1_ctrl 자체에도 핸들러를 넣었지만, 그쪽이 못 도는 경로
 # — SIGKILL, 구버전 바이너리 — 까지 여기서 덮는다). tty 가 아니면 stty 가 실패하므로 조용히 skip.
