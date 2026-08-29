@@ -9,12 +9,12 @@
 | 슬롯 | 별칭 | 상태 | mode1 출처 | sim2sim | 실기 |
 |---|---|---|---|---|---|
 | `260828_v1_settle55k` | — | 보관 | 2026-08-27_13-15-29_s4_mode1_settle_graft_resume44k_to60k/model_55500.pt | 미실행 — 사용자가 확인 | 미실행 |
-| `260828_v1b_minswing6` | — | 보관 | 2026-08-27_13-15-29_s4_mode1_settle_graft_resume44k_to60k/model_55500.pt | 통과 — com1 sim2sim 에서 사용자 확인 (2026-08-28). 표 진폭 eff 0.05~0.40 | 배포 완료 · 시험 대기 (2026-08-28 11:55) |
+| `260828_v1b_minswing6` | — | 활성 | 2026-08-27_13-15-29_s4_mode1_settle_graft_resume44k_to60k/model_55500.pt | 통과 — com1 sim2sim 에서 사용자 확인 (2026-08-28). 표 진폭 eff 0.05~0.40 | 배포 완료 · 시험 대기 (2026-08-28 11:55) |
 | `260828_v1c_minswing8` | — | 보관 | 2026-08-27_13-15-29_s4_mode1_settle_graft_resume44k_to60k/model_55500.pt | 미실행 — 사용자가 확인 | 배포 완료 · 시험 대기 (2026-08-28 11:55) |
 | `260828_v2_settle_scratch35k` | — | 보관 | 2026-08-27_23-09-25_s4_mode1_settle_scratch_to60k/model_35500.pt | 미실행 — 사용자가 확인 | 미실행 |
 | `260828_v2b_minswing6` | — | 보관 | 2026-08-27_23-09-25_s4_mode1_settle_scratch_to60k/model_35500.pt | 미실행 — v1b 에서 같은 코드경로가 통과했고, 여기선 ONNX 만 v2 로 다르다 | 배포 완료 · 시험 대기 (2026-08-28) |
 | `260828_v2c_minswing8` | — | 보관 | 2026-08-27_23-09-25_s4_mode1_settle_scratch_to60k/model_35500.pt | 미실행 — v1b 에서 같은 코드경로가 통과했고, 여기선 ONNX 만 v2 로 다르다 | 배포 완료 · 시험 대기 (2026-08-28) |
-| `260829_v1_ms8_noslip1_30k` | v1 | 활성 | 2026-08-28_12-08-17_s4_mode1_minswing8_noslip1_parallel1_scratch30k/model_29999.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `260829_v1_ms8_noslip1_30k` | v1 | 활성 | 2026-08-28_12-08-17_s4_mode1_minswing8_noslip1_parallel1_scratch30k/model_29999.pt | ★★★★☆ 아주 깔끔하게 걷는데? 발이 좀 높은 느낌이 있긴 함. 근데 잘 걸음. 실기가 기대됨. (2026 | 미실행 |
 | `260829_v2_ms6_fz2p5_30k` | v2 | 활성 | 2026-08-28_18-02-25_s4_mode1_minswing6_fz2p5_scratch30k/model_29999.pt | 미실행 — 사용자가 확인 | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |

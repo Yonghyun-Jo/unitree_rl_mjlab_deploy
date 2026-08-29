@@ -48,11 +48,17 @@
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
     "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
     "onnx_md5": "7edee4b65a4ca84322c3391cf218eada",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
-    "real_robot": "미실행"
+    "sim2sim_walk": "★★★★☆ 아주 깔끔하게 걷는데? 발이 좀 높은 느낌이 있긴 함. 근데 잘 걸음. 실기가 기대됨. (2026-08-29)",
+    "real_robot": "미실행",
+    "sim2sim_auto": "com1 sim2sim 헤드리스 재현(2026-08-29 23:52, 시뮬 1개·밴드 8·8·9 로 해제): 47.8 s mode1 보행(0.3 m/s)·정지·재출발 트립 0. 기울기 최대 12.4°(밴드 해제 직후), 보행 중 p95 4.9°. |qd| 최대 10.8 rad/s(R_knee), rate_limit 12441 tick(최대 1.64 rad). foot_z 명령 진폭 8.07 cm(swing_sc 1.735 = min_swing 8 cm 적용 확인). 대조군 v1b 와 같은 등급. ⚠ 사용자가 본 «발산» 은 unitree_mujoco 5개 중복 때문(정책 무죄)."
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-08-28_12-08-17_s4_mode1_minswing8_noslip1_parallel1_scratch30k/model_29999.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260829_v1_ms8_noslip1_30k/policy.onnx",
   "deployed": {
     "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "sim2sim": {
+    "stars": 4,
+    "memo": "아주 깔끔하게 걷는데? 발이 좀 높은 느낌이 있긴 함. 근데 잘 걸음. 실기가 기대됨.",
+    "at": "2026-08-29T23:38"
   }
 }
