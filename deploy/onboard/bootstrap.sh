@@ -19,7 +19,8 @@ while [ $# -gt 0 ]; do case "$1" in
   *) echo "unknown arg $1"; exit 1 ;; esac; shift; done
 step() { echo; echo "━━ $1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; }
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
-die()  { echo "🔴 $*"; exit "${2:-1}"; }
+die() { local msg="$1" code="${2:-1}"; echo "🔴 $msg"; exit "$code"; }
+dir_mb() { [ -d "$1" ] && du -sm "$1" | cut -f1 || echo 0; }
 G1="$REPO/deploy/robots/g1"
 export UV_PYTHON_INSTALL_DIR="$PIENE_WS/.uv-python"
 
@@ -54,7 +55,7 @@ fi
 if want 3; then
   step "③ g1_ctrl — Release (로봇 -O3 / com1 -O0 로 갈렸던 사고 재발 방지)"
   mkdir -p "$G1/build"
-  ( cd "$G1/build" && cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null && nice make -j4 2>&1 | tail -2 )
+  ( cd "$G1/build" && cmake .. -DCMAKE_BUILD_TYPE=Release >/dev/null && nice make -j4 2>&1 | tail -2 ) || die "③ g1_ctrl 빌드 실패 (cmake/make 비0 종료 — 위 출력 참조)"
   [ -x "$G1/build/g1_ctrl" ] || die "g1_ctrl 빌드 실패"
   grep -q "O3" "$G1"/build/CMakeFiles/g1_ctrl.dir/flags.make || die "Release 플래그가 아니다: $(grep CXX_FLAGS "$G1"/build/CMakeFiles/g1_ctrl.dir/flags.make)"
   echo "  🟢 $G1/build/g1_ctrl   (setcap 은 robot.sh deploy 가 한다: sudo setcap cap_sys_nice+ep g1_ctrl)"
@@ -104,7 +105,7 @@ from general_motion_retargeting import GeneralMotionRetargeting as G
 G("xrobot", "unitree_g1")
 PYCHK
     then echo "  🟢 teleop venv 3.10 · torch cpu · GMR 스모크"; else echo "  🔴 teleop 자기검증 실패"; ok=0; fi
-    mb=$(( $(du -sm "$REPO/.venv-teleop" 2>/dev/null | cut -f1) + $(du -sm "$REPO/.gmr" 2>/dev/null | cut -f1) ))
+    mb=$(( $(dir_mb "$REPO/.venv-teleop") + $(dir_mb "$REPO/.gmr") ))
     [ "$mb" -le 1500 ] && echo "  🟢 teleop 환경 ${mb} MB" || { echo "  🔴 teleop 환경 ${mb} MB > 1500"; ok=0; }
   fi
   echo "  repo 전체: $(du -sh "$REPO" | cut -f1)   (.git $(du -sh "$REPO/.git" | cut -f1))"
