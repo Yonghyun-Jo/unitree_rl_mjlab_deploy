@@ -102,7 +102,7 @@ if [ -n "$XRT_SRC" ] && [ -d "$XRT_SRC" ]; then
       log "installing xrobotoolkit_sdk from $XRT_SRC ..."
       ARCH="$(uname -m)"
       run "$PY" -m pip install -q cmake pybind11 setuptools
-      export CMAKE_PREFIX_PATH="$("$PY" -m pybind11 --cmakedir 2>/dev/null || true)"
+      if [ -n "$DRY_RUN" ]; then echo "[dry] export CMAKE_PREFIX_PATH=\$($PY -m pybind11 --cmakedir)"; else export CMAKE_PREFIX_PATH="$("$PY" -m pybind11 --cmakedir 2>/dev/null || true)"; fi
       if [ "$ARCH" = "aarch64" ]; then NATIVE="$XRT_SRC/lib/aarch64/libPXREARobotSDK.so"; else NATIVE="$XRT_SRC/lib/libPXREARobotSDK.so"; fi
       if [ "$ARCH" = "aarch64" ] && ! file "$NATIVE" 2>/dev/null | grep -q ELF; then
         T="$XRT_SRC/tmp"; run mkdir -p "$T"
