@@ -25,6 +25,8 @@ grep -q 'torch==2.13.0' <<<"$OUT"                    || fail "torch 핀 없음"
 grep -q 'bb1bbe4' <<<"$OUT"                          || fail "GMR 커밋 핀 없음"
 grep -q 'sparse-checkout set' <<<"$OUT"              || fail "sparse checkout 없음"
 grep -q 'assets/unitree_g1' <<<"$OUT"                || fail "unitree_g1 만 받는 sparse 목록 없음"
+grep -qE 'checkout -q bb1bbe4' <<<"$OUT"             || fail "핀은 로컬 checkout 으로 — 축약 SHA 를 fetch 인자로 주면 remote ref 가 아니라 실패한다"
+! grep -qE 'fetch .*origin bb1bbe4' <<<"$OUT"        || fail "fetch 에 축약 SHA"
 torch_line=$(grep -n 'whl/cpu' <<<"$OUT" | head -1 | cut -d: -f1)
 gmr_line=$(grep -n 'pip install -e .*\.gmr' <<<"$OUT" | head -1 | cut -d: -f1)
 [ -n "$torch_line" ] && [ -n "$gmr_line" ] && [ "$torch_line" -lt "$gmr_line" ] || fail "torch 가 GMR 보다 먼저 설치돼야 한다 (torch=$torch_line gmr=$gmr_line)"

@@ -64,22 +64,21 @@ run "$PY" -m pip install "$TORCH_SPEC" --index-url "$TORCH_INDEX"
 # ── 3) GMR sparse + pinned ─────────────────────────────────────────────────
 if [ -n "${RESET_GMR:-}" ] && [ -d "$GMR_DIR" ]; then run rm -rf "$GMR_DIR"; fi
 if [ ! -d "$GMR_DIR/.git" ]; then
-  log "cloning GMR (sparse: $SPARSE_DIRS, commit=${GMR_COMMIT:-HEAD}) ..."
-  run mkdir -p "$GMR_DIR"
-  run git -C "$GMR_DIR" init -q
-  run git -C "$GMR_DIR" remote add origin "$GMR_REPO"
+  log "cloning GMR (blobless, sparse: $SPARSE_DIRS, commit=${GMR_COMMIT:-HEAD}) ..."
+  # blob:none (--depth 없이) 은 full history 를 blob 없이 받는다 → 축약 SHA 도 로컬에서
+  # 그대로 checkout 된다. --depth 1 로 얕게 받으면 fetch 인자로 준 축약 SHA 가 remote ref 가
+  # 아니라서 모든 git 버전에서 "couldn't find remote ref" 로 실패한다 (모든 새 로봇에서 재현).
+  run git clone -q --filter=blob:none --no-checkout "$GMR_REPO" "$GMR_DIR"
   run git -C "$GMR_DIR" sparse-checkout init --cone
   run git -C "$GMR_DIR" sparse-checkout set $SPARSE_DIRS
-  if [ -n "$GMR_COMMIT" ]; then
-    run git -C "$GMR_DIR" fetch -q --depth 1 --filter=blob:none origin "$GMR_COMMIT"
-  else
-    run git -C "$GMR_DIR" fetch -q --depth 1 --filter=blob:none origin HEAD
-  fi
-  run git -C "$GMR_DIR" checkout -q FETCH_HEAD
+  run git -C "$GMR_DIR" checkout -q "${GMR_COMMIT:-HEAD}"
 else
-  have="$(git -C "$GMR_DIR" rev-parse --short HEAD 2>/dev/null || echo '?')"
-  if [ -n "$GMR_COMMIT" ] && [ -z "$DRY_RUN" ] && [ "$have" != "$GMR_COMMIT" ]; then
-    log "WARN: 기존 .gmr HEAD=$have ≠ 핀 $GMR_COMMIT. 맞추려면 RESET_GMR=1 로 재실행 (지금은 그대로 진행)"
+  have="$(git -C "$GMR_DIR" rev-parse HEAD 2>/dev/null || echo '?')"
+  if [ -n "$GMR_COMMIT" ] && [ -z "$DRY_RUN" ]; then
+    case "$have" in
+      "$GMR_COMMIT"*) : ;;
+      *) log "WARN: 기존 .gmr HEAD=$have ≠ 핀 $GMR_COMMIT. 맞추려면 RESET_GMR=1 로 재실행 (지금은 그대로 진행)" ;;
+    esac
   fi
 fi
 # g1 메시 복구 (upstream GMR 에는 G1 STL 이 없다 → 이 repo 의 STL 복사)
