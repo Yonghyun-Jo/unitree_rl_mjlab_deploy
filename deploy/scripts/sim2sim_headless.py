@@ -76,6 +76,8 @@ def main():
     ap.add_argument("--stand", type=float, default=35.0, help="밴드 해제 뒤 정지 유지 [s]")
     ap.add_argument("--replay", default=None, help="이 실기 gait CSV 의 명령을 재생")
     ap.add_argument("--display", default=":99")
+    ap.add_argument("--floor-friction", type=float, default=None,
+                    help="바닥 마찰 μ 를 이 값으로 바꿔 돌린다(끝나면 원복). 학습 DR 은 (0.3,1.6).")
     a = ap.parse_args()
 
     slot = a.policy
@@ -86,6 +88,24 @@ def main():
             if line.startswith(a.policy + ":"):
                 slot = line.split(":", 1)[1].strip()
                 print("[별칭] %s -> %s" % (a.policy, slot)); break
+
+    # 🔴 바닥 마찰 스윕. tracked XML 을 손으로 고치지 않게 여기서 «바꿨다 되돌린다».
+    #    sim 의 발은 코너 4점 구이고 바닥과 priority 가 같아 «최대값» 이 쓰이므로 바닥 한 줄이면 된다.
+    #    (실측: μ 1.0 -> 정지 중 골반 pitch 폭 0.1° / 1.6 -> 13.5° / 3.0 -> 31.3°.
+    #     실기 11.7° 는 μ≈1.5~1.6 자리 = 학습 DR 상한.)
+    scene = os.path.join(REPO, "src/assets/robots/unitree_g1/xmls/scene_g1.xml")
+    scene_backup = None
+    if a.floor_friction is not None:
+        import re as _re
+        src = open(scene, encoding="utf-8").read()
+        scene_backup = src
+        new_geom = ('<geom name="floor" size="0 0 0.05" type="plane" material="groundplane" '
+                    'friction="%g 0.005 0.0001"/>' % a.floor_friction)
+        src2 = _re.sub(r'<geom name="floor"[^/]*/>', new_geom, src, count=1)
+        if src2 == src:
+            print("🔴 바닥 geom 을 못 찾았다 — 마찰을 못 바꾼다"); return 1
+        open(scene, "w", encoding="utf-8").write(src2)
+        print("[바닥] μ = %g (끝나면 원복한다)" % a.floor_friction)
 
     print("[정리] 잔류 프로세스")
     for p in ("g1_ctrl", "unitree_mujoco"):
@@ -177,6 +197,9 @@ def main():
         xv.terminate()
         for p in ("g1_ctrl", "unitree_mujoco"):
             sh(["pkill", "-x", p], stderr=subprocess.DEVNULL)
+        if scene_backup is not None:                 # 🔴 무슨 일이 있어도 원복
+            open(scene, "w", encoding="utf-8").write(scene_backup)
+            print("[바닥] 씬 원복")
 
     print("\n[판정] 밴드가 정말 풀렸나 — 데이터로 확인한다")
     chk = subprocess.run([sys.executable, os.path.join(REPO, "deploy/scripts/check_band_released.py"), a.out])
