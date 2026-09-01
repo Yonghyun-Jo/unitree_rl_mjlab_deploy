@@ -5,9 +5,7 @@
 **이 파일은 이 머신에만 있다.** git 저장소 바깥이라 push되지 않고 다른 머신으로 따라가지 않는다.
 여기에는 이 로봇 컴퓨터에서만 참인 규칙을 적는다.
 
-공통 규칙은 `unitree_rl_mjlab_deploy/CLAUDE.md`에 있다. 충돌하면 이 파일이 이긴다.
-
-(공통 규칙은 repo 의 rules/ 와 com1 의 claude_rules/projects/unitree_rl_mjlab.md 에 있다)
+공통 규칙은 repo 의 `rules/`(`SYSTEM_OVERVIEW.md`·`RUNBOOK_*.md`) 와 com1 의 `claude_rules/projects/unitree_rl_mjlab.md` 에 있다. 충돌하면 이 파일이 이긴다.
 
 ## 이 머신
 
@@ -18,7 +16,7 @@
 ## 작업 경계
 
 - `/home/unitree/dyros_ws/piene_ws` **안쪽은 자유롭게 수정**한다. `unitree_rl_mjlab_deploy/`도 포함이다.
-- 이 경로 **바깥은 수정하지 않는다.** 특히 `/home/unitree/dyros_ws/garry_ws`, 홈 디렉토리
+- 이 경로 **바깥은 수정하지 않는다.** 특히 `~/dyros_ws/` 아래 다른 사람의 워크스페이스(예: `garry_ws`·`sanghyuk_ws`·`kw_ws`), 홈 디렉토리
   설정 파일, 시스템 경로, 전역 site-packages. 읽기와 참조는 자유롭다.
 - 바깥 경로에서 `git` 쓰기 명령이나 포맷터·린터 자동 수정을 실행하지 않는다.
 - 실수로 바깥에 쓰기를 시도했다면 즉시 멈추고 알린다.
@@ -63,3 +61,4 @@
 
 - 저장소는 `unitree_rl_mjlab_deploy/` 와 `piene_g1_logger/` 둘이다. `piene_ws` 자체는 저장소가 아니다.
 - 현재 브랜치가 `main`이 아닐 수 있다. 커밋·푸시는 사용자가 요청할 때만 한다.
+- `piene_g1_logger/` 의 SDK 는 그 repo 의 `.venv` 안에 있다 — 다른 사람 워크스페이스(`garry_ws` 등)에 기대지 않는다.
