@@ -28,7 +28,7 @@ GMR_COMMIT="${GMR_COMMIT-bb1bbe4}"
 TORCH_SPEC="torch==2.13.0"
 TORCH_INDEX="https://download.pytorch.org/whl/cpu"
 SPARSE_DIRS="general_motion_retargeting assets/unitree_g1 scripts third_party"
-MAX_MB=1700  # 실측(2026-09-01, com1 x86 cpu wheel): venv-teleop 1518 MB(torch 755+opencv 188+scipy 143
+MAX_MB="${MAX_MB:-1700}"  # 실측(2026-09-01, com1 x86 cpu wheel): venv-teleop 1518 MB(torch 755+opencv 188+scipy 143
              # +sympy 80+imageio_ffmpeg 77+mujoco 56+numpy 73+...) + .gmr 79 MB = 1597 MB. 1500 는
              # 목표치였을 뿐 실측 전 추정이라 여기서 넘어간다 — 100 MB 여유를 두고 올린다.
 DRY_RUN="${DRY_RUN:-}"

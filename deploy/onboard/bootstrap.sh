@@ -13,14 +13,21 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 PIENE_WS="$(cd "$REPO/.." && pwd)"
-ONLY=""; SKIP_TELEOP=""; CHECK_ONLY=""
-while [ $# -gt 0 ]; do case "$1" in
-  --check) CHECK_ONLY=1 ;; --only) ONLY="$2"; shift ;; --skip-teleop) SKIP_TELEOP=1 ;; --ws) PIENE_WS="$2"; shift ;;
-  *) echo "unknown arg $1"; exit 1 ;; esac; shift; done
 step() { echo; echo "━━ $1 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; }
-want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 die() { local msg="$1" code="${2:-1}"; echo "🔴 $msg"; exit "$code"; }
 dir_mb() { [ -d "$1" ] && du -sm "$1" | cut -f1 || echo 0; }
+
+ONLY=""; SKIP_TELEOP=""; CHECK_ONLY=""
+while [ $# -gt 0 ]; do case "$1" in
+  --check) CHECK_ONLY=1 ;;
+  --only) [ $# -ge 2 ] || die "--only 는 값이 필요하다 (1..7)"; ONLY="$2"; shift ;;
+  --skip-teleop) SKIP_TELEOP=1 ;;
+  --ws) [ $# -ge 2 ] || die "--ws 는 경로가 필요하다"; PIENE_WS="$2"; shift ;;
+  *) die "unknown arg $1" ;;
+esac; shift; done
+case "$ONLY" in ""|[1-7]) ;; *) die "--only 는 1..7" ;; esac
+# --check 는 --only 와 같이 와도 이긴다 — ① 만 돌고 그 안의 exit 0 으로 끝난다.
+want() { if [ -n "$CHECK_ONLY" ]; then [ "$1" = 1 ]; return; fi; [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 G1="$REPO/deploy/robots/g1"
 export UV_PYTHON_INSTALL_DIR="$PIENE_WS/.uv-python"
 
@@ -40,7 +47,7 @@ if want 1; then
     echo "  glibc $glibc < 2.34 → xrt 불가: 실기는 노트북 publisher → 온보드 bridge --transport udp (rules/RUNBOOK_laptop_pico_teleop.md)"
   fi
   missing=""
-  for p in cmake build-essential libboost-all-dev libyaml-cpp-dev zlib1g-dev libfmt-dev libeigen3-dev git curl; do
+  for p in cmake build-essential libboost-all-dev libyaml-cpp-dev zlib1g-dev libfmt-dev libeigen3-dev python3-venv python3-dev git curl; do
     dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
   done
   [ -z "$missing" ] || die "apt 패키지 없음:$missing
@@ -70,8 +77,9 @@ fi
 if want 4 && [ -z "$SKIP_TELEOP" ]; then
   step "④ python 3.10 (uv)  → $UV_PYTHON_INSTALL_DIR"
   if ! command -v uv >/dev/null 2>&1; then
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$HOME/.local/bin" UV_DISABLE_UPDATE=1 sh
     export PATH="$HOME/.local/bin:$PATH"
+    command -v uv >/dev/null || die "④ uv 설치 실패 — ~/.local/bin/uv 없음"
   fi
   uv python install 3.10 >/dev/null
   TELEOP_PY="$(uv python find 3.10)"
@@ -109,11 +117,18 @@ assert torch.version.cuda is None, torch.version.cuda
 from general_motion_retargeting import GeneralMotionRetargeting as G
 G("xrobot", "unitree_g1")
 PYCHK
-    then echo "  🟢 teleop venv 3.10 · torch cpu · GMR 스모크"; else echo "  🔴 teleop 자기검증 실패"; ok=0; fi
-    mb=$(( $(dir_mb "$REPO/.venv-teleop") + $(dir_mb "$REPO/.gmr") ))
-    [ "$mb" -le 1500 ] && echo "  🟢 teleop 환경 ${mb} MB" || { echo "  🔴 teleop 환경 ${mb} MB > 1500"; ok=0; }
+    then
+      echo "  🟢 teleop venv 3.10 · torch cpu · GMR 스모크"
+      # .venv-teleop 이 아예 없어서 위 자기검증이 실패했을 때는 크기 줄을 건너뛴다 —
+      # 그 경우 dir_mb 가 0 을 돌려줘 "🟢 0 MB" 가 🔴 옆에 나란히 찍히는 모순을 막는다.
+      mb=$(( $(dir_mb "$REPO/.venv-teleop") + $(dir_mb "$REPO/.gmr") ))
+      [ "$mb" -le "${MAX_MB:-1700}" ] && echo "  🟢 teleop 환경 ${mb} MB" || { echo "  🔴 teleop 환경 ${mb} MB > ${MAX_MB:-1700}"; ok=0; }
+    else
+      echo "  🔴 teleop 자기검증 실패"; ok=0
+    fi
   fi
   echo "  repo 전체: $(du -sh "$REPO" | cut -f1)   (.git $(du -sh "$REPO/.git" | cut -f1))"
+  echo "  $(git --version)   (I1: git 2.25.1 은 fetch --filter promisor 제한 — C1 이 clone --filter=blob:none 으로 우회)"
   [ "$ok" = 1 ] || die "자기검증 실패 — 위 🔴 를 고친 뒤 재실행 (멱등)"
   echo
   echo "🟢 bootstrap 완료. 다음: (com1) robot.sh verify → 로거 install.sh → 실기는 rules/RUNBOOK_real_robot_mode1.md"
