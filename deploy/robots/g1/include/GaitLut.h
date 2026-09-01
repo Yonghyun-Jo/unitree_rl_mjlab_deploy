@@ -38,7 +38,7 @@ struct GlTable {
 // ── BEGIN GENERATED (gen_gait_lut_header.py) ──
 // 생성기: deploy/scripts/gen_gait_lut_header.py
 // 상류:   mjlab_g1_motion src/mjlab_g1_motion/tasks/mdp/gait_lut_data.py
-//         V1 = d94c7d9~1  ·  V2 = 95cc965 (워킹트리)
+//         V1 = d94c7d9~1  ·  V2 = 76cdd0c (워킹트리)
 // ⚠ 이 구역을 손으로 고치지 않는다. 상류 재적합 후 --write 로 다시 뽑고,
 //   tests/test_gait_lut.cpp 의 패리티 벡터도 mjlab 에서 다시 뽑을 것.
 

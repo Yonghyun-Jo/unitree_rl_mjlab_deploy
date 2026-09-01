@@ -105,6 +105,11 @@ def generate() -> str:
     return "\n".join(out)
 
 
+def _data_only(block: str) -> str:
+    """출처 주석(커밋 해시가 든 줄)을 뺀 «표 자체». 이게 같으면 거동은 같다."""
+    return "\n".join(ln for ln in block.splitlines() if not ln.lstrip().startswith("//"))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true")
@@ -126,8 +131,28 @@ def main() -> int:
     if cur == block:
         print("일치 — 헤더가 상류와 같다.")
         return 0
+
+    # 🔴 «표가 다르다» 와 «출처 주석의 커밋 해시만 다르다» 를 갈라 말한다.
+    #    갈라 놓지 않으면 mjlab HEAD 가 무관한 이유로 움직일 때마다 빨간불이 뜨고,
+    #    사람이 그걸 무시하는 법을 배운다. 그러면 «진짜 재적합» 이 왔을 때 안 본다.
+    #    (2026-09-01 실측: gait_lut_data.py 는 그대로인데 HEAD 가 95cc965 -> 76cdd0c 로
+    #     움직였다는 이유만으로 --check 가 🔴 였다.)
+    if _data_only(cur) == _data_only(block):
+        print("🟢 표는 같다 (숫자 바이트 동일).")
+        for a, b in zip(cur.splitlines(), block.splitlines()):
+            if a != b:
+                print("     기록: %s" % a.strip())
+                print("     현재: %s" % b.strip())
+                break
+        if args.check:
+            print("ℹ  출처 주석의 상류 커밋만 낡았다 — 거동에 영향 없다. --write 로 갱신하면 된다.")
+            return 0
+        # --write 면 주석만 갱신하고 계속 진행한다 (아래 공통 write 경로로 떨어진다).
     if args.check:
-        print("🔴 헤더가 상류와 다르다. --write 로 갱신할 것.", file=sys.stderr)
+        print("🔴 **표가 상류와 다르다** — 배포가 학습과 다른 발-z 를 명령하고 있다.",
+              file=sys.stderr)
+        print("   --write 로 갱신하고 tests/test_gait_lut.cpp 패리티 벡터도 다시 뽑을 것.",
+              file=sys.stderr)
         return 1
     HEADER.write_text(text[:i] + block + text[j:])
     print(f"갱신했다: {HEADER}")

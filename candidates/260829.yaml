@@ -17,9 +17,8 @@ candidates:
     mode1_ckpt: logs/rsl_rl/g1_student/2026-08-28_18-02-25_s4_mode1_minswing6_fz2p5_scratch30k/model_29999.pt
     min_swing: 0.06
     note: "min_swing 6 cm + foot_z_track w2.5 판(30k). sim A/B 는 v1 에 뒤지나(실력 −3.1, 발높이 낮음) 사용자 play 판단 «꽤 괜찮음» → 실기 대조군. 배포 6 cm = 학습과 동일."
-  # v3 = com2 s4_mode1_ms8_place2_scratch30k (정지 발배치 강화) — 30k 완주 후 아래 주석을 풀고 같은 명령으로 «추가»
-  # - alias: v3
-  #   label: ms8_place2_30k
-  #   mode1_ckpt: logs/rsl_rl/g1_student/2026-08-29_12-50-14_s4_mode1_ms8_place2_scratch30k/model_29999.pt
-  #   min_swing: 0.08
-  #   note: "v1 + settle_foot_place w2.0/std5cm + stand_planted place_std 5cm. 정지 시 좌우 간격 0.204 → 0.237 목표."
+  - alias: v3
+    label: ms8_place2_30k
+    mode1_ckpt: logs/rsl_rl/g1_student/2026-08-29_12-50-14_s4_mode1_ms8_place2_scratch30k/model_29999.pt
+    min_swing: 0.08
+    note: "v1 + 정지 발배치 강화(settle_foot_place w2.0/std5cm · stand_planted place_std 5cm), 30k 완주. sim 실측(DR+밀기): 정지 시 좌우 간격 p50 0.204 → 0.225 m(목표 0.237), 좁은 꼬리 p10 0.171 → 0.200. 걷기·낙상·no_slip 은 v1 과 동률, 저속 리프트 6.55 cm(0.82). 부작용: 앞뒤 >10 cm 꼬리 3.1 %(v1 0 %) · 너무 넓음(>0.30 m) 2.6 %."
