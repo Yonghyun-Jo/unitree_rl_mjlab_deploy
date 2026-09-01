@@ -571,7 +571,9 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     // 같은 이유로 filename() 도 빈 문자열이 된다 -> 후행 구분자를 뗀 뒤 이름을 뽑는다.
     if (slot_name.empty()) slot_name = trim_sep(policy_dir).filename().string();
 
-    auto articulation = std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate);
+    // 🔴 파생을 쓴다 — env->step() 이 obs 직전에 robot->update() 를 «한 번 더» 부르므로
+    //    루프에서 후처리하면 덮인다. update() 안에서 보정해야 어느 경로로든 따라간다.
+    auto articulation = std::make_shared<g1::G1Articulation<LowState_t::SharedPtr>>(FSMState::lowstate);
 
     std::filesystem::path motion_file = cfg["motion_file"].as<std::string>();
     if(!motion_file.is_absolute()) {
@@ -902,6 +904,22 @@ void State_Mimic::enter()
     }
 
     motion = motion_; // set for specific motion
+    // IMU 편향 보정. config.yaml 의 imu_cal 이 원장이고, 환경변수는 «실험용» override 다
+    // (sim 에 일부러 편향을 만들어 증상을 재현할 때 쓴다 — G1_IMU_CAL_DEG="4.2,0").
+    {
+        const YAML::Node ic = param::config["imu_cal"];
+        if (ic && ic.IsMap())
+            imu_cal_.set(ic["pitch_deg"] ? ic["pitch_deg"].as<float>() : 0.0f,
+                         ic["roll_deg"]  ? ic["roll_deg"].as<float>()  : 0.0f);
+        const bool env_override = imu_cal_.set_from_env();
+        spdlog::info("[imu_cal] {}{}", imu_cal_.describe(),
+                     env_override ? "  ← 환경변수 override" : "");
+        // 실제로 거는 곳은 articulation 이다(update() 마다 적용).
+        if (auto* art = dynamic_cast<g1::G1Articulation<LowState_t::SharedPtr>*>(env->robot.get()))
+            art->imu_cal = imu_cal_;
+        else
+            spdlog::error("[imu_cal] 🔴 G1Articulation 이 아니다 — 보정이 걸리지 않는다");
+    }
     safety_log_.open_from_env();   // G1_SAFETY_CSV 가 있을 때만 켜진다(기본 꺼짐)
     state_dump_.open_from_env("G1_STATE_CSV", GaitAux::header());   // G1_STATE_CSV 가 있을 때만 (sim2sim ↔ 실기 대조 계측)
     std::remove("/dev/shm/g1_vr_ref");   // clear any stale VR ref so it can't hijack on entry
@@ -1036,7 +1054,7 @@ void State_Mimic::enter()
         while (policy_thread_running)
         {
             const auto d_t0 = clock::now();
-            env->robot->update();
+            env->robot->update();   // 보정은 G1Articulation::update() 안에서 이미 걸린다
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (mode 1/2/3 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
             const auto d_t_poll = clock::now();
@@ -1225,6 +1243,11 @@ void State_Mimic::run()
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
     // 계측(기본 꺼짐). 명령을 다 실은 «뒤» 라 이 줄의 q_des 는 실제로 나가는 값과 같다.
-    if (state_dump_.on())
-        state_dump_.tick(FSMState::lowstate->msg_, lowcmd->msg_, g_loco.probe(g_cmd_mode));
+    if (state_dump_.on()) {
+        GaitAux aux = g_loco.probe(g_cmd_mode);
+        // 보정 «후» 중력 — 정책이 실제로 읽는 그 값. 재계산 아님, 그대로 나른다.
+        const auto& pg = env->robot->data.projected_gravity_b;
+        aux.pg_x = pg[0]; aux.pg_y = pg[1]; aux.pg_z = pg[2];
+        state_dump_.tick(FSMState::lowstate->msg_, lowcmd->msg_, aux);
+    }
 }

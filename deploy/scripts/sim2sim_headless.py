@@ -119,13 +119,46 @@ def main():
         time.sleep(4); os.write(mfd, a.mode.encode()); print("[키] %s (mode)" % a.mode)
         time.sleep(3)
 
-        print("[밴드] 8,8,9 전송 — 🔴 여기서부터가 데이터다")
-        r = subprocess.run([UV, "run", "--no-project", "--with", "python-xlib",
-                            "python", "-c", SENDKEY, a.display, "56", "56", "57"],
-                           capture_output=True, text=True, timeout=120)
-        sys.stdout.write("  " + r.stdout.replace("\n", "\n  "))
-        if "KEYS_SENT" not in r.stdout:
-            print("🔴 키 전송 실패 — 밴드가 안 풀렸다"); raise RuntimeError("band")
+        # 🔴 키 `9` 는 **토글**이다 — 안 먹었다고 무작정 다시 보내면 도로 켜진다.
+        #    그래서 «보내고 → 확인하고 → 안 됐으면 한 번 더» 로 간다. 확인은 계측 파일의
+        #    발목 토크로 한다(쓰기 스레드가 100 ms 마다 비우므로 실행 중에 읽을 수 있다).
+        #    실측: 3판 중 2판에서 첫 키가 유실됐다(창 포커스/이벤트 루프 경합).
+        def ankle_tau(win_s=2.0):
+            try:
+                rows = open(a.out, encoding="utf-8", errors="ignore").read().splitlines()
+            except OSError:
+                return None
+            if len(rows) < 20:
+                return None
+            hdr = rows[0].split(",")
+            try:
+                i4, i10 = hdr.index("tau_est_4"), hdr.index("tau_est_10")
+            except ValueError:
+                return None
+            vals = []
+            for ln in rows[-int(win_s * 50):]:
+                f = ln.split(",")
+                if len(f) <= i10: continue
+                try: vals.append((abs(float(f[i4])) + abs(float(f[i10]))) / 2)
+                except ValueError: pass
+            return sum(vals) / len(vals) if vals else None
+
+        released = False
+        for attempt in range(1, 4):
+            keys = ["56", "56", "57"] if attempt == 1 else ["57"]
+            print("[밴드] %s 전송 (시도 %d)" % (",".join("8" if k == "56" else "9" for k in keys), attempt))
+            r = subprocess.run([UV, "run", "--no-project", "--with", "python-xlib",
+                                "python", "-c", SENDKEY, a.display, *keys],
+                               capture_output=True, text=True, timeout=120)
+            if "KEYS_SENT" not in r.stdout:
+                print("  ⚠ 키 전송 자체가 실패: %s" % r.stdout.strip().replace("\n", " ")); continue
+            time.sleep(3.0)
+            tau = ankle_tau()
+            print("  확인: 발목 |tau| %s Nm" % ("%.2f" % tau if tau is not None else "(아직 표본 없음)"))
+            if tau is not None and tau >= 1.0:
+                released = True; print("  🟢 밴드 풀림 — 여기서부터가 데이터다"); break
+        if not released:
+            print("🔴 밴드를 못 풀었다 (3회 시도). 이 로그는 판정에 못 쓴다."); raise RuntimeError("band")
 
         if a.replay:
             print("[재생] %s" % os.path.basename(a.replay))

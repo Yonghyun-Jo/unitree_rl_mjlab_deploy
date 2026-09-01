@@ -40,22 +40,24 @@ def num(row, key, dflt=0.0):
 
 
 def judge(path):
-    tot = [0.0, 0.0]
-    n = 0
+    """🔴 «뒤쪽 절반» 만 본다.
+
+    밴드는 보통 기동 «도중에» 풀린다(f -> m -> 정책 ON -> 그때 9). 전체를 평균하면 해제
+    전 구간이 값을 끌어내려 **풀렸는데도 «안 풀림» 으로 오판한다** — 실제로 그랬다
+    (해제 t=2.6 s 인 로그를 0.34 Nm 로 읽고 거부했다).
+    로그 뒤쪽은 정의상 해제 이후이므로 거기서 판정한다."""
+    rows = []
     for r in csv.DictReader(open(path)):
-        if not r.get("kp_0"):
-            continue
-        if num(r, "kp_0") <= 0:                      # Passive 구간 제외
+        if not r.get("kp_0") or num(r, "kp_0") <= 0:
             continue
         if abs(num(r, "eff")) > 0.01:                # 걷는 중 제외 — 정지 중만 본다
             continue
-        for k, j in enumerate(ANKLE_PITCH):
-            tot[k] += abs(num(r, "tau_est_%d" % j))
-        n += 1
-    if n < 50:
-        return None, n, 0.0
-    mean = sum(tot) / (2 * n)
-    return mean >= THRESH_NM, n, mean
+        rows.append(sum(abs(num(r, "tau_est_%d" % j)) for j in ANKLE_PITCH) / 2.0)
+    if len(rows) < 50:
+        return None, len(rows), 0.0
+    tail = rows[len(rows) // 2:]                     # 뒤쪽 절반
+    mean = sum(tail) / len(tail)
+    return mean >= THRESH_NM, len(tail), mean
 
 
 def main(argv):

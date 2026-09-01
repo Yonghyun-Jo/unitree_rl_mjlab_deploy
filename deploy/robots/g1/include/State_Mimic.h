@@ -4,6 +4,8 @@
 #include "JointSafety.h"
 #include "SafetyLog.h"
 #include "StateDump.h"
+#include "ImuCal.h"
+#include "G1Articulation.h"
 #include <cnpy.h>
 #include <array>
 #include <atomic>
@@ -78,6 +80,8 @@ private:
     g1::SafetyLog safety_log_;
     // 계측용 상태 덤프 (env G1_STATE_CSV 가 있을 때만. 기본 꺼짐 → 거동 변화 0)
     g1::StateDump state_dump_;
+    // IMU 장착 편향 보정 (config.yaml: imu_cal). 기본 0 = 꺼짐 = 종전 거동 비트 동일.
+    g1::ImuCal imu_cal_;
     const char* mon_exit_reason_ = nullptr;   // null = 조작자 전이(p/v) 또는 정상 종료
 };
 

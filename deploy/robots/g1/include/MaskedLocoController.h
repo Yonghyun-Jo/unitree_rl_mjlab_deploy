@@ -29,6 +29,10 @@ struct GaitAux {
   float arm_scale = 1.f;
   float switch_a  = 1.f;   // 모드전환 crossfade 가중
   float swing_sc  = 1.f;   // 이 스텝에 실제로 적용된 최소 스윙 배율 (1 = 안 걸림)
+  // 🔴 «정책이 실제로 본» 중력 (보정 후). 로거의 rpy 는 IMU 원본이라 보정이 안 보인다 —
+  //    보정이 정책에 닿았는지 확인할 방법이 없어서 넣는다. 소유자는 robot->data 라
+  //    probe() 가 아니라 호출부(State_Mimic)가 채운다.
+  float pg_x = 0.f, pg_y = 0.f, pg_z = -1.f;
   int   is_run    = 0;
   int   cmd_mode  = 0;
   int   lut       = 0;     // 1 = LUT 분기, 0 = quintic 분기
@@ -36,13 +40,14 @@ struct GaitAux {
 
   static const char* header() {
     return ",phase,stride_hz,eff,foot_z_l,foot_z_r,bv_x,bv_y,bv_wz,"
-           "arm_scale,switch_a,swing_sc,is_run,cmd_mode,lut,settling";
+           "arm_scale,switch_a,swing_sc,pg_x,pg_y,pg_z,is_run,cmd_mode,lut,settling";
   }
   void write(std::FILE* f) const {
-    std::fprintf(f, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d",
+    std::fprintf(f, ",%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,"
+                    "%.6f,%.6f,%.6f,%d,%d,%d,%d",
                  phase, stride_hz, eff, foot_z_l, foot_z_r,
                  bv_x, bv_y, bv_wz, arm_scale, switch_a, swing_sc,
-                 is_run, cmd_mode, lut, settling);
+                 pg_x, pg_y, pg_z, is_run, cmd_mode, lut, settling);
   }
 };
 
