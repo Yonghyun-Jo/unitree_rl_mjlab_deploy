@@ -54,6 +54,10 @@ bash deploy/robots/g1/teleop/setup_teleop.sh
 
 ## C. 온보드 로컬 텔레옵 (`--transport local`, network-free)
 
+> ⛔ **JetPack 5(glibc 2.31) Jetson 에서는 불가** — PC-Service/xrt 가 glibc 2.34 를 요구해 로드 자체가 안 된다
+> (`rules/RUNBOOK_onboard_pico_teleop.md`). center_g1 이 그렇다. 실기는 노트북 publisher → 온보드 bridge
+> `--transport udp --arm-estop` (`rules/RUNBOOK_laptop_pico_teleop.md`). 판정은 `deploy/onboard/bootstrap.sh --check`.
+
 로봇 컴퓨터에 PICO를 직접 연결(co-located)한 경우. 네트워크 홉 없이 xrt→GMR→shm.
 
 ```bash
@@ -79,6 +83,10 @@ XRT_SRC=<.../XRoboToolkit-PC-Service-Pybind_X86_and_ARM64> bash deploy/robots/g1
 > sim2sim(노트북→com1)은 기존대로 `--transport zmq`(기본). local은 PICO가 g1_ctrl과 같은 PC일 때만.
 
 ---
+
+## 점검 도구
+- `tools/pico_sniff.py` — PICO 앱/publisher 가 실제로 무엇을 어디로 쏘는지 (UDP+TCP :5556 동시 리슨, pico_wire 806 B 해석). Hop-2 진단.
+- `legacy/` — 안 쓰지만 되살릴 조건이 분명한 것 (`legacy/README.md`).
 
 ## 자립성 메모
 - 로봇 clone-to-build의 유일한 선행 = `build_deps.sh`(`.deps`는 gitignore).
