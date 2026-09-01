@@ -28,7 +28,12 @@ export UV_PYTHON_INSTALL_DIR="$PIENE_WS/.uv-python"
 if want 1; then
   step "① 사전점검  repo=$REPO  piene_ws=$PIENE_WS"
   [ "$(uname -m)" = "aarch64" ] || die "aarch64 전용 (현재 $(uname -m)). com1 에서는 sim2sim 만 — rules/RUNBOOK_g1_from_scratch.md Phase 4" 2
-  glibc="$(ldd --version | head -1 | grep -oE '[0-9]+\.[0-9]+$')"
+  # head -1 로 ldd --version(보통 3~4줄) 을 바로 자르면 set -o pipefail 하에서 ldd 가 SIGPIPE 로
+  # 죽어 파이프 전체가 비0 종료 취급되고, 아래에 폴백이 없는 단순 대입문이라 set -e 가 스크립트를
+  # 그대로 죽인다(①이 시작하자마자 매번 죽는 재현됨) — 전체를 먼저 변수로 받아 파이프를 끝까지
+  # 소비시킨 뒤 1번째 줄만 본다.
+  glibc_raw="$(ldd --version 2>/dev/null || true)"
+  glibc="$(printf '%s\n' "$glibc_raw" | sed -n '1p' | grep -oE '[0-9]+\.[0-9]+$' || echo 0)"
   if awk -v g="$glibc" 'BEGIN{split(g,a,"."); exit !(a[1]>2 || (a[1]==2 && a[2]>=34))}'; then
     echo "  glibc $glibc ≥ 2.34 → PC-Service/xrt 로드 가능: --transport local 후보 (rules/RUNBOOK_onboard_pico_teleop.md)"
   else

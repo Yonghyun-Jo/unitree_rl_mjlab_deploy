@@ -28,7 +28,9 @@ GMR_COMMIT="${GMR_COMMIT-bb1bbe4}"
 TORCH_SPEC="torch==2.13.0"
 TORCH_INDEX="https://download.pytorch.org/whl/cpu"
 SPARSE_DIRS="general_motion_retargeting assets/unitree_g1 scripts third_party"
-MAX_MB=1500
+MAX_MB=1700  # 실측(2026-09-01, com1 x86 cpu wheel): venv-teleop 1518 MB(torch 755+opencv 188+scipy 143
+             # +sympy 80+imageio_ffmpeg 77+mujoco 56+numpy 73+...) + .gmr 79 MB = 1597 MB. 1500 는
+             # 목표치였을 뿐 실측 전 추정이라 여기서 넘어간다 — 100 MB 여유를 두고 올린다.
 DRY_RUN="${DRY_RUN:-}"
 
 log() { echo "[setup_teleop] $*"; }
@@ -90,7 +92,12 @@ run "$PY" -m pip install -e "$GMR_DIR"
 run "$PY" -m pip install -r "$SCRIPT_DIR/requirements.txt"
 
 # ── 4) xrt (선택) — glibc < 2.34 에선 시도하지 않는다 ─────────────────────
-glibc="$(ldd --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+$' || echo 0)"
+# ldd --version 는 보통 3~4줄인데 head -1 로 바로 자르면 set -o pipefail 하에서 ldd 가
+# SIGPIPE 로 죽어 파이프 전체가 실패 취급되고, 그 순간 `|| echo 0` 폴백까지 겹쳐 실행돼
+# $glibc 에 "2.39\n0" 처럼 개행이 섞여 들어간다(실측·100% 재현) → 항상 xrt 불가로 오판.
+# 먼저 전체를 변수로 받아 파이프를 끝까지 다 소비시킨 뒤 1번째 줄만 본다.
+glibc_raw="$(ldd --version 2>/dev/null || true)"
+glibc="$(printf '%s\n' "$glibc_raw" | sed -n '1p' | grep -oE '[0-9]+\.[0-9]+$' || echo 0)"
 glibc_ok=$("$BASE_PY" -c "import sys; print(1 if tuple(map(int,'$glibc'.split('.')))>=(2,34) else 0)" 2>/dev/null || echo 0)
 XRT_SRC="${XRT_SRC:-}"
 if [ -n "$XRT_SRC" ] && [ -d "$XRT_SRC" ]; then
