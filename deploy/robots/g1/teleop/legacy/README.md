@@ -11,3 +11,6 @@ transport 도 `--arm-estop` 으로 무장되므로 브릿지를 온보드에서 
 **되살릴 조건**: PC-Service/xrt 가 도는 **리눅스 PC(glibc ≥ 2.34)** 가 로봇 옆에 있고, 브릿지를 로봇이 아니라
 그 PC 에서 돌리고 싶을 때. 이 두 파일은 `vr_shm.py` 의 레이아웃(`<iIii` + 65f = 276 B, magic 0x6702)을 그대로
 따른다 — `vr_shm.py`/C++ `struct VrRef` 가 바뀌면 여기도 같이 바꿔야 한다.
+
+이 두 파일은 v1 프레임(276 B)만 안다. 현재 계약은 `foot_z[2]` 가 붙은 **284 B**(`vr_shm.py` FMT ·
+`State_Mimic.cpp` VrRef) — 되살리려면 먼저 맞춰야 한다(안 맞으면 mode3 이 stance 로 폴백).

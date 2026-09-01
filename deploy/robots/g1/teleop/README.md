@@ -1,14 +1,16 @@
 # G1 VR Teleop — setup
 
-이 repo를 `git clone`한 뒤 **독립적으로** VR 텔레옵을 세팅하는 절차. 두 호스트로 나뉜다:
+이 repo를 `git clone`한 뒤 VR 텔레옵을 세팅하는 절차. 현재 실기 토폴로지:
 
 ```
-[laptop / PC] vr_teleop_bridge.py (GMR retarget)  ──/dev/shm──►  [robot/onboard] g1_ctrl (C++)
-   .venv-teleop (setup_teleop.sh)                                 .deps (build_deps.sh)
+[노트북] PICO publisher  ──UDP(--transport udp)──►  [온보드 Jetson] vr_teleop_bridge.py (GMR retarget)  ──/dev/shm──►  g1_ctrl (C++)
+                                                        .venv-teleop (deploy/onboard/bootstrap.sh ⑤)      .deps (build_deps.sh)
 ```
 
-> **왜 나뉘나:** GMR IK(~15ms)는 50Hz 제어 루프와 CPU 경합하므로 **제어 호스트에서 뺀다.**
-> 로봇 온보드(Jetson)는 `g1_ctrl`만 돌고, bridge는 laptop/별도 PC에서 돌며 `/dev/shm/g1_vr_ref`로 ref만 넘긴다.
+> **bridge 는 온보드에서 돈다:** GMR IK(~15ms)는 g1_ctrl 의 50Hz 제어 루프와 CPU 경합하므로 별도
+> 프로세스(다른 코어)로 뺀다 — 단, 지금은 그 프로세스도 g1_ctrl 과 같은 온보드(Jetson)에서 돌고,
+> `.venv-teleop` 은 `deploy/onboard/bootstrap.sh` ⑤ 가 `setup_teleop.sh` 로 만든다. 개발용으로
+> com1/노트북 리눅스에서도 같은 스크립트로 bridge 를 띄울 수 있다(§B).
 
 ---
 
@@ -26,7 +28,7 @@ cd deploy/robots/g1 && mkdir -p build && cd build && cmake .. && make -j4
 ```
 ONNX 정책·모션 npz·deploy.yaml·onnxruntime는 **이미 커밋**되어 clone에 포함. 경로는 바이너리 기준 상대(`/proc/self/exe`)라 어디에 두든 동작.
 
-## B. laptop (VR bridge + GMR) — 1-command 세팅
+## B. 브릿지 머신(온보드 Jetson 또는 개발 PC) — 1-command 세팅
 
 ```bash
 # venv + GMR clone + g1 mesh 복구(upstream GMR엔 STL 없음 → repo STL 복사) + editable install + smoke test
@@ -35,7 +37,7 @@ bash deploy/robots/g1/teleop/setup_teleop.sh
 .venv-teleop/bin/python deploy/robots/g1/teleop/vr_teleop_bridge.py --mode 1
 ```
 > com1에는 기존 `gmr` conda env가 이미 있으므로 그걸 써도 된다(`setup_teleop.sh`는 새 머신용).
-> `general_motion_retargeting`은 PyPI에 없어 GitHub(YanjieZe/GMR)에서 clone하며, g1 mesh 35개는 이 repo의 `src/assets/robots/unitree_g1/xmls/assets/*.STL`로 복구된다.
+> `general_motion_retargeting`은 PyPI에 없어 GitHub(YanjieZe/GMR)에서 clone하며, g1 mesh 38개는 이 repo의 `src/assets/robots/unitree_g1/xmls/assets/*.STL`로 복구된다.
 
 ### bridge 컨트롤 매핑 (PICO)
 | 입력 | 동작 |
@@ -48,7 +50,7 @@ bash deploy/robots/g1/teleop/setup_teleop.sh
 
 주요 플래그: `--mode`(기본 cmd_mode) · `--gmr-iter`(IK 반복 상한, 기본 10=TWIST2 스톡; warm-start라 저렴) · `--grip-enable` · `--fallback-clip`(끊김 시 clip, 데모용) · `--vx/--vy/--wz`(속도 cap).
 
-> 실시간 성능은 iter가 아니라 **GMR을 sim/제어와 별도 프로세스로 분리**하는 게 핵심(TWIST2 레시피). 실로봇에선 GMR=laptop / g1_ctrl=Jetson이라 VrRef를 `/dev/shm`이 아닌 **네트워크(ZMQ/Redis)로** 넘겨야 한다.
+> 실시간 성능은 iter가 아니라 **GMR을 sim/제어와 별도 프로세스로 분리**하는 게 핵심(TWIST2 레시피). 실기 토폴로지는 bridge 도 g1_ctrl 도 같은 온보드(Jetson)에서 돌아 VrRef 는 그대로 `/dev/shm`으로 넘어간다 — 네트워크를 타는 건 PICO 입력 쪽(`--transport udp`, 노트북→온보드)뿐이다.
 
 ---
 
@@ -74,7 +76,7 @@ XRT_SRC=<.../XRoboToolkit-PC-Service-Pybind_X86_and_ARM64> bash deploy/robots/g1
 > "텔레옵 관절 안전 3층" 섹션 참고.
 
 ### 하드 E-stop (`/dev/shm/g1_estop`)
-- **`--transport local`에서만 무장.** sim2sim(`zmq`/`udp`)은 이 채널을 쓰지 않고 기존 soft mode1 fallback(안전모드 자동복귀)만 그대로 유지 — 하드 damping 없음.
+- 기본(auto)은 `--transport local` 에서만 무장. 네트워크 transport(`udp`/`zmq`)는 **`--arm-estop` 으로 명시 무장 — 실로봇은 필수** (`rules/RUNBOOK_laptop_pico_teleop.md`).
 - 우측 A → E-stop 래치(브릿지 SafetyMonitor). 우측 menu 1s 홀드 → 해제 후 `f`로 재기립.
 - **지연**: 버튼 E-stop / 워치독(통신불량)은 flag=1을 라이브로 써서 다음 50Hz 폴(≈즉시)에 Passive. **브릿지 프로세스 死(하트비트 정지)만** ~0.5s stale 감지 후 Passive.
 - 브릿지가 매 사이클 `estop_shm.write(seq++, flag)` 하트비트. 정상 종료 시 파일 제거(disarm).

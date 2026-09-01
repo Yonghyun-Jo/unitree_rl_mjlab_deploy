@@ -2,8 +2,8 @@
      로봇에서 이 파일을 고치지 않는다. com1 에서 고쳐 push → 로봇 pull → bootstrap --only 6. -->
 # piene_ws — 실로봇 온보드 (Jetson)
 
-**이 파일은 이 머신에만 있다.** git 저장소 바깥이라 push되지 않고 다른 머신으로 따라가지 않는다.
-여기에는 이 로봇 컴퓨터에서만 참인 규칙을 적는다.
+**이 파일의 원본은 repo `deploy/onboard/CLAUDE.robot.md` 다** — 여기서 고치지 말고 com1 에서 고쳐 push 한다
+(`bootstrap.sh --only 6` 이 다시 깐다). 여기에는 이 로봇 컴퓨터에서만 참인 규칙을 적는다.
 
 공통 규칙은 repo 의 `rules/`(`SYSTEM_OVERVIEW.md`·`RUNBOOK_*.md`) 와 com1 의 `claude_rules/projects/unitree_rl_mjlab.md` 에 있다. 충돌하면 이 파일이 이긴다.
 
@@ -15,7 +15,8 @@
 
 ## 작업 경계
 
-- `/home/unitree/dyros_ws/piene_ws` **안쪽은 자유롭게 수정**한다. `unitree_rl_mjlab_deploy/`도 포함이다.
+- `/home/unitree/dyros_ws/piene_ws` **안쪽에서도 git 으로 추적되는 소스는 고치지 않는다** (com1 → commit → push →
+  로봇 pull, 한 방향). 로그·빌드 산출물·venv 같은 로컬 산출물만 여기서 만든다.
 - 이 경로 **바깥은 수정하지 않는다.** 특히 `~/dyros_ws/` 아래 다른 사람의 워크스페이스(예: `garry_ws`·`sanghyuk_ws`·`kw_ws`), 홈 디렉토리
   설정 파일, 시스템 경로, 전역 site-packages. 읽기와 참조는 자유롭다.
 - 바깥 경로에서 `git` 쓰기 명령이나 포맷터·린터 자동 수정을 실행하지 않는다.

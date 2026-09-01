@@ -1,5 +1,5 @@
-# vr_teleop_bridge.py runtime deps — LAPTOP side only (the G1 onboard does NOT need these;
-# the robot runs only the C++ g1_ctrl, and GMR must stay OFF the control host).
+# vr_teleop_bridge.py runtime deps — installed by setup_teleop.sh into .venv-teleop on the
+# bridge machine (onboard Jetson today; dev machines may also run it).
 #
 # GMR (general_motion_retargeting) itself is installed by setup_teleop.sh (editable clone +
 # g1 mesh repair), which also pulls GMR's own stack (mujoco, mink, numpy, scipy, ...).
