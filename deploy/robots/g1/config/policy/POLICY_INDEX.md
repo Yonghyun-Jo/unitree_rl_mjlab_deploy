@@ -14,9 +14,10 @@
 | `260828_v2_settle_scratch35k` | — | 보관 | 2026-08-27_23-09-25_s4_mode1_settle_scratch_to60k/model_35500.pt | 미실행 — 사용자가 확인 | 미실행 |
 | `260828_v2b_minswing6` | — | 보관 | 2026-08-27_23-09-25_s4_mode1_settle_scratch_to60k/model_35500.pt | 미실행 — v1b 에서 같은 코드경로가 통과했고, 여기선 ONNX 만 v2 로 다르다 | 배포 완료 · 시험 대기 (2026-08-28) |
 | `260828_v2c_minswing8` | — | 보관 | 2026-08-27_23-09-25_s4_mode1_settle_scratch_to60k/model_35500.pt | 미실행 — v1b 에서 같은 코드경로가 통과했고, 여기선 ONNX 만 v2 로 다르다 | 배포 완료 · 시험 대기 (2026-08-28) |
-| `260829_v1_ms8_noslip1_30k` | v1 | 활성 | 2026-08-28_12-08-17_s4_mode1_minswing8_noslip1_parallel1_scratch30k/model_29999.pt | ★★★★☆ 아주 깔끔하게 걷는데? 발이 좀 높은 느낌이 있긴 함. 근데 잘 걸음. 실기가 기대됨. (2026 | 미실행 |
-| `260829_v2_ms6_fz2p5_30k` | v2 | 활성 | 2026-08-28_18-02-25_s4_mode1_minswing6_fz2p5_scratch30k/model_29999.pt | ★★★☆☆ 걸음 걸이 자체는 나쁘지 않은데 발을 조금 끌음. 저속일때... (2026-08-30) | 미실행 |
-| `260829_v3_ms8_place2_30k` | v3 | 활성 | 2026-08-29_12-50-14_s4_mode1_ms8_place2_scratch30k/model_29999.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `260829_v1_ms8_noslip1_30k` | — | 보관 | 2026-08-28_12-08-17_s4_mode1_minswing8_noslip1_parallel1_scratch30k/model_29999.pt | ★★★★☆ 아주 깔끔하게 걷는데? 발이 좀 높은 느낌이 있긴 함. 근데 잘 걸음. 실기가 기대됨. (2026 | 실기 1회 · 최근 ★★☆☆☆ (09-01 16:24) |
+| `260829_v2_ms6_fz2p5_30k` | — | 보관 | 2026-08-28_18-02-25_s4_mode1_minswing6_fz2p5_scratch30k/model_29999.pt | ★★★☆☆ 걸음 걸이 자체는 나쁘지 않은데 발을 조금 끌음. 저속일때... (2026-08-30) | 실기 1회 · 최근 ★★☆☆☆ (09-01 16:36) |
+| `260829_v3_ms8_place2_30k` | — | 보관 | 2026-08-29_12-50-14_s4_mode1_ms8_place2_scratch30k/model_29999.pt | ★☆☆☆☆ 우선 멈췄을 때 발을 벌리라고 해놔서 좀 이상하게 여자 자세(?)로 다소곳하게 벌림. 이건 굳이  | 실기 1회 · 최근 ★☆☆☆☆ (09-01 16:56) |
+| `260902_v1_cs_sep25_w4_30k` | v1 | 활성 | 2026-09-01_10-08-47_s4_mode1_cs_gate_yaw_sep25_w4_scratch30k/model_29999.pt | 미실행 — 사용자가 확인 | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |
