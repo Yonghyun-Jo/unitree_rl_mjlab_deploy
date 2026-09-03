@@ -19,6 +19,7 @@
 | `260829_v3_ms8_place2_30k` | — | 보관 | 2026-08-29_12-50-14_s4_mode1_ms8_place2_scratch30k/model_29999.pt | ★☆☆☆☆ 우선 멈췄을 때 발을 벌리라고 해놔서 좀 이상하게 여자 자세(?)로 다소곳하게 벌림. 이건 굳이  | 실기 1회 · 최근 ★☆☆☆☆ (09-01 16:56) |
 | `260902_v1_cs_sep25_w4_30k` | v1 | 활성 | 2026-09-01_10-08-47_s4_mode1_cs_gate_yaw_sep25_w4_scratch30k/model_29999.pt | ★★★★☆ 아주 괜찮음. 발 너비를 0.25로 하니까 초반엔 넓은 것 처럼 보였는데 뭔가 기본 폴리시같음.  | 미실행 |
 | `260902_v2_cs_sep25_mu3_50k` | v2 | 활성 | 2026-09-02_10-12-05_s4_mode1_cs_sep25_mu3_resume30k_to50k/model_49998.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `260902_v3_cs_sep25_mu3_sc30k` | v3 | 활성 | 2026-09-02_09-01-21_s4_mode1_cs_sep25_mu3_scratch30k/model_29999.pt | 미실행 — 사용자가 확인 | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |
