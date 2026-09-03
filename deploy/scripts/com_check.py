@@ -7,7 +7,7 @@
 
 # 원리
 정지 균형에서 발목 pitch 토크 합 = M·g·(x_CoP − x_발목) 이고, 정적이면 CoP = CoM 의 발바닥 투영.
-같은 관절각으로 모델(FK, xml 질량분포)의 CoM x 를 계산해 대조한다. **Δ = CoP(토크) − CoM(모델).**
+같은 관절각으로 모델(FK, xml 질량분포)의 CoM 을 **참 수직(IMU)** 으로 발바닥에 투영해 대조한다. **Δ = CoP(토크) − CoM(모델).**
 sim 에서 Δ ≈ 0 인 것을 확인했다(v2: +3.23 vs +3.26 cm). 실기에서 Δ 가 한쪽 부호로 일관되면
 «실기 질량분포가 모델과 다르다» 다. 2026-09-03: 모든 날·모든 상태에서 Δ = −1.5 ~ −3 cm (뒤).
 
@@ -23,13 +23,23 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 XML = os.path.join(REPO, "src/assets/robots/unitree_g1/xmls/g1.xml")
 
 
+def _qmul(a, b):
+    w1, x1, y1, z1 = a; w2, x2, y2, z2 = b
+    return np.array([w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2, w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+                     w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2, w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2])
+
+
+def _rot_inv(q, v):
+    return _qmul(_qmul(np.array([q[0], -q[1], -q[2], -q[3]]), np.array([0.0, *v])), q)[1:]
+
+
 def load(path):
     if path.endswith(".parquet"):
         import pyarrow.parquet as pq
         t = pq.read_table(path)
-        return {k: t.column(k).to_numpy().astype(float) for k in t.column_names if k.startswith(("q_", "dq_", "tau_est_", "kp_", "bv_", "time"))}
+        return {k: t.column(k).to_numpy().astype(float) for k in t.column_names if k.startswith(("q_", "dq_", "tau_est_", "kp_", "bv_", "time", "quat_"))}
     R = [r for r in csv.DictReader(open(path, encoding="utf-8", errors="ignore")) if r.get("kp_0")]
-    keys = [k for k in R[0] if k.startswith(("q_", "dq_", "tau_est_", "kp_", "bv_", "time"))]
+    keys = [k for k in R[0] if k.startswith(("q_", "dq_", "tau_est_", "kp_", "bv_", "time", "quat_"))]
     return {k: np.array([float(r[k]) if r.get(k) not in (None, "") else np.nan for r in R]) for k in keys}
 
 
@@ -63,8 +73,12 @@ def main():
                 mujoco.mj_kinematics(m, d); mujoco.mj_comPos(m, d)
                 if abs(d.xpos[LF][2] - d.xpos[RF][2]) > 0.008:
                     continue
-                n = d.xmat[LF].reshape(3, 3)[:, 2] + d.xmat[RF].reshape(3, 3)[:, 2]; n /= np.linalg.norm(n)
-                x = np.array([1.0, 0, 0]); x -= np.dot(x, n) * n; x /= np.linalg.norm(x)
+                # 🔴 수직은 발바닥 법선이 아니라 «참 수직»(IMU 중력) 이다. 밑창이 굴러 발끝이 들리면 발바닥
+                #    평면 축으로 잰 CoM 은 h·tan(기울기) 만큼 틀린다(0.6 m × 2.9° ≈ 3 cm — 2026-09-03 에 이걸로
+                #    «CoM 이 뒤» 를 3 cm 로 부풀렸다). IMU 는 폰 수평계로 −4.5° 일치 확인(2026-09-03).
+                q = [A["quat_w"][i], A["quat_x"][i], A["quat_y"][i], A["quat_z"][i]]
+                up = -_rot_inv(q, [0, 0, -1.0]); up /= np.linalg.norm(up)
+                x = np.array([1.0, 0, 0]); x -= np.dot(x, up) * up; x /= np.linalg.norm(x)
                 mid = (d.xpos[LF] + d.xpos[RF]) / 2
                 com.append(np.dot(d.subtree_com[0] - mid, x) * 100)
                 cop.append((A["tau_est_4"][i] + A["tau_est_10"][i]) / (M * g) * 100)
