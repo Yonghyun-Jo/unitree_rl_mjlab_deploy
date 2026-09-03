@@ -48,11 +48,16 @@
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
     "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
     "onnx_md5": "ac793a8d19c1154c68b14b7a3724eca1",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "sim2sim_walk": "★★★★☆ 아주 괜찮음. 발 너비를 0.25로 하니까 초반엔 넓은 것 처럼 보였는데 뭔가 기본 폴리시같음. 근데 바닥 마찰 부분은 아직 해결이 안됬다고 보면 됨. (2026-09-02)",
     "real_robot": "미실행"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-09-01_10-08-47_s4_mode1_cs_gate_yaw_sep25_w4_scratch30k/model_29999.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260902_v1_cs_sep25_w4_30k/policy.onnx",
   "deployed": {
     "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "sim2sim": {
+    "stars": 4,
+    "memo": "아주 괜찮음. 발 너비를 0.25로 하니까 초반엔 넓은 것 처럼 보였는데 뭔가 기본 폴리시같음. 근데 바닥 마찰 부분은 아직 해결이 안됬다고 보면 됨.",
+    "at": "2026-09-02T10:11"
   }
 }
