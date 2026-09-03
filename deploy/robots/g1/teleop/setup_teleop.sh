@@ -8,7 +8,7 @@
 # 왜 «최소» 인가 (2026-09-01 실측): pip 기본값으로 두면 aarch64 에서 torch 2.13+CUDA 13 (4.5 GB) 을
 #   받는데 Jetson 은 CUDA 11.4 라 한 바이트도 안 쓰인다. GMR 은 smplx 경유로 torch 를 import 만 한다
 #   → CPU wheel 이면 충분. GMR assets 1.2 GB 중 필요한 건 unitree_g1 53 MB → sparse checkout.
-#   결과: 6.6 GB → < 1.5 GB.
+#   결과(실측): 6.6 GB → Jetson(aarch64) 1309 MB · com1(x86) 1597 MB  (2026-09-03 / 09-01)
 #
 # 계약:
 #   TELEOP_PY   인터프리터 (>=3.10). 없으면 uv 관리 3.10 → python3 순으로 찾는다.
