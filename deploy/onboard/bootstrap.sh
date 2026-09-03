@@ -47,9 +47,13 @@ if want 1; then
     echo "  glibc $glibc < 2.34 → xrt 불가: 실기는 노트북 publisher → 온보드 bridge --transport udp (rules/RUNBOOK_laptop_pico_teleop.md)"
   fi
   missing=""
-  for p in cmake build-essential libboost-all-dev libyaml-cpp-dev zlib1g-dev libfmt-dev libeigen3-dev python3-venv python3-dev git curl; do
+  for p in cmake build-essential libboost-all-dev libyaml-cpp-dev zlib1g-dev libfmt-dev libeigen3-dev git curl; do
     dpkg -s "$p" >/dev/null 2>&1 || missing="$missing $p"
   done
+  # python venv/dev 는 «기능» 으로 판정한다 — 로봇엔 메타패키지(python3-venv) 없이
+  # 버전드 패키지(python3.8-venv)만 있어 dpkg 이름 검사가 오탐했다 (2026-09-02 실측).
+  python3 -c 'import venv, ensurepip' 2>/dev/null || missing="$missing python3-venv"
+  ls /usr/include/python3.*/Python.h >/dev/null 2>&1 || missing="$missing python3-dev"
   [ -z "$missing" ] || die "apt 패키지 없음:$missing
   → 사람이 실행: sudo apt install -y$missing   (스크립트는 sudo 를 부르지 않는다)" 2
   timeout 8 git ls-remote https://github.com/YanjieZe/GMR.git HEAD >/dev/null 2>&1 || die "github 접근 불가 — 인터넷 필요 (GMR·torch·uv 다운로드)" 2
