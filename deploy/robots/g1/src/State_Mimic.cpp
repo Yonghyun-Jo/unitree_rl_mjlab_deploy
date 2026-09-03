@@ -911,6 +911,13 @@ void State_Mimic::enter()
         if (ic && ic.IsMap())
             imu_cal_.set(ic["pitch_deg"] ? ic["pitch_deg"].as<float>() : 0.0f,
                          ic["roll_deg"]  ? ic["roll_deg"].as<float>()  : 0.0f);
+        // 🔴 sim(lo) 에는 실기 IMU 의 상쇄값을 걸지 않는다 — config.yaml 이 sim·실기 공용이라
+        //    여기서 갈라야 한다. 안 가르면 sim 이 «편향 없는 로봇에 틀린 보정» 으로 넘어진다(65°).
+        if (imu_cal_.on() && !g1::ImuCal::applies_to_network(g_network_iface)) {
+            spdlog::warn("[imu_cal] --network={} (sim) → config 의 보정 {} 을 걸지 않는다. "
+                         "sim 에 편향을 만들려면 G1_IMU_CAL_DEG 로.", g_network_iface, imu_cal_.describe());
+            imu_cal_.set(0.0f, 0.0f, "lo");
+        }
         const bool env_override = imu_cal_.set_from_env();
         spdlog::info("[imu_cal] {}{}", imu_cal_.describe(),
                      env_override ? "  ← 환경변수 override" : "");

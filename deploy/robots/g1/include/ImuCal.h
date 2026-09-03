@@ -24,7 +24,14 @@
 // # 안전
 // 기본값 0 → `apply()` 가 **아무것도 안 한다**(거동 비트 동일). 값이 틀리면 로봇의 유일한
 // 균형 센서를 틀리게 만드는 것이므로, 넣기 전에 **방위를 바꿔가며 실측**해서 몸-고정 성분과
-// 바닥 경사를 분리할 것. 재는 법 = 양발 지지 정지 구간에서 «발바닥 법선 vs IMU 중력».
+// 바닥 경사를 분리할 것. 재는 법 = 양발 지지 정지 구간에서 «발바닥 법선 vs IMU 중력»
+// (`deploy/scripts/imu_bias_fit.py`).
+//
+// # sim 에서는 자동으로 꺼진다 (`applies_to_network`)
+// config.yaml 은 **sim(--network=lo) 과 실기가 같은 파일**이다. 실기 IMU 를 상쇄하는 값을 sim 에
+// 걸면 «편향 없는 로봇에 틀린 보정» 이 되어 넘어진다(2026-09-01 실측 65°). 그래서 `lo` 에서는
+// config 의 값을 걸지 않는다. sim 에 편향을 «일부러 만들» 때는 환경변수(G1_IMU_CAL_DEG)로 —
+// 그건 이 게이트 뒤에 적용된다.
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
@@ -57,6 +64,10 @@ public:
         set(p, r, name);
         return true;
     }
+
+    // config 의 보정을 이 인터페이스에 걸어도 되는가. `lo` = sim(실기 온보드에서도 모터에 안 닿는다,
+    // 2026-08-20 실측) → sim 의 IMU 는 정확하므로 걸지 않는다. 그 밖(eth0/enp5s0 …)은 실기.
+    static bool applies_to_network(const std::string& iface) { return iface != "lo"; }
 
     // update() 직후에 부른다. data 는 isaaclab ArticulationData.
     template <class Data>

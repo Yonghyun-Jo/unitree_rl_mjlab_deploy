@@ -97,6 +97,15 @@ int main() {
         chk(!c2.set_from_env(), "환경변수가 없는데 읽었다고 한다");
     }
 
+    // ── ⑤ sim(lo) 에는 config 의 보정을 걸지 않는다 ─────────────────────────
+    // config.yaml 이 sim·실기 공용이라, 실기 상쇄값이 sim 에 걸리면 «편향 없는 로봇에 틀린 보정»
+    // 으로 넘어진다(2026-09-01 실측 65°). 인터페이스 이름으로 가른다.
+    {
+        chk(!g1::ImuCal::applies_to_network("lo"),     "lo(sim) 인데 보정을 건다");
+        chk( g1::ImuCal::applies_to_network("eth0"),   "eth0(실기) 인데 보정을 안 건다");
+        chk( g1::ImuCal::applies_to_network("enp5s0"), "enp5s0(실기) 인데 보정을 안 건다");
+    }
+
     std::printf(fail ? "[test_imu_cal] %d FAIL\n" : "[test_imu_cal] ALL PASS\n", fail);
     return fail ? 1 : 0;
 }
