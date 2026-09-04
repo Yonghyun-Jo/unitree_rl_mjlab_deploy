@@ -1,9 +1,9 @@
 {
-  "exported_at": "2026-09-03",
-  "slot": "260902_v2_cs_sep25_mu3_50k",
-  "trial": "v2",
-  "trial_day": "2026-09-02",
-  "note": "v1(교정 창 2판 30k) 위에 바닥 마찰 DR (0.3, 3.0) 으로 +20k resume — «실험실 바닥은 안 미끄러진다» 대응판. 곡선: 30k 접합 무충격, 낙상 0.71 유지, no_slip −0.236 → −0.212(정지 ×5 포함 = μ3 에서 미끄러짐 의존이 실제로 감소), settle_foot_place 0.284→0.297, MotionSuccess +0.84 pp·하락 클립 0. v1 과의 차이 = μ 상한뿐(reward 동일) → v1 vs v2 실기 A/B 가 «고마찰 학습» 의 가치 판정.",
+  "exported_at": "2026-09-04",
+  "slot": "260904_v1_standpose_70k",
+  "trial": "v1",
+  "trial_day": "2026-09-04",
+  "note": "v2(μ3 50k) + 정지 자세 3항 세트(상체 목표 4.4°·standing_com CoM→발목+4cm·waist 스케일) resume 70k — 실기 «정지 순간 뒤로 기울다 뒷걸음» 처방판. sim 실측(DR+밀기): 정지 CoM +3.8cm(뒤 여유 7.0, 종전 4.0)·정지 과도 CoM 후퇴 −7.4→−3.6cm/s·torso 3.0°(종전 22.4°)·앞뒤 >5cm 2%(종전 45%)·좌우 0.246. 보행 무손상(MotionSuccess +0.39pp 하락 0). 사용자 sim 판정 «괜찮음(팔 드는 것 제외)». μ(0.3,3.0)·0.25 계보.",
   "staged_by": "deploy/scripts/stage_candidates.py",
   "requires": [
     "obs_contract",
@@ -18,9 +18,9 @@
   "obs_contract_version": "1",
   "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
   "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
-  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-09-02_10-12-05_s4_mode1_cs_sep25_mu3_resume30k_to50k/model_49998.pt",
-  "mode1_run": "2026-09-02_10-12-05_s4_mode1_cs_sep25_mu3_resume30k_to50k",
-  "mode1_launch_commit": "1a823232da7d26970eed16a63ca90aef91e6e074",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-09-03_16-17-05_s4_mode1_standpose_com_resume50k_to70k/model_69997.pt",
+  "mode1_run": "2026-09-03_16-17-05_s4_mode1_standpose_com_resume50k_to70k",
+  "mode1_launch_commit": "df2cfe52b9365d59477a13acfcc9e6aa8312dd6f",
   "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
   "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
   "manifest": "motions/g1_flow_specialists_v2.yaml",
@@ -43,15 +43,15 @@
     "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
   },
   "verify": {
-    "onnx_vs_torch": "max|Δ| = 2.027e-06 (tol 0.0001) OK",
+    "onnx_vs_torch": "max|Δ| = 2.265e-06 (tol 0.0001) OK",
     "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
     "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
-    "onnx_md5": "d46dc54f6ef1d55b5dcdd2a1e809c735",
+    "onnx_md5": "bb61664befdc0e63d3905f28d53e43eb",
     "sim2sim_walk": "미실행 — 사용자가 확인",
-    "real_robot": "실기 1회 · 최근 ★★★★☆ (09-03 13:36)"
+    "real_robot": "미실행"
   },
-  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-09-02_10-12-05_s4_mode1_cs_sep25_mu3_resume30k_to50k/model_49998.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260902_v2_cs_sep25_mu3_50k/policy.onnx",
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-09-03_16-17-05_s4_mode1_standpose_com_resume50k_to70k/model_69997.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260904_v1_standpose_70k/policy.onnx",
   "deployed": {
     "status": "pending — stage_candidates --robot 또는 policy_slot push"
   }

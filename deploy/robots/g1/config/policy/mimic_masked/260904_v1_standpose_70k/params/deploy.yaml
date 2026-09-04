@@ -1,0 +1,237 @@
+# mjlab_g1_motion — masked-3mode flow student, **v3 스택** (v3 deploy base + mode1/2/3 residual), G1 29-DOF.
+# Source: flow base logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt
+#   mode1 2026-09-03_16-17-05_s4_mode1_standpose_com_resume50k_to70k / model_69997  <- 이 슬롯에서 바뀐 것은 이것 하나 (launch commit df2cfe5)
+#   mode2 s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999 (v3 슬롯 그대로)
+#   mode3 s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997 · manifest g1_flow_specialists_v2.yaml (29클립)
+# 🔴 이 슬롯은 «policy_dir 만 교체» 가 아니다 — mode1 이 새 발-z 표(COLMOv2)로 학습돼
+#   GaitLut.h 에 V2 표를 넣고 모드별로 고르게 했다. C++ **재빌드 필요**. 아래 gait: 블록 참조.
+#   sampling_steps=6, actor [1024,1024,1024,512]. 상세·검증수치·배포예산 = 이 슬롯의 ONNX_META.json
+# Policy ONNX: obs[1,1640] -> actions[1,29].  obs = 10 terms (164D single frame) x history 10.
+# WOSE branch: masked_root_pos_b(3) DROPPED (privileged true pelvis pos, unobservable on real G1).
+#   ✅ obs 레이아웃은 기존 gmt_multihead_* 와 완전히 동일 -> **C++ 재빌드 불필요**(policy_dir 만 교체).
+#   parity onnxruntime vs torch max|Δ| = 2.265e-06, mask slice (-22,-20) == command_mask OK.
+#
+# ⚠ HISTORY LAYOUT = TERM-MAJOR (must match mjlab ObservationManager):
+#   each term keeps its own history(10), flattened oldest->newest, then terms concatenated:
+#   [base_ang_vel x10 | projected_gravity x10 | command x10 | ... | command_mask x10 | ref_foot_height x10] = 1640.
+#   The C++ ObservationManager produces this when `use_gym_history` is unset/false (default).
+#   DO NOT set use_gym_history: true (that gives frame-major -> wrong order).
+#
+# ⚠ 5 obs terms below need C++ REGISTER_OBSERVATION (not in upstream): masked_joint_command,
+#   masked_root_ori_b, base_vel_command, command_mask, ref_foot_height.
+#   (wose: masked_root_pos_b dropped from the actor — its REGISTER_OBSERVATION may stay unused in C++.)
+#   base_vel_command + ref_foot_height are produced by MaskedLocoController (State_Mimic.cpp).
+#   The other 5 (base_ang_vel, projected_gravity, joint_pos_rel, joint_vel_rel, last_action)
+#   already exist in deploy/include/isaaclab/envs/mdp/observations/observations.h.
+
+# ── 이 슬롯이 요구하는 C++ 기능 (DeployFeatures.h) ───────────────────────────────
+# 🔴 yaml 파서는 «모르는 키를 그냥 지나친다». 그래서 아래 gait: 의 table/cadence/turn_asym 을
+#    모르는 바이너리로 이 슬롯을 돌리면 **에러 없이 옛 거동**(V1 표·cadence 1.0)이 나온다.
+#    이 선언이 그걸 기동 시점에 막는다 — 모르는 기능이 하나라도 있으면 exit(1) + 재빌드 안내.
+#    새 키/블록으로 «거동» 을 바꾸면 여기에 기능 이름을 추가할 것.
+requires:
+  - obs_contract        # 기동 시 ONNX 메타데이터의 obs 계약을 deploy.yaml 과 대조
+  - gait_mode_table     # gait: 의 모드별 table(V1/V2) · cadence · turn_asym
+  - ref_foot_height_ref # mode>=3 의 발-z 를 레퍼런스(클립/VR)에서 얻는다
+  - gait_settle         # 🔴 이 head 는 «정지 정착» 으로 학습됐다 — 없는 바이너리는 거부해야 한다
+  - gait_min_swing      # 🔴 저속 스윙 최소 클리어런스. 모르는 바이너리는 조용히 무시하고 낮게 든다
+
+joint_ids_map: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28]
+step_dt: 0.02
+
+# beyondmimic recipe gains (kp=armature*(2*pi*10)^2, kd=2*zeta*armature*(2*pi*10), zeta=2).
+# JOINT_ORDER: leg_L[0:6] leg_R[6:12] waist[12:15] arm_L[15:22] arm_R[22:29].
+stiffness: [40.179, 99.098, 40.179, 99.098, 28.501, 28.501, 40.179, 99.098, 40.179, 99.098, 28.501, 28.501,
+            40.179, 28.501, 28.501,
+            14.251, 14.251, 14.251, 14.251, 14.251, 16.778, 16.778, 14.251, 14.251, 14.251, 14.251, 14.251, 16.778, 16.778]
+damping: [2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144, 2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144,
+          2.5579, 1.8144, 1.8144,
+          0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681, 0.9072, 0.9072, 0.9072, 0.9072, 0.9072, 1.0681, 1.0681]
+
+# KNEES_BENT_KEYFRAME (NOT unitree's stock mimic default). Also the action offset below.
+default_joint_pos: [-0.312, 0.0, 0.0, 0.669, -0.363, 0.0, -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
+                    0.0, 0.0, 0.0,
+                    0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0, 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+
+commands: {}
+
+actions:
+  JointPositionAction:
+    # L1-1차: 기계한계 clip (deploy 순서 29). process_actions에서 항상 적용(joint_actions.h:54-57).
+    # legL[0:6] legR[6:12] waist[12:15] armL[15:22] armR[22:29]. default_joint_pos가 전부 범위 내부
+    # -> in-distribution 동작 무변화(no-op), OOD/발산만 방어.
+    clip: [[-2.5307, 2.8798], [-0.5236, 2.9671], [-2.7576, 2.7576], [-0.087267, 2.8798], [-0.87267, 0.5236], [-0.2618, 0.2618],
+           [-2.5307, 2.8798], [-2.9671, 0.5236], [-2.7576, 2.7576], [-0.087267, 2.8798], [-0.87267, 0.5236], [-0.2618, 0.2618],
+           [-2.618, 2.618], [-0.52, 0.52], [-0.52, 0.52],
+           [-3.0892, 2.6704], [-1.5882, 2.2515], [-2.618, 2.618], [-1.0472, 2.0944], [-1.97222, 1.97222], [-1.61443, 1.61443], [-1.61443, 1.61443],
+           [-3.0892, 2.6704], [-2.2515, 1.5882], [-2.618, 2.618], [-1.0472, 2.0944], [-1.97222, 1.97222], [-1.61443, 1.61443], [-1.61443, 1.61443]]
+    joint_names: [.*]
+    # G1_ACTION_SCALE = 0.25 * effort_limit / stiffness (beyondmimic, per-joint).
+    scale: [0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386, 0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386,
+            0.5475, 0.4386, 0.4386,
+            0.4386, 0.4386, 0.4386, 0.4386, 0.4386, 0.0745, 0.0745, 0.4386, 0.4386, 0.4386, 0.4386, 0.4386, 0.0745, 0.0745]
+    offset: [-0.312, 0.0, 0.0, 0.669, -0.363, 0.0, -0.312, 0.0, 0.0, 0.669, -0.363, 0.0,
+             0.0, 0.0, 0.0,
+             0.2, 0.2, 0.0, 0.6, 0.0, 0.0, 0.0, 0.2, -0.2, 0.0, 0.6, 0.0, 0.0, 0.0]
+    joint_ids: null
+
+# ── observations: EXACT order + dims must match StudentPolicyCfg (164D single frame; wose) ──
+# all history_length: 10, all scale 1.0 (policy group has no per-term scale in training).
+observations:
+  base_ang_vel:           # 3
+    train_term: base_ang_vel
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  projected_gravity:      # 3
+    train_term: projected_gravity
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  masked_joint_command:   # 58  (q_ref+q̇_ref, lower[:12]/upper[12:] zeroed per cmd_mode)
+    train_term: command
+    params: {command_name: motion}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,   # q_ref 29
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]   # q̇_ref 29
+    history_length: 10
+  masked_root_ori_b:      # 6  (anchor ori Rot6D; all zeroed in mode1)
+    train_term: motion_root_ori_b
+    params: {command_name: motion}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  joint_pos_rel:          # 29
+    train_term: joint_pos
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  joint_vel_rel:          # 29
+    train_term: joint_vel
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  last_action:            # 29
+    train_term: actions
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    history_length: 10
+  base_vel_command:       # 3  (yaw-local [vx,vy,wz]; zeroed in mode3; joystick source)
+    train_term: base_vel
+    params: {}
+    clip: null
+    scale: [1.0, 1.0, 1.0]
+    history_length: 10
+  command_mask:           # 2  ([mask_upper, mask_lower])
+    train_term: mask
+    params: {}
+    clip: null
+    scale: [1.0, 1.0]
+    history_length: 10
+  ref_foot_height:        # 2  ([z_L,z_R] foot-trajectory command; MaskedLocoController gen)
+    train_term: foot_z
+    params: {}
+    clip: null
+    scale: [1.0, 1.0]
+    history_length: 10
+
+# ── 모드별 발-z 생성 조건 (MaskedLocoController; State_Mimic::load_gait_cfg 가 로드) ──
+# head 마다 학습 시점이 달라 foot_z 생성기가 다르다. 하나로 통일하면 반드시 어느 head 하나가
+# 학습과 다른 발-z 명령을 받는다. 근거 = ONNX_META.json 의 mode{N}_ckpt 를 그 시점
+# stage4_mode{N}_env_cfg.py 의 FOOT_GEN 과 대조 (git show <commit>:<cfg> 로 복원):
+#   mode1 = 2026-09-03_16-17-05_s4_mode1_standpose_com_resume50k_to70k @69997 (launch commit df2cfe5)
+#          -> 그 커밋의 stage4_mode1_env_cfg.FOOT_GEN: cadence_scale 1.15, settle_eff 0.15, settle_phase 0.07, turn_k 0.3, stance_z 0.066, settle_steps {1: 100}, min_swing {1: 0.08}
+#   mode2 = 2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k @29999
+#          -> stage4_mode2_env_cfg.py:48 FOOT_GEN = 위와 동일 + stand_deadzone 0.15.
+#   mode3 = 2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k @89997 (종전 그대로)
+#          -> foot_gen 미사용(= 클립 발 world-z). 배포는 그 값을 알 수 없어 생성기를 그대로
+#             쓴다 = 남은 불일치(1640 중 2 dim). 별도 과제.
+# 🔴 남은 불일치 2: 학습측 gait_lut.turn_asym(wz) 이 여기 GaitLut.h 에 없다 — 회전 중에만
+#    발현(걷기 1.25 rad/s 0.42~0.62 cm, 달리기 1.0 rad/s 1.20 cm; 두 발 평균 스윙은 불변).
+# mode4/5(데모 클립)는 미지정 -> C++ 기본값(quintic, height_scale 1.0) = 종전 동작 그대로.
+# ⚠ ONNX 를 새로 구우면 이 표와 tests/test_loco_gait_modes.cpp 의 골든벡터를 같이 갱신할 것.
+#   (이 슬롯은 v3_multihead_steps6 대비 mode1·mode2 head 만 상이 — mh.heads.2.* 및 base 는 바이트 동일, 확인함.)
+gait:
+  walk_max: 1.2        # lut gait 히스테리시스 — 이 아래면 walk
+  run_min: 1.7         #                        이 위면 run, 사이는 직전 상태 유지
+  # 🔴 mode1 과 mode2 는 «다른 표» 를 쓴다 (2026-08-26). 같은 표를 주면 반드시 한쪽이 틀린다.
+  #   mode1 head = 2026-09-03_16-17-05_s4_mode1_standpose_com_resume50k_to70k (launch commit df2cfe5)
+  #     그 시점 상류가 이미:
+  #       d94c7d9 (08-25 20:50) 표를 COLMOv2 로 재적합  -> table: 2   (STANCE_Z 6.6877 -> 3.5000 cm)
+  #       09fb616 (08-25 22:01) 정지 게이트를 «명령이 0» 으로 -> V2 표에 stand_eps 1e-6 로 묶임
+  #       c4fb57e (08-25 22:19) cadence_by_mode[1] = 1.15        -> cadence: 1.15
+  #       17995ba (08-17)       turn_asym                        -> turn_asym: true
+  #       eb0903c (08-25 22:4x) turn_k 0.55 -> 0.3 되돌림        -> C++ turn_k 0.3 그대로 (일치)
+  #   mode2 head = s4_mode2_v3base_port5_m2lgen_steps6_30k (2026-08-20) = 재적합 «이전»
+  #     -> table: 1 (기존 표) · cadence 1.0 · 옛 정지 게이트 0.05. 값을 그대로 둔다 = 거동 불변.
+  # 정지 정착 (2026-08-27 학습, d03a144 FOOT_GEN 과 «값 단위로» 동일):
+  #   settle_steps={1: 100}, settle_eff=0.15, settle_phase=0.07
+  # 명령이 0 이 되면 즉시 얼어붙지 않고 위상을 settle_phase 까지 더 돌려 «한 걸음 더» 구른다
+  # — 그 자리가 두 발이 가장 모이는 위상이다. 안 켜면 걷던 자세 그대로 얼어붙는다
+  # (상류 실측: 앞뒤 어긋남 p50 9.9 cm · 49 % 가 10 cm 초과 = 가위 자세).
+  # ⚠ settle_phase 0.07 은 **V2 표의 성질**이다 — V1(mode2)에 켜려면 다시 재야 한다.
+  settle_eff: 0.15     # 정착 걸음 크기(LUT 조회 속도) — 정리하려다 넘어지면 본말전도라 작게
+  settle_phase: 0.07   # 이 위상을 지나면 종료
+  # ── 최소 스윙 클리어런스 (stage_candidates.py 가 후보 파일로 생성, 2026-09-04) ──────────
+  # 슬롯 260904_v1_standpose_70k · mode1 = 2026-09-03_16-17-05_s4_mode1_standpose_com_resume50k_to70k/model_69997
+  # 배포 min_swing 0.08 · 학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)
+  # 표 진폭이 min_swing 보다 작으면 «궤적의 골을 고정한 채» 모양 그대로 키운다. 정착 걸음도
+  # 같은 LUT 조회 경로라 같이 커진다(골 불변). 학습과 같은 값이면 OOD 가 아니다.
+  mode1: {source: lut, table: 2, cadence: 1.15, turn_asym: true, settle_steps: 100, min_swing: 0.08}
+  #                                                             ↑ 2 초 상한. 위상을 못 지나도
+  #                                                               반드시 끝난다(정지 눌렀는데 안 멈춤 금지)
+  mode2: {source: lut, stand_deadzone: 0.15}   # 학습과 동일(V1 표, cadence 1.0, asym off)
+  #   ⚠ mode2 는 turn_asym 을 **일부러 껐다**. mode2 head 도 turn_asym 이 있는 상태로 학습됐지만
+  #     (17995ba 08-17 < 학습 08-20), 이번 배포는 mode1 하나만 바꾸는 판이라 mode2 를 같이
+  #     움직이면 실기에서 회귀 원인을 못 가른다. 켜려면 `turn_asym: true` 한 줄이고 재빌드 없다
+  #     — 별도 A/B 로 돌릴 것. 실측 폭: 걷기 1.25 rad/s 0.42~0.62 cm, 달리기 1.0 rad/s 1.20 cm.
+  mode3: {source: quintic}    # ⚠ mode>=3 의 발-z 는 «생성기를 안 쓴다» — 학습(stage4_mode3)에
+                              #   FOOT_GEN 이 없어 obs 원천이 «레퍼런스 발 world-z» 다
+                              #   (클립 = motion npz, VR = 트래커/GMR FK).
+                              #   State_Mimic.cpp REGISTER_OBSERVATION(ref_foot_height) 참조.
+                              #   이 줄이 남아 있는 이유 = 레퍼런스를 못 얻을 때
+                              #   (VR 미접속 standby) 쓸 «두 발 접지» stance 값 하나뿐이다.
+
+# ── deploy 안전층 (State_Mimic이 로드; 없으면/이상하면 전부 비활성). 값은 sim 튜닝. ──
+safety:
+  enable_pos_clamp: true       # L1-2차 C++ 최종 clamp (action.clip이 L1-1차)
+                               # pos_min/max == action.clip (바이트 동일) 이고 blend 는 범위 내
+                               # 두 값의 볼록결합이라 정상경로에선 증명 가능한 no-op. blend 버그·
+                               # NaN 가드 누락 대비 최종 보루로만 작동.
+  enable_rate_limit: true      # L2 — 명령 rate 하드캡 (아래 vel_max)
+  enable_qd_guard: true         # L3 — 측정 qd 감시 (warn=강제 mode1 / crit=Passive)
+  # 위치 한계(기계, deploy 순서 29). action.clip과 동일.
+  pos_min: [-2.5307,-0.5236,-2.7576,-0.087267,-0.87267,-0.2618,-2.5307,-2.9671,-2.7576,-0.087267,-0.87267,-0.2618,-2.618,-0.52,-0.52,-3.0892,-1.5882,-2.618,-1.0472,-1.97222,-1.61443,-1.61443,-3.0892,-2.2515,-2.618,-1.0472,-1.97222,-1.61443,-1.61443]
+  pos_max: [ 2.8798, 2.9671, 2.7576, 2.8798, 0.5236, 0.2618, 2.8798, 0.5236, 2.7576, 2.8798, 0.5236, 0.2618, 2.618, 0.52, 0.52, 2.6704, 2.2515, 2.618, 2.0944, 1.97222, 1.61443, 1.61443, 2.6704, 1.5882, 2.618, 2.0944, 1.97222, 1.61443, 1.61443]
+  # ── L2/L3 임계 — COLMOv2 레퍼런스 실측 기준 ──
+  # 하한 앵커 = 6.0 rad/s: COLMOv2 77클립·827,657프레임의 |q̇| 상한. 29관절 전부, 전 카테고리
+  #   (walk/run/dance/fight/jump/push/obstacle/aiming/fallAndGetUp/ground/multipleActions) 동일하게
+  #   정확히 6.00에서 멈춘다 — joint_vel 과 joint_pos 유한차분 둘 다. 리타겟이 속도제한한 궤적이라
+  #   6.0 = "학습이 본 가장 과격한 속도". 정상 동작은 절대 이 위를 요구하지 않는다.
+  # 상한 앵커 = 20.0 rad/s: 하드웨어 최소 velocity_limit (hip_roll·knee = 7520_22).
+  #   이 위로 잡으면 무릎에서 Unitree 온보드 펌웨어 보호정지가 먼저 걸려 우리 가드가 무의미해진다.
+  #   (구 qd_crit 25.0 이 정확히 그 상태였음 — 켰어도 무릎은 못 잡았다.)
+  # 사다리:  warn 12 < vel_max 15 < crit 18 < hw 20   전부 펌웨어보다 먼저 우리가 잡는다.
+  # ⚠ warn/crit 과 vel_max 는 서로 다른 신호를 보므로 앵커도 다르다.
+  #   warn/crit = 측정 q̇  -> 포락 6.0 (위 앵커). 그 ×2.0 / ×3.0.
+  #   vel_max   = 명령 target rate -> 포락이 훨씬 크다. 완전추종 목표
+  #     q_des = q_ref + (kd/kp)·q̇_ref  (kd/kp = 0.0637s, 전 관절 균일) 로부터
+  #     COLMOv2 |dq_des| = p50 4.8 / p99 12.2 / p99.9 15.3 / max 19.1 rad/s.
+  #   -> vel_max 15.0 은 프레임의 0.126%(1/800)에서만 개입. 18.0 이면 0.006%(사실상 무개입),
+  #      10.0 이면 4.6% 로 정상 동작을 방해한다. 15 = 보호와 무간섭의 절충.
+  #      실기에서 빠른 동작이 굼떠 보이면 18.0 으로 올릴 것 (재빌드 불필요).
+  vel_max: 15.0                 # rad/s — 명령 rate 캡. 1kHz tick당 0.015 rad. 개입률 0.126%
+  qd_warn: 12.0                 # rad/s — 측정 q̇ ×2.0. 지속 시 강제 mode1
+                                #   (mode1 에선 g_req_mode==1 이라 같은 틱에 해제 = no-op, 오탐 무해)
+  qd_crit: 18.0                 # rad/s — 측정 q̇ ×3.0. 지속 시 Passive(damping). hw 20 아래
+  over_ticks: 5                 # 연속 초과 틱(0.1s@50Hz). 접지 충격 스파이크(1~2틱) 기각용
