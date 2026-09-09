@@ -361,3 +361,17 @@ DISPLAY=:1 xmodmap -pke | grep -E "^keycode +(41|<잡힌값>) "     # 41 = f
   기동 로그에 `[imu_cal] pitch=-2.10° … ← 환경변수 override` 가 찍혀야 한다.
 - 판정: 뒤로 기움·정지 중 잔발이 **줄면** 계속(그다음 전량), **늘면** 즉시 `p`. 부호가 반대면 넘어진다(sim 65°).
 
+## 12. 안전 캡은 관절별 — 하드웨어 최고속도의 90 % (2026-09-09, `6954755`)
+
+`safety.vel_max` / `qd_crit` 가 29개 리스트다. 값 = hw × 0.9 (무릎·hip roll 18 · hip pitch/yaw·waist yaw 29 ·
+발목·어깨·허리 34 · wrist 20), crit = hw − 1. 기동 로그에 이렇게 찍혀야 정상:
+```
+[safety] rate_limit ON (vel_max=18~34 rad/s 관절별: hip_pitch 29 knee 18 ankle_pitch 34)
+[safety] qd_guard ON (warn=12 crit=19~36 rad/s 관절별: hip_pitch 31 knee 19 ankle_pitch 36, over_ticks=5)
+```
+- `[safety] 사다리 어긋남` 경고가 있으면 yaml 값이 잘못된 것 — warn < vel_max < crit 이 관절마다 지켜져야 한다.
+- **옛 바이너리(9-09 이전 빌드)로 새 슬롯을 띄우면 `[deploy 계약]` 이 거부한다** (`safety_per_joint`). 로봇을 pull → 빌드 → setcap 한 뒤에.
+- `over_ticks 5` 는 정책 스레드 50 Hz 기준 **100 ms 지속**이다. 접지 스파이크(수 ms)는 안 걸린다.
+- 왜 끄지 않나: 실기 펌웨어는 한계를 넘으면 자르지 않고 **보호정지**한다. 캡은 그 아래에서 잡는 것이다.
+- 러닝 시험은 하네스 + `--dump` + 1.0 → 1.5 → 2.0 m/s 사다리. 종료 요약의 `rate_limit` 틱과 `|qd| 최대` 를 같이 본다.
+
