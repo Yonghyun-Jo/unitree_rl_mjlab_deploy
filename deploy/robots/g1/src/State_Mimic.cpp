@@ -745,6 +745,7 @@ static inline void mon_track(const float* pre, const float* post, int n,
 void State_Mimic::mon_reset()
 {
     mon_clamp_ticks_ = mon_rate_ticks_ = 0;
+    mon_nan_hold_ticks_ = 0;
     mon_clamp_max_ = mon_rate_max_ = mon_qd_max_ = mon_tilt_max_deg_ = 0.0f;
     mon_clamp_joint_ = mon_rate_joint_ = mon_qd_joint_ = -1;
     mon_exit_reason_ = nullptr;
@@ -766,6 +767,7 @@ void State_Mimic::mon_log_summary()
                      mon_rate_ticks_, mon_rate_max_, mon_rate_joint_, jname(mon_rate_joint_));
     else
         spdlog::info("  rate_limit : {} tick ({})", mon_rate_ticks_, js_enable_rate_limit_ ? "무개입" : "OFF");
+    spdlog::info("  nan_hold   : {} tick (출력 NaN/Inf 를 직전값으로 홀드, 항상 ON)", mon_nan_hold_ticks_);
     spdlog::info("  |qd| 최대  : {:.2f} rad/s @ {} {}   (warn {:.1f} / crit {:.1f}, guard {})",
                  mon_qd_max_, mon_qd_joint_, jname(mon_qd_joint_),
                  js_qd_warn_, js_qd_crit_, js_enable_qd_guard_ ? "ON" : "OFF");
@@ -1270,6 +1272,13 @@ void State_Mimic::run()
     if (mon_on && js_enable_pos_clamp_) {
         mon_track(mon_pre.data(), action.data(), mon_n, mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_);
         for (int i = 0; i < mon_n; ++i) mon_pre[i] = action[i];   // rate-limit 비교용 기준 갱신
+    }
+    // 출력 NaN/Inf 홀드 (항상 ON, 2026-09-09). L2 를 끄면서 js_rate_limit 이 겸하던 «NaN→이전값» 을 분리했다.
+    // q_prev 는 enter() 에서 측정 pose 로 초기화되고 아래에서 매 틱 갱신되므로 체류 첫 틱부터 유효하다.
+    // 1 kHz 스레드 — I/O 없이 세기만 한다(요약은 exit()).
+    if (js_q_prev_valid_) {
+        const int held = js_hold_nonfinite(action.data(), js_q_prev_.data(), static_cast<int>(action.size()));
+        if (held > 0) ++mon_nan_hold_ticks_;
     }
     // L2: 관절 속도 rate-limit (gated, 기본 off). 출력 전용 — obs(last_action 등)는 raw action을
     // 그대로 읽으므로 parity 영향 없음. 비활성일 때도 q_prev는 계속 추적해서, 나중에 켤 때

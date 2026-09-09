@@ -21,6 +21,17 @@ inline void js_rate_limit(float* q, float* q_prev, const float* max_step, int n)
     }
 }
 
+// 출력 NaN/Inf 홀드: 비유한 q[i] 를 q_prev[i](직전 출력 또는 진입 시 측정 pose)로 바꾼다. 바꾼 개수 반환.
+//   2026-09-09: L2 rate_limit 을 끄면서 추가. 그 전엔 js_rate_limit 의 NaN→이전값 이 이 역할을 겸했고,
+//   MaskedLocoController::apply_switch_blend 도 같은 홀드를 하지만 체류 첫 틱(a_prev 미확보)은 못 막는다.
+//   q_prev 는 enter() 에서 측정 pose 로 초기화되므로 첫 틱부터 유효하다. q_prev 는 갱신하지 않는다(호출측 몫).
+inline int js_hold_nonfinite(float* q, const float* q_prev, int n) {
+    int held = 0;
+    for (int i = 0; i < n; ++i)
+        if (!std::isfinite(q[i])) { q[i] = q_prev[i]; ++held; }
+    return held;
+}
+
 // 측정 qd 심각도: 0=정상, 1=warn(>warn), 2=crit(>crit or NaN).
 inline int js_qd_severity(const float* qd, int n, float warn, float crit) {
     float m = 0.0f;

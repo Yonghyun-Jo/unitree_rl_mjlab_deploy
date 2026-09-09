@@ -74,6 +74,7 @@ private:
     void mon_log_summary();
     void mon_reset();
     uint32_t mon_clamp_ticks_ = 0, mon_rate_ticks_ = 0;
+    uint32_t mon_nan_hold_ticks_ = 0;   // 출력 NaN/Inf 를 직전값으로 홀드한 틱 수 (js_hold_nonfinite)
     float mon_clamp_max_ = 0.f;  int mon_clamp_joint_ = -1;
     float mon_rate_max_  = 0.f;  int mon_rate_joint_  = -1;
     float mon_qd_max_    = 0.f;  int mon_qd_joint_    = -1;

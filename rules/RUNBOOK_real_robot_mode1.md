@@ -372,6 +372,24 @@ DISPLAY=:1 xmodmap -pke | grep -E "^keycode +(41|<잡힌값>) "     # 41 = f
 - `[safety] 사다리 어긋남` 경고가 있으면 yaml 값이 잘못된 것 — warn < vel_max < crit 이 관절마다 지켜져야 한다.
 - **옛 바이너리(9-09 이전 빌드)로 새 슬롯을 띄우면 `[deploy 계약]` 이 거부한다** (`safety_per_joint`). 로봇을 pull → 빌드 → setcap 한 뒤에.
 - `over_ticks 5` 는 정책 스레드 50 Hz 기준 **100 ms 지속**이다. 접지 스파이크(수 ms)는 안 걸린다.
-- 왜 끄지 않나: 실기 펌웨어는 한계를 넘으면 자르지 않고 **보호정지**한다. 캡은 그 아래에서 잡는 것이다.
+- ~~왜 끄지 않나: 실기 펌웨어는 한계를 넘으면 자르지 않고 보호정지한다~~ → 09-09 후반 정정: 그건 08-14 소거법 추정이었다. §13 참조 (L2 는 OFF 로 결정).
 - 러닝 시험은 하네스 + `--dump` + 1.0 → 1.5 → 2.0 m/s 사다리. 종료 요약의 `rate_limit` 틱과 `|qd| 최대` 를 같이 본다.
+
+## 13. L2(명령 속도 캡) OFF — 발산 백스톱은 L3 + tilt + E-stop (2026-09-09 결정)
+
+**결정**: 활성 슬롯(260904 v1/v2/v3, 260902 v1)의 `safety.enable_rate_limit: false`. L1 pos_clamp·L3 qd_guard(관절별 crit = hw−1, `over_ticks 5` = 100 ms)는 그대로.
+출력 NaN/Inf 는 1 kHz 출력 경로의 `js_hold_nonfinite`(직전 출력으로 홀드)가 막는다 — L2 가 겸하던 역할을 분리한 것.
+
+**왜** (원장: `experiments/260909_safety_per_joint_caps` 정정 1~3):
+- 캡이 무는 건 측정 속도가 아니라 정책의 **목표 점프**였다. 실기 260907 측정 |q̇| p99.9 11 rad/s(무릎), 러닝 gait 는 2 m/s 이상에서 캡이 8~11 % 스텝을 변형.
+- «펌웨어가 속도 초과 시 꺼뜨린다» 는 08-14 의 소거법 추정이었고(7월 발산은 08-20 UB 로 판명), 실측은 반대(무릎 21.1 rad/s·−144 Nm 스파이크에도 kp 40 유지).
+- 업스트림(`cbb1ade`)·다른 5대 로봇엔 속도 안전층이 없고, 07-12~08-14 실기 보행은 전부 L2/L3 OFF 였다.
+- L3 는 실기 3세션(752 s)에서 crit 초과 연속 최장 3 ms — 정상 러닝에 개입 0, 폭주 백스톱으로만 남는다.
+
+**기동 로그**에 이렇게 찍혀야 정상:
+```
+[safety] rate_limit OFF (vel_max=18~34 rad/s 관절별: hip_pitch 29 knee 18 ankle_pitch 34)
+[safety] qd_guard ON (warn=12 crit=19~36 rad/s 관절별: hip_pitch 31 knee 19 ankle_pitch 36, over_ticks=5)
+```
+`robot.sh verify` 는 L2 OFF 를 `warn` 으로만 알린다(L1/L3 OFF 는 여전히 실패). 첫 러닝 시험은 하네스 + `--dump`, 1.0 → 1.5 → 2.0 m/s, 종료 요약의 `|qd| 최대`·`nan_hold` 를 본다.
 

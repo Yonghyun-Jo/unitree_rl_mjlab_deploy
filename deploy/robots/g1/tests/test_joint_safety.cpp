@@ -91,6 +91,19 @@ int main() {
         CHK(js_qd_severity_v(qd_e, 2, w15, c18) == js_qd_severity(qd_e, 2, 12.f, 18.f), "스칼라판과 동치");
     }
 
+    // js_hold_nonfinite: 유한값 무변경·0 반환, NaN/Inf 는 q_prev 로 치환·개수 반환, q_prev 불변
+    { float q[3]={0.1f,-0.2f,0.3f}; const float prev[3]={9,9,9};
+      CHK(js_hold_nonfinite(q,prev,3)==0 && close(q[0],0.1f)&&close(q[1],-0.2f)&&close(q[2],0.3f),"hold_nonfinite finite untouched"); }
+    { float nan=std::numeric_limits<float>::quiet_NaN(), inf=std::numeric_limits<float>::infinity();
+      float q[4]={nan,0.5f,-inf,inf}; const float prev[4]={1,2,3,4};
+      CHK(js_hold_nonfinite(q,prev,4)==3 && close(q[0],1.0f)&&close(q[1],0.5f)&&close(q[2],3.0f)&&close(q[3],4.0f),"hold_nonfinite replaces NaN/±Inf with prev, counts 3");
+      CHK(close(prev[0],1.0f)&&close(prev[2],3.0f),"hold_nonfinite leaves q_prev unchanged"); }
+    { float q[1]={0.0f}; const float prev[1]={5.0f}; CHK(js_hold_nonfinite(q,prev,0)==0 && close(q[0],0.0f),"hold_nonfinite n=0 no-op"); }
+    // 순서 동치: hold 뒤 rate_limit 은 NaN 이 없는 입력과 같다 (L2 ON 이어도 이중 적용이 무해)
+    { float nan=std::numeric_limits<float>::quiet_NaN(); float q[2]={nan,1.0f}; float prev[2]={0.0f,0.0f}; float ms[2]={0.5f,0.5f};
+      js_hold_nonfinite(q,prev,2); js_rate_limit(q,prev,ms,2);
+      CHK(close(q[0],0.0f)&&close(q[1],0.5f)&&close(prev[0],0.0f)&&close(prev[1],0.5f),"hold then rate_limit == rate_limit on finite input"); }
+
     if (fail) { std::printf("[test_joint_safety] %d FAIL\n", fail); return 1; }
     std::printf("[test_joint_safety] ALL PASS\n"); return 0;
 }
