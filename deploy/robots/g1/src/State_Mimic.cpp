@@ -800,17 +800,35 @@ void State_Mimic::load_safety_cfg(const YAML::Node& s)
 
     // L2: 속도 rate-limit용 vel_max 파싱 (fail-safe). 없거나/0이하/파싱 오류 -> 비활성.
     js_enable_rate_limit_ = false;
+    // 스칼라(전 관절 공통) 또는 29개 리스트(관절별). 그 외 길이는 파싱 오류 = 비활성.
+    //   2026-09-09: 관절별 = 하드웨어 최고속도의 90 %. 스칼라 15 는 hip pitch(hw 32)를 무릎(hw 20)
+    //   값에 묶어 러닝 명령을 11~25 % 잘랐다 (260907 판독). 관절별 리스트는 «safety_per_joint» 기능이
+    //   있는 바이너리만 읽는다 — 옛 바이너리는 리스트를 float 로 못 읽고 층을 «조용히 끄므로» requires 로 거부.
+    auto read_per_joint = [&](const char* key, std::array<float,29>& out) -> bool {
+        if (!s[key]) return false;
+        std::vector<float> v;
+        if (s[key].IsSequence()) for (const auto& e : s[key]) v.push_back(e.as<float>());
+        else v.push_back(s[key].as<float>());
+        return js_expand_per_joint(v.data(), (int)v.size(), out.data(), 29);
+    };
     try {
-        float vmax = s["vel_max"] ? s["vel_max"].as<float>() : 0.0f;
+        const bool have = read_per_joint("vel_max", js_vel_max_v_);
+        float vmin = 0.f, vmaxv = 0.f;
+        if (have) { vmin = *std::min_element(js_vel_max_v_.begin(), js_vel_max_v_.end());
+                    vmaxv = *std::max_element(js_vel_max_v_.begin(), js_vel_max_v_.end()); }
         // run()은 CtrlFSM에서 1kHz로 호출된다(정책 step_dt=0.02는 policy_thread 전용). js_rate_limit이
         // 매 FSM tick 적용되므로 dt = 1kHz tick = 0.001. (max_step=vel_max*0.001 -> effective cap = vel_max rad/s;
         // 20ms 정책창당 최대 20*vel_max*0.001 = vel_max*0.02 이동.)
         const float dt = 0.001f;   // CtrlFSM run() tick (1kHz), NOT the 50Hz policy step_dt
-        if (vmax > 0.0f) {
-            for (int i=0;i<29;++i) js_max_step_[i] = vmax * dt;
+        if (have && vmin > 0.0f) {
+            for (int i=0;i<29;++i) js_max_step_[i] = js_vel_max_v_[i] * dt;
             js_enable_rate_limit_ = s["enable_rate_limit"] && s["enable_rate_limit"].as<bool>();
         }
-        spdlog::info("[safety] rate_limit {} (vel_max={} rad/s)", js_enable_rate_limit_?"ON":"OFF", vmax);
+        if (vmin == vmaxv)
+            spdlog::info("[safety] rate_limit {} (vel_max={} rad/s)", js_enable_rate_limit_?"ON":"OFF", vmin);
+        else
+            spdlog::info("[safety] rate_limit {} (vel_max={}~{} rad/s 관절별: hip_pitch {} knee {} ankle_pitch {})",
+                         js_enable_rate_limit_?"ON":"OFF", vmin, vmaxv, js_vel_max_v_[0], js_vel_max_v_[3], js_vel_max_v_[4]);
     } catch (const std::exception& e) {
         js_enable_rate_limit_ = false;
         spdlog::warn("[safety] rate parse err: {}", e.what());
@@ -819,14 +837,30 @@ void State_Mimic::load_safety_cfg(const YAML::Node& s)
     // L3: 측정 qd 폭주 가드 파싱 (fail-safe). warn>0 이고 crit>warn 이어야 무장, 그 외엔 비활성.
     js_enable_qd_guard_ = false;
     try {
-        js_qd_warn_ = s["qd_warn"] ? s["qd_warn"].as<float>() : 0.f;
-        js_qd_crit_ = s["qd_crit"] ? s["qd_crit"].as<float>() : 0.f;
+        const bool hw = read_per_joint("qd_warn", js_qd_warn_v_);
+        const bool hc = read_per_joint("qd_crit", js_qd_crit_v_);
         js_over_ticks_ = s["over_ticks"] ? s["over_ticks"].as<int>() : 5;
         if (js_over_ticks_ < 1) js_over_ticks_ = 1;
-        if (js_qd_warn_ > 0.f && js_qd_crit_ > js_qd_warn_)   // warn>0 이고 crit>warn 이어야 무장
-            js_enable_qd_guard_ = s["enable_qd_guard"] && s["enable_qd_guard"].as<bool>();
-        spdlog::info("[safety] qd_guard {} (warn={} crit={} rad/s, over_ticks={})",
-                     js_enable_qd_guard_?"ON":"OFF", js_qd_warn_, js_qd_crit_, js_over_ticks_);
+        // 무장 조건: 모든 관절에서 warn>0 이고 crit>warn. 하나라도 어긋나면 비활성(fail-safe).
+        bool ok = hw && hc;
+        for (int i=0; ok && i<29; ++i) ok = (js_qd_warn_v_[i] > 0.f) && (js_qd_crit_v_[i] > js_qd_warn_v_[i]);
+        js_qd_warn_ = ok ? *std::min_element(js_qd_warn_v_.begin(), js_qd_warn_v_.end()) : 0.f;
+        js_qd_crit_ = ok ? *std::min_element(js_qd_crit_v_.begin(), js_qd_crit_v_.end()) : 0.f;
+        if (ok) js_enable_qd_guard_ = s["enable_qd_guard"] && s["enable_qd_guard"].as<bool>();
+        const float cmax = ok ? *std::max_element(js_qd_crit_v_.begin(), js_qd_crit_v_.end()) : 0.f;
+        if (js_qd_crit_ == cmax)
+            spdlog::info("[safety] qd_guard {} (warn={} crit={} rad/s, over_ticks={})",
+                         js_enable_qd_guard_?"ON":"OFF", js_qd_warn_, js_qd_crit_, js_over_ticks_);
+        else
+            spdlog::info("[safety] qd_guard {} (warn={} crit={}~{} rad/s 관절별: hip_pitch {} knee {} ankle_pitch {}, over_ticks={})",
+                         js_enable_qd_guard_?"ON":"OFF", js_qd_warn_, js_qd_crit_, cmax,
+                         js_qd_crit_v_[0], js_qd_crit_v_[3], js_qd_crit_v_[4], js_over_ticks_);
+        // 사다리 검사(관절별): warn < vel_max < crit. 어긋나도 끄진 않지만 기동 로그에 남긴다.
+        if (ok && js_enable_rate_limit_)
+            for (int i=0;i<29;++i)
+                if (!(js_qd_warn_v_[i] < js_vel_max_v_[i] && js_vel_max_v_[i] < js_qd_crit_v_[i]))
+                    spdlog::warn("[safety] 사다리 어긋남 @ {} {}: warn {} < vel_max {} < crit {} 이 아니다",
+                                 i, jname(i), js_qd_warn_v_[i], js_vel_max_v_[i], js_qd_crit_v_[i]);
     } catch (const std::exception& e) {
         js_enable_qd_guard_ = false;
         spdlog::warn("[safety] qd parse err: {}", e.what());
@@ -1076,8 +1110,9 @@ void State_Mimic::enter()
             }
             if (js_enable_qd_guard_) {
                 const int reqd = g_req_mode;   // 조작자 실제 요청 모드(가드가 강제한 g_cmd_mode와 분리; 입력핸들러만 세팅)
-                int sev = js_qd_severity(env->robot->data.joint_vel.data(),
-                                         (int)env->robot->data.joint_vel.size(), js_qd_warn_, js_qd_crit_);
+                int sev = js_qd_severity_v(env->robot->data.joint_vel.data(),
+                                           std::min((int)env->robot->data.joint_vel.size(), 29),
+                                           js_qd_warn_v_.data(), js_qd_crit_v_.data());
                 const bool warn_before = js_qd_warn_latched_;
                 bool crit_l = js_qd_crit_latched_.load();
                 const bool crit_before = crit_l;
@@ -1085,9 +1120,9 @@ void State_Mimic::enter()
                 if (crit_l) js_qd_crit_latched_.store(true);
                 if (!crit_before && crit_l)     // 래치되는 에지에서 1회만
                     spdlog::error("[safety] qd_crit LATCHED  |qd|={:.2f} rad/s @ {} {} (crit {:.1f} 을 {}틱 연속 초과) -> Passive",
-                                  qd_now, qd_j, jname(qd_j), js_qd_crit_, js_over_ticks_);
+                                  qd_now, qd_j, jname(qd_j), (qd_j>=0&&qd_j<29)?js_qd_crit_v_[qd_j]:js_qd_crit_, js_over_ticks_);
                 if (!crit_before && crit_l)
-                    safety_log_.event("qd_crit", qd_j, jname(qd_j), qd_now, js_qd_crit_, "-> Passive");
+                    safety_log_.event("qd_crit", qd_j, jname(qd_j), qd_now, (qd_j>=0&&qd_j<29)?js_qd_crit_v_[qd_j]:js_qd_crit_, "-> Passive");
                 // warn 수동복귀: 조작자가 mode1(X/'1')을 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
                 if (js_qd_warn_latched_ && reqd == 1) js_qd_warn_latched_ = false;
                 // 해제 뒤에 로그 → mode1 에서는 같은 틱에 풀리므로(=no-op) 스팸이 안 난다.

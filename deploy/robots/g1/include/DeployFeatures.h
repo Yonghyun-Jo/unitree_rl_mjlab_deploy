@@ -40,6 +40,9 @@ inline const std::vector<std::string>& known()
         // 2026-08-28: gait: mode{N}.min_swing — 저속 스윙 최소 클리어런스.
         //   모르는 바이너리는 이 키를 «조용히 무시» 하고 발을 낮게 든다 -> 거부해야 한다.
         "gait_min_swing",
+        // 2026-09-09: safety.vel_max / qd_warn / qd_crit 를 29개 리스트(관절별)로 읽는다.
+        //   모르는 바이너리는 리스트를 float 로 못 읽고 그 층을 «조용히 끈다» -> 거부해야 한다.
+        "safety_per_joint",
     };
     return k;
 }

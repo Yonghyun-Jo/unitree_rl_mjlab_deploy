@@ -58,7 +58,9 @@ private:
 
     // L3: 측정 qd 폭주 감지 (gated, 기본 off). policy_thread(50Hz)에서 검사 -> warn(mode1 래치)/crit(Passive 래치).
     bool  js_enable_qd_guard_ = false;
-    float js_qd_warn_ = 0.f, js_qd_crit_ = 0.f;
+    float js_qd_warn_ = 0.f, js_qd_crit_ = 0.f;   // 로그용 대표값(관절별 최소). 판정은 아래 배열
+    std::array<float,29> js_qd_warn_v_{}, js_qd_crit_v_{};   // 관절별 임계 (스칼라면 전 관절 복사)
+    std::array<float,29> js_vel_max_v_{};                     // 관절별 명령 rate 캡 [rad/s] (로그·사다리 검사용)
     int   js_over_ticks_ = 5;               // @50Hz(policy_thread) => 0.1s sustained
     int   js_warn_run_ = 0, js_crit_run_ = 0;
     bool  js_qd_warn_latched_ = false;      // policy_thread 내부 전용

@@ -34,6 +34,28 @@ inline int js_qd_severity(const float* qd, int n, float warn, float crit) {
     return 0;
 }
 
+// 관절별 임계 확장(순수·테스트가능). v 가 1개면 전 관절에 복사, n개면 그대로, 그 외엔 false.
+//   2026-09-09: vel_max/qd_crit 를 «하드웨어 최고속도의 90 %» 로 관절별로 건다 (무릎·hip roll 20 → 18,
+//   hip pitch/yaw 32 → 29, 발목·어깨·허리 37 → 34). 스칼라 하나로는 hip pitch 를 무릎 값에 묶는다.
+inline bool js_expand_per_joint(const float* v, int nv, float* out, int n) {
+    if (!v || !out || n <= 0) return false;
+    if (nv == 1) { for (int i = 0; i < n; ++i) out[i] = v[0]; return true; }
+    if (nv == n) { for (int i = 0; i < n; ++i) out[i] = v[i]; return true; }
+    return false;
+}
+
+// L3 심각도 — 관절별 warn/crit (js_qd_severity 의 배열판). 비유한값은 sev=2.
+inline int js_qd_severity_v(const float* qd, int n, const float* warn, const float* crit) {
+    int sev = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!std::isfinite(qd[i])) return 2;
+        const float a = std::fabs(qd[i]);
+        if (a > crit[i]) return 2;
+        if (a > warn[i]) sev = 1;
+    }
+    return sev;
+}
+
 // 모니터링용: |qd|가 가장 큰 관절 인덱스. n<=0 이면 -1.
 // 비유한값이 있으면 그 관절을 즉시 반환한다(js_qd_severity가 sev=2로 보는 것과 같은 우선순위).
 // 판정에는 쓰지 않는다 — 로그 메시지에 "어느 관절이었나"를 붙이기 위한 것.

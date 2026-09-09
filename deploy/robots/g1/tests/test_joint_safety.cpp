@@ -73,6 +73,24 @@ int main() {
       js_qd_step(0,5,warn_run,crit_run,warn_l,crit_l);
       CHK(!warn_l && !crit_l && warn_run==0, "qd_step 4x sev1 then sev0 -> reset, not latched (debounce)"); }
 
+    // ── 관절별 임계 (2026-09-09) ────────────────────────────────────────────
+    {
+        float out[4]; float one[1] = {15.f}; float four[4] = {29.f,18.f,29.f,18.f}; float bad[2] = {1.f,2.f};
+        CHK(js_expand_per_joint(one, 1, out, 4) && close(out[0],15.f) && close(out[3],15.f), "스칼라 → 전 관절 복사");
+        CHK(js_expand_per_joint(four, 4, out, 4) && close(out[1],18.f) && close(out[2],29.f), "n개 → 그대로");
+        CHK(!js_expand_per_joint(bad, 2, out, 4), "길이 불일치는 거부");
+        CHK(!js_expand_per_joint(nullptr, 1, out, 4), "null 거부");
+        // 관절별 severity: hip pitch 25 rad/s 는 crit 31 아래(sev 1: warn 12 위), 무릎 25 는 crit 19 위(sev 2)
+        float warn[2] = {12.f,12.f}, crit[2] = {31.f,19.f};
+        float qd_a[2] = {25.f, 5.f};  CHK(js_qd_severity_v(qd_a, 2, warn, crit) == 1, "hip 25 → warn 만 (crit 31)");
+        float qd_b[2] = {5.f, -25.f}; CHK(js_qd_severity_v(qd_b, 2, warn, crit) == 2, "knee 25 → crit (19)");
+        float qd_c[2] = {1.f, 1.f};   CHK(js_qd_severity_v(qd_c, 2, warn, crit) == 0, "조용하면 0");
+        float qd_d[2] = {1.f, std::numeric_limits<float>::quiet_NaN()}; CHK(js_qd_severity_v(qd_d, 2, warn, crit) == 2, "NaN 은 crit");
+        // 스칼라판과 동치: 임계가 전 관절 같으면 결과가 같아야 한다
+        float w15[2] = {12.f,12.f}, c18[2] = {18.f,18.f}; float qd_e[2] = {17.f, 3.f};
+        CHK(js_qd_severity_v(qd_e, 2, w15, c18) == js_qd_severity(qd_e, 2, 12.f, 18.f), "스칼라판과 동치");
+    }
+
     if (fail) { std::printf("[test_joint_safety] %d FAIL\n", fail); return 1; }
     std::printf("[test_joint_safety] ALL PASS\n"); return 0;
 }
