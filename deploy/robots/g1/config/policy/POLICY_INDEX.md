@@ -27,7 +27,7 @@
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |
-| `gmt_multihead_v0` | — | 보관 | (불명) | — | — |
+| `gmt_multihead_v0` | v2 | 활성 | (불명) | — | — |
 | `masked_footz_v0` | — | 보관 | (불명) | — | — |
 | `masked_v2_anchormask_modeterm` | — | 보관 | (불명) | — | — |
 | `v2_mode3_steps6` | — | 보관 | none | — | — |
