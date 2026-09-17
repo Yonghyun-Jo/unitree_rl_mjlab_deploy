@@ -23,11 +23,12 @@
 | `260904_v1_standpose_70k` | — | 보관 | 2026-09-03_16-17-05_s4_mode1_standpose_com_resume50k_to70k/model_69997.pt | ★★★☆☆ 보행 동작 자체는 아주 좋은거 같은데 문제는 허리를 세우니까 (정지상태에서) 팔을 들게됨. 즉 허 | 실기 1회 · 최근 ★★★★☆ (09-07 14:07) |
 | `260904_v2_v8up2_67k` | — | 보관 | 2026-09-04_11-07-04_s4_mode1_v8up2_standpose_resume50k_to70k/model_67000.pt | ★★★★☆ policy v2로 넣어볼것. 근데 내 생각엔 70k정도 하니까 좀 흐물거림. 과적합 느낌 (20 | 실기 1회 · 최근 ★★☆☆☆ (09-07 15:04) |
 | `260904_v3_v8up2_sc60k` | — | 보관 | 2026-09-05_17-36-27_s4_mode1_v8up2_tilt10_place6_resume30k_to60k/model_59998.pt | ★★★★☆ 괜찮은거 같은데? 60k정도 더 생성기도 새로 학습하고 멈췄을 때도 허리 피게 해놓음. polic | 실기 1회 · 최근 ★★★☆☆ (09-07 15:07) |
-| `260910_v1_gen9u3_noslip30_60k` | v1 | 활성 | 2026-09-09_14-28-23_s4_mode1_gen9u3_noslip30_resume30k_to60k/model_59999.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `260910_v1_gen9u3_noslip30_60k` | — | 활성 | 2026-09-09_14-28-23_s4_mode1_gen9u3_noslip30_resume30k_to60k/model_59999.pt | ★★★★☆ (2026-09-14) | 미실행 |
+| `260917_v1_com2cm_bvt25_30k` | v1 | 활성 | 2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_30000.pt | 미실행 — 사용자가 확인 | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |
-| `gmt_multihead_v0` | v2 | 활성 | (불명) | — | — |
+| `gmt_multihead_v0` | — | 활성 | (불명) | ★★★★☆ 7월 14일에 했었던 policy인데 아주 잘 뜀. 걷기도 하고... 왜 이럴까? base 문제인 | — |
 | `masked_footz_v0` | — | 보관 | (불명) | — | — |
 | `masked_v2_anchormask_modeterm` | — | 보관 | (불명) | — | — |
 | `v2_mode3_steps6` | — | 보관 | none | — | — |
