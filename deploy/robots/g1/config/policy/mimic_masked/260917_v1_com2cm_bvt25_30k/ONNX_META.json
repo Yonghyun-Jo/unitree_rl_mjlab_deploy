@@ -49,11 +49,16 @@
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
     "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
     "onnx_md5": "b61a4ac2c67e9e080eb25bf6e898ae7e",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "sim2sim_walk": "★★★☆☆ 헤드리스 램프 0→2 m/s 60 s: 낙상 0 · crit 초과 0 · 기울기 max 15.0°(0.5 m/s 과도) 그 외 ≤12° · 정지 pitch +0.4° · 팔벌림 24.7/17.6°. 대조군 260910 v1(20.3°·crit 13)보다 매끈 (2026-09-18)",
     "real_robot": "미실행"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_30000.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260917_v1_com2cm_bvt25_30k/policy.onnx",
   "deployed": {
     "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "sim2sim": {
+    "stars": 3,
+    "memo": "헤드리스 램프 0→2 m/s 60 s: 낙상 0 · crit 초과 0 · 기울기 max 15.0°(0.5 m/s 과도) 그 외 ≤12° · 정지 pitch +0.4° · 팔벌림 24.7/17.6°. 대조군 260910 v1(20.3°·crit 13)보다 매끈",
+    "at": "2026-09-18T14:40"
   }
 }
