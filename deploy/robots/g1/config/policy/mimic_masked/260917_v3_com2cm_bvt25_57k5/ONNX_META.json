@@ -1,0 +1,60 @@
+{
+  "exported_at": "2026-09-18",
+  "slot": "260917_v3_com2cm_bvt25_57k5",
+  "trial": "v3",
+  "trial_day": "2026-09-17",
+  "note": "v2(60k) 와 같은 run 의 57.5k — 정지 CoM 이 목표(+2 cm)에 가장 가까운 체크포인트. 곡선(57~58k 중앙값, 가중치 제거): reward 57.3(60k 57.4) · 낙상 0.667(60k 0.625) · 속도추종 0.521(60k 0.526, 260910 v1 0.468) · foot_z 0.786 · upper_gen 0.773 · MotionSuccess 95.84(60k 95.95). 정지 프로브(DR off, 64 env): 발 들기 0 · 뒷걸음 없음(dx p50 +2.7/+0.9 cm, 후반 4.5 s −0.4/−0.6) · 정지 CoM_x +2.6/+2.0 cm (30k +2.1/+1.8 · 60k +0.8/+0.3 · 260910 v1 +2.4/+2.7). 정지 팔벌림 p50 21.0°(p95 25.6, CPU 32 env) · torso pitch +9.4°. 실기 관전 = v2 와 거의 같은 보행에서 정지 CoM 만 다를 때 «정지 뒤로 기울기» 가 줄어드는가 (v2 vs v3 가 정지 CoM 의 A/B).",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_57500.pt",
+  "mode1_run": "2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k",
+  "mode1_launch_commit": "100f80f2c6276489a10c09dc25f584cbcfeda475",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_md5": "447f7f7fabc04fa5ca4ccc2e9fc8ac7c",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행",
+    "onnx_vs_torch": "max|Δ| = 3.755e-06 (tol 0.0001) OK",
+    "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
+    "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
+    "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
+    "export_device": "cpu — com1·com2·com3 GPU 모두 학습 중 → com1 에서 --device cpu 로 export·패리티 (로그: mjlab exported/260917_v3_com2cm_bvt25_57k5/export_cpu.log)"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_57500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260917_v3_com2cm_bvt25_57k5/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  }
+}
