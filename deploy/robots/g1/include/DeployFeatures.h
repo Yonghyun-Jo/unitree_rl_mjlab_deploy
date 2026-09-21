@@ -43,6 +43,10 @@ inline const std::vector<std::string>& known()
         // 2026-09-09: safety.vel_max / qd_warn / qd_crit 를 29개 리스트(관절별)로 읽는다.
         //   모르는 바이너리는 리스트를 float 로 못 읽고 그 층을 «조용히 끈다» -> 거부해야 한다.
         "safety_per_joint",
+        // 2026-09-21: 모드를 ModeTable(성질)로 다룬다 — deploy.yaml 의 modes: 로 «이 슬롯이 아는 모드»
+        //   를 선언할 수 있고, 모르는 모드 요청은 거부된다. 옛 바이너리는 modes: 를 «조용히 무시» 하고
+        //   1~4 를 전부 받아 준다 -> 저자세/기기 모드를 아는 슬롯은 이 기능을 요구해야 한다.
+        "mode_table",
     };
     return k;
 }

@@ -3,6 +3,7 @@
 #include "LoopDiag.h"
 #include "unitree_articulation.h"
 #include "MaskedLocoController.h"   // deploy-clean foot_z gen + base_vel spline + arm-blend
+#include "ModeRuntime.h"            // «지금 어느 모드인가» + 요청의 허용/거부 (ModeTable 의 성질)
 #include "DeployFeatures.h"         // 슬롯이 요구하는 C++ 기능 ↔ 이 바이너리가 아는 기능
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
@@ -25,40 +26,49 @@ std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion = nullptr;
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion_light = nullptr;
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion_demo6 = nullptr;
 
-// ===== Masked-3mode student (mjlab_g1_motion stage2_masked) =====
-// cmd_mode in {1,2,3}: 1=full-auto(0,0) 2=upper-teleop(1,0) 3=full-teleop(1,1).
-// mask_upper = cmd_mode>=2 (upper joints/anchor tracked); mask_lower = cmd_mode>=3 (lower tracked).
-// N_LOWER=12 (both legs). Default 1 = full-auto locomotion: fully observable on hardware
-// (no global position needed), the safe deploy default. mode3 needs global position -> sim only.
-static int g_cmd_mode = 1;
-static int g_req_mode = 1;   // 조작자가 실제로 요청한 mode (입력핸들러만 세팅; qd-guard는 안 건드림 → 수동복귀 판정용)
+// ===== 모드 =====
+// 모드의 성질은 ModeTable.h(생성: mode_spec.py + config/modes.yaml)가 갖는다. 이 파일은 번호를 비교하지 않고
+// g_mode.row() 의 성질을 묻는다 — 모드를 더하는 절차는 rules/ADDING_A_MODE.md.
+static g1::ModeRuntime g_mode;
 static constexpr int G1_N_LOWER = 12;
-static inline bool g_mask_upper() { return g_cmd_mode >= 2; }
-static inline bool g_mask_lower() { return g_cmd_mode >= 3; }
-// clip-replay demo modes: 4 = dance (primary clip), 5 = stand + upper-body test clip (motion_light),
-// 6 = 추가 데모 클립 (motion_demo6). 셋 다 마스킹은 mode3 과 같다(>=2,>=3 -> full-track) =
-// multihead ONNX 도 mode3 head 를 고른다. 다른 것은 «어느 클립을 읽느냐» 하나뿐이다.
-// ⚠ MaskedLocoController::update 의 mode_gait 인덱스는 min(cmd_mode,5) 로 잘린다 — mode6 은
-//   mode5 와 같은 칸(설정 없음 = quintic 기본값)을 쓴다. mode4/5 도 같은 기본값이라 동일 거동.
-static inline bool g_is_demo() { return g_cmd_mode == 4 || g_cmd_mode == 5 || g_cmd_mode == 6; }
-// obs read through this so the correct clip flows: mode5 -> light test clip, mode6 -> demo6 clip,
-// else primary loader (which holds the dance clip AND the VR buffer).
-static inline std::shared_ptr<State_Mimic::MotionLoader_> active_demo_loader() {
-    if (g_cmd_mode == 5 && State_Mimic::motion_light)  return State_Mimic::motion_light;
-    if (g_cmd_mode == 6 && State_Mimic::motion_demo6)  return State_Mimic::motion_demo6;
+// 안전 폴백이 돌아갈 모드 = 표의 첫 행(명령만으로 서서 걷는 모드, 하드웨어에서 완전 관측 가능).
+// ModeTable 의 «범위 밖 요청 -> 첫 행» 과 같은 약속이다 — 번호를 여기 한 곳에서만 이름으로 받는다.
+static constexpr int G1_FALLBACK_MODE = mode_table::ROWS[0].id;
+
+// 클립 슬롯 — ref_source=clip 인 모드가 읽는 클립들. 0 = 주 클립(motion_file), 그 뒤 = 설정에 있으면.
+// rewind_on_enter: 그 모드에 «들어올 때마다» 처음부터 다시 튼다(옛 demo6 거동). 아니면 episode 시계 그대로(나갔다 오면 이어서).
+struct ClipSlot {
+    std::shared_ptr<State_Mimic::MotionLoader_> loader;
+    const char* name;
+    bool rewind_on_enter;
+    float t0;                       // rewind_on_enter 클립의 시계 원점 [s]
+};
+static std::vector<ClipSlot> g_clips;
+static void g_build_clips() {
+    g_clips.clear();
+    if (State_Mimic::motion)       g_clips.push_back({State_Mimic::motion,       "primary", false, 0.f});
+    if (State_Mimic::motion_light) g_clips.push_back({State_Mimic::motion_light, "light",   false, 0.f});
+    if (State_Mimic::motion_demo6) g_clips.push_back({State_Mimic::motion_demo6, "demo6",   true,  0.f});
+    // 슬롯이 줄어들 수 있다(State_Mimic 은 두 번 만들어지고 enter() 마다 주 클립이 다시 묶인다)
+    // -> 고른 칸이 사라졌으면 주 클립으로 되돌린다. 범위 안이면 고른 그대로 둔다.
+    if (g_mode.clip_id() >= (int)g_clips.size()) g_mode.select_clip(0, (int)g_clips.size());
+}
+static inline ClipSlot* active_clip() {
+    const int i = g_mode.clip_id();
+    return (i >= 0 && i < (int)g_clips.size()) ? &g_clips[i] : nullptr;
+}
+// 참조를 읽을 로더: 클립 모드면 선택된 클립, 아니면 주 로더(VR 버퍼를 갖고 있다).
+static inline std::shared_ptr<State_Mimic::MotionLoader_> active_ref_loader() {
+    if (g_mode.row().ref_source == mode_table::RefSource::Clip)
+        if (ClipSlot* c = active_clip()) return c->loader;
     return State_Mimic::motion;
 }
-// mode6 은 «진입할 때마다 클립을 처음부터» 다시 튼다 — episode 시계에서 이 값을 빼서 클립
-// 시계를 만든다. 6->1->6 이면 이어서가 아니라 첫 동작으로 되돌아간다.
-// (mode4/5 는 종전대로 episode 시계를 그대로 쓴다 = 나갔다 들어오면 이어서 재생. 이 차이를
-//  없애고 싶으면 아래 두 곳과 같은 처리를 motion/motion_light 에도 넣으면 된다.)
-static float g_demo6_t0 = 0.0f;
+static inline bool g_ref_is_clip() { return g_mode.row().ref_source == mode_table::RefSource::Clip; }
 
 // Deploy-clean controller (1:1 with mjlab_g1_motion loco_controller.py; golden-verified).
 // Updated once per policy step (see policy_thread) BEFORE obs are computed; obs terms +
 // run() read its cached base_vel / foot_z / arm_scale. ⚠ params assume 50 Hz control.
 static MaskedLocoController g_loco;
-static int g_prev_cmd_mode = 1;
 
 // ── 🔬 진단 A/B: mode>=3 의 발-z 원천 (env `G1_FOOTZ_SRC`) ──────────────────────
 //   ref  (기본) = 레퍼런스 발 world-z. 학습 원장과 같다(aedcc77).
@@ -122,6 +132,18 @@ struct GuiCtrl {
 #pragma pack(pop)
 static uint32_t g_gui_last_seq = 0;
 
+// 조작자의 모드 요청이 들어오는 유일한 문. 거부되면 이유를 한 줄 남긴다(같은 모드 재요청은 조용히 통과).
+// ⚠ GUI·VR 은 50 Hz 로 들어온다 — 같은 거부를 매 틱 찍으면 정책 스레드에서 초당 50번 I/O 다.
+//    그래서 «값이 바뀔 때만» 남긴다.
+static int g_reject_last = 0;
+static void g_request_mode(int m, const char* src) {
+    const g1::ModeResult r = g_mode.request(m);          // B2: ExitContext 에 높이 추정·자세 버튼 상태를 넣는다
+    if (r.accepted) { g_reject_last = 0; return; }
+    if (m == g_reject_last) return;
+    g_reject_last = m;
+    printf("\r\n[cmd_mode] %s -> %d 거부: %s\r\n", src, m, r.reason); fflush(stdout);
+}
+
 static void g_poll_gui()
 {
     FILE* f = std::fopen("/dev/shm/g1_masked_gui", "rb");
@@ -131,7 +153,7 @@ static void g_poll_gui()
     std::fclose(f);
     if (n != 1 || g.magic != 0x6701 || g.seq == g_gui_last_seq) return;
     g_gui_last_seq = g.seq;
-    if (g.cmd_mode >= 1 && g.cmd_mode <= 3) { g_cmd_mode = g.cmd_mode; g_req_mode = g.cmd_mode; }  // mode-switch detected in loop
+    g_request_mode(g.cmd_mode, "gui");                                // mode-switch detected in loop
     g_kb_vx = g.vx; g_kb_vy = g.vy; g_kb_wz = g.wz;                   // clamped in g_joystick_base_vel
     if (g.period_steps > 0)  g_loco.period_steps = g.period_steps;
     if (g.height_scale > 0)  g_loco.height_scale = g.height_scale;
@@ -139,7 +161,7 @@ static void g_poll_gui()
     // verify commands land (printed once per GUI change, not per step): if mode flaps or
     // base_vel oscillates here, the GUI is fighting the keyboard/joystick.
     printf("\r\n[gui seq=%u] mode=%d base_vel=[%+.2f %+.2f %+.2f] foot{period=%d hscale=%.2f turnk=%.2f}\r\n",
-           g.seq, g_cmd_mode, g_kb_vx, g_kb_vy, g_kb_wz,
+           g.seq, g_mode.mode(), g_kb_vx, g_kb_vy, g_kb_wz,
            g_loco.period_steps, g_loco.height_scale, g_loco.turn_k);
     fflush(stdout);
 }
@@ -197,7 +219,7 @@ static void g_poll_vr()
     g_vr_last_seq = v.seq;
     g_vr_stale = 0;
     if (!v.valid) { if (State_Mimic::motion) State_Mimic::motion->clear_vr(); return; }
-    if (v.cmd_mode >= 1 && v.cmd_mode <= 3) { g_cmd_mode = v.cmd_mode; g_req_mode = v.cmd_mode; }
+    g_request_mode(v.cmd_mode, "vr");
     g_kb_vx = v.base_vel[0]; g_kb_vy = v.base_vel[1]; g_kb_wz = v.base_vel[2];
     if (State_Mimic::motion) {
         Eigen::VectorXf dp = Eigen::VectorXf::Map(v.dof_pos, 29);
@@ -214,9 +236,9 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     g_poll_gui();   // browser GUI (shared memory) overrides; no-op if the file is absent
     // --- joystick d-pad -> mode (avoids A/B used by FSM transitions) ---
     if (auto joy = env->robot->data.joystick) {
-        if      (joy->left.on_pressed)  { g_cmd_mode = 1; g_req_mode = 1; }
-        else if (joy->up.on_pressed)    { g_cmd_mode = 2; g_req_mode = 2; }
-        else if (joy->right.on_pressed) { g_cmd_mode = 3; g_req_mode = 3; }
+        if      (joy->left.on_pressed)  g_request_mode(1, "joy");
+        else if (joy->up.on_pressed)    g_request_mode(2, "joy");
+        else if (joy->right.on_pressed) g_request_mode(3, "joy");
     }
     // --- keyboard (edge-triggered: act once per key change) ---
     if (!FSMState::keyboard) return;
@@ -224,6 +246,7 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     if (k == g_kb_last) return;
     g_kb_last = k;
     if (k.empty()) return;
+    g_reject_last = 0;   // 사람이 «누른» 입력에는 매번 한 줄 답한다 (중복 억제는 50 Hz 채널 전용)
     bool vel_changed = false;
     if      (k == "w") { g_kb_vx = clamp_vx(g_kb_vx + KB_STEP); vel_changed = true; }  // forward
     else if (k == "s") { g_kb_vx = clamp_vx(g_kb_vx - KB_STEP); vel_changed = true; }  // backward
@@ -232,27 +255,31 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     else if (k == "q") { g_kb_wz = std::clamp(g_kb_wz + KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CCW (반시계)
     else if (k == "e") { g_kb_wz = std::clamp(g_kb_wz - KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CW  (시계)
     else if (k == " ") { g_kb_vx = g_kb_vy = g_kb_wz = 0.0f;                          vel_changed = true; }  // stop
-    else if (k == "1") { g_cmd_mode = 1; g_req_mode = 1; printf("\r\n[cmd_mode] -> 1 (full-auto)\r\n");      fflush(stdout); }
-    else if (k == "2") { g_cmd_mode = 2; g_req_mode = 2; printf("\r\n[cmd_mode] -> 2 (upper-teleop)\r\n");    fflush(stdout); }
-    else if (k == "3") { g_cmd_mode = 3; g_req_mode = 3; printf("\r\n[cmd_mode] -> 3 (full-track/sim)\r\n");  fflush(stdout); }
-    else if (k == "4") { g_cmd_mode = 4; g_req_mode = 4; printf("\r\n[cmd_mode] -> 4 (dance demo: clip full-track, VR 무시)\r\n"); fflush(stdout); }
-    else if (k == "5") {
-        if (State_Mimic::motion_light) { g_cmd_mode = 5; g_req_mode = 5; printf("\r\n[cmd_mode] -> 5 (stand+상체 test demo: light clip, VR 무시)\r\n"); }
-        else { printf("\r\n[cmd_mode] mode5 비활성 (config에 motion_file_light 없음)\r\n"); }
-        fflush(stdout);
+    else if (k == "[" || k == "]") {                       // 클립 모드가 재생할 클립 고르기
+        const int n = (int)g_clips.size();
+        if (n > 0) {
+            const int next = (g_mode.clip_id() + (k == "]" ? 1 : n - 1)) % n;
+            g_mode.select_clip(next, n);
+            printf("\r\n[clip] %d/%d «%s»\r\n", next, n, g_clips[next].name); fflush(stdout);
+        }
     }
-    else if (k == "6") {
-        if (State_Mimic::motion_demo6) { g_cmd_mode = 6; g_req_mode = 6; printf("\r\n[cmd_mode] -> 6 (demo6 clip full-track, VR 무시)\r\n"); }
-        else { printf("\r\n[cmd_mode] mode6 비활성 (config에 motion_file_demo6 없음)\r\n"); }
-        fflush(stdout);
+    else {
+        for (int m = 1; m <= mode_table::N_MODES; ++m) {
+            const mode_table::Row& M = mode_table::row(m);
+            if (k.size() == 1 && k[0] == M.key) {
+                g_request_mode(m, "key");
+                if (g_mode.mode() == m) { printf("\r\n[cmd_mode] -> %d (%s)\r\n", m, M.name); fflush(stdout); }
+                break;
+            }
+        }
     }
 
     // Print the base_vel command ONLY when a velocity key changed it (not every frame).
-    // mode3 zeroes base_vel downstream, so show that; modes 1/2 use it as-is.
+    // 명령을 안 쓰는 모드는 downstream 에서 base_vel 을 0 으로 눌러 버리므로 그 사실을 같이 보인다.
     if (vel_changed) {
-        bool active = !g_mask_lower();   // base_vel applied only in modes 1,2
+        const bool active = g_mode.row().base_vel_live;
         printf("\r\n[base_vel cmd] vx=%+.2f  vy=%+.2f  wz=%+.2f   (mode %d%s)\r\n",
-               g_kb_vx, g_kb_vy, g_kb_wz, g_cmd_mode, active ? "" : ", base_vel=0 in mode3");
+               g_kb_vx, g_kb_vy, g_kb_wz, g_mode.mode(), active ? "" : ", 이 모드는 base_vel 을 안 쓴다");
         fflush(stdout);
     }
 }
@@ -319,7 +346,7 @@ namespace mdp
 
 REGISTER_OBSERVATION(motion_command)
 {
-    auto loader = active_demo_loader();
+    auto loader = active_ref_loader();
     std::vector<float> data;
 
     auto motion_joint_pos = loader->joint_pos();
@@ -336,7 +363,7 @@ REGISTER_OBSERVATION(motion_command)
 
 REGISTER_OBSERVATION(motion_anchor_ori_b)
 {
-    auto loader = active_demo_loader();
+    auto loader = active_ref_loader();
     std::vector<float> out;
 
     auto real_quat_w = robot_quat_w(env);
@@ -355,15 +382,15 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
 
 // ---- Masked-3mode obs (mirror mjlab_g1_motion g1_mimic_env.calc_masked_*) ----
 
-// q_ref(29)+q̇_ref(29) = 58, lower[:12]/upper[12:] groups zeroed per cmd_mode (mode3 = no mask).
+// q_ref(29)+q̇_ref(29) = 58, lower[:12]/upper[12:] groups zeroed per mode (추종하는 쪽만 남는다).
 REGISTER_OBSERVATION(masked_joint_command)
 {
-    auto loader = active_demo_loader();
-    const bool demo = g_is_demo();   // mode4 dance / mode5 stand-demo = clip; mode1/2/3 = VR buffer (never clip)
-    auto q  = demo ? loader->joint_pos_clip() : loader->joint_pos_vr();
-    auto qd = demo ? loader->joint_vel_clip() : loader->joint_vel_vr();
-    const bool mu = g_mask_upper(), ml = g_mask_lower();
-    // Lower-body reference smoothing (mode -> {3,4,5}): ramp the LEG q_ref from the robot's CURRENT
+    auto loader = active_ref_loader();
+    const bool clip = g_ref_is_clip();   // 클립 재생 모드 = 클립 버퍼; 그 외 = VR 버퍼(클립 아님)
+    auto q  = clip ? loader->joint_pos_clip() : loader->joint_pos_vr();
+    auto qd = clip ? loader->joint_vel_clip() : loader->joint_vel_vr();
+    const bool mu = g_mode.row().track_upper, ml = g_mode.row().track_lower;
+    // Lower-body reference smoothing (하체를 추종하는 모드): ramp the LEG q_ref from the robot's CURRENT
     // measured pose toward the clip/VR target over the switch window (reuse switch_alpha), so the
     // policy tracks a smoothly-moving leg target and produces NATURAL STEPPING instead of a
     // joint-space slide. lb==1.0 outside a switch -> no effect. Upper body uses apply_switch_blend.
@@ -397,10 +424,12 @@ REGISTER_OBSERVATION(masked_joint_command)
     return data;
 }
 
-// [mask_upper, mask_lower] as float.
+// 계약 v1 = 표의 앞 2칸([mask_upper, mask_lower]). 🔴 폭을 늘리면 지금 배포된 ONNX(입력 1640)가
+// 어긋난다 — 8칸 전부를 내는 것은 계약 v2 의 일이다.
 REGISTER_OBSERVATION(command_mask)
 {
-    return std::vector<float>{ g_mask_upper() ? 1.0f : 0.0f, g_mask_lower() ? 1.0f : 0.0f };
+    const auto& b = g_mode.row().bits;
+    return std::vector<float>{ b[0], b[1] };
 }
 
 // yaw-local base velocity command [vx, vy, wz]. The controller (g_loco, updated once per
@@ -428,47 +457,47 @@ REGISTER_OBSERVATION(base_vel_command)
 // 정책에겐 «두 발 접지» 라고 말하고 있었다 = 학습과 정면으로 다른 obs.
 REGISTER_OBSERVATION(ref_foot_height)
 {
-    if (g_footz_src != FootZSrc::Gen && g_mask_lower()) {   // mode >= 3: 레퍼런스 발 z 가 원천
-        auto loader = active_demo_loader();
+    if (g_footz_src != FootZSrc::Gen && g_mode.row().foot_z == mode_table::FootZ::Ref) {
+        auto loader = active_ref_loader();     // 레퍼런스 발 z 가 원천인 모드
         bool have = false;
         std::array<float, 2> z = {0.f, 0.f};
-        if (g_is_demo()) {                      // mode4/5/6 = 클립 재생
+        if (g_ref_is_clip()) {                  // 클립 재생
             if (loader->has_foot_z) { z = loader->foot_z_clip(); have = true; }
-        } else if (loader->vr_override && loader->vr_has_foot_z) {   // mode3 = VR live
+        } else if (loader->vr_override && loader->vr_has_foot_z) {   // VR live
             z = loader->vr_foot_z; have = true;
         }
         if (have) {
             if (g_footz_src == FootZSrc::Ramp) {
                 // 다리 q_ref 와 «같은 시계»로 stance -> 레퍼런스. alpha=1 이면 no-op.
                 const float a = g_loco.switch_alpha;
-                const float s0 = g_loco.foot_z[0], s1 = g_loco.foot_z[1];   // mode>=3 에선 stance 상수
+                const float s0 = g_loco.foot_z[0], s1 = g_loco.foot_z[1];   // 명령을 안 쓰는 모드에선 stance 상수
                 z = { s0 + a * (z[0] - s0), s1 + a * (z[1] - s1) };
             }
             return std::vector<float>{ z[0], z[1] };
         }
         // 폴백: VR 미접속 standby, 또는 발-z 를 못 얻은 클립/구버전 publisher.
         // 이때 레퍼런스는 «기본 서있는 자세» 이므로 두 발 접지가 맞고, 그 값이 곧
-        // 아래 g_loco.foot_z (mode>=3 에서 항상 {stance_z, stance_z}) 다.
+        // 아래 g_loco.foot_z (명령을 안 쓰는 모드에선 항상 {stance_z, stance_z}) 다.
     }
     return std::vector<float>(g_loco.foot_z.begin(), g_loco.foot_z.end());
 }
 
 // pelvis anchor orientation error as Rot6D in robot base frame. mjlab anchor = PELVIS (=root),
-// NOT torso (so no waist-joint offset, unlike motion_anchor_ori_b). Masked to 0 in mode1.
+// NOT torso (so no waist-joint offset, unlike motion_anchor_ori_b). 상체를 안 추종하는 모드에선 0.
 REGISTER_OBSERVATION(masked_root_ori_b)
 {
     std::vector<float> out(6, 0.0f);
-    if (g_mask_upper()) {
-        auto loader = active_demo_loader();
+    if (g_mode.row().track_upper) {
+        auto loader = active_ref_loader();
         Eigen::Quaternionf real_quat_w = env->robot->data.root_quat_w;   // pelvis (IMU)
         Eigen::Quaternionf aligned;
-        if (g_is_demo()) {                           // mode4 dance / mode5 stand: clip pelvis ori (enter-aligned)
+        if (g_ref_is_clip()) {                       // 클립 재생: clip pelvis ori (enter-aligned)
             aligned = init_quat * loader->root_quaternion_clip();
         } else if (loader->vr_override) {            // VR live: VR pelvis ori (enter-aligned)
             aligned = init_quat * loader->root_quaternion_vr();
         } else {
-            // standby (mode2/3, no VR): reference = upright at the robot's CURRENT heading.
-            // Bypass init_quat (which is pinned to the ENTER heading) so mode2/3 HOLD the current
+            // standby (상체를 추종하는데 VR 이 없을 때): reference = upright at the robot's CURRENT heading.
+            // Bypass init_quat (which is pinned to the ENTER heading) so these modes HOLD the current
             // heading instead of snapping back to where Mimic_Masked was entered. Keeps pitch/roll
             // feedback (only yaw is canceled) -> balance preserved, heading free.
             aligned = isaaclab::yawQuaternion(real_quat_w);
@@ -585,16 +614,17 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     spdlog::info("Loaded motion file '{}' with duration {:.2f}s", motion_file.stem().string(), motion_->duration);
     motion = motion_;
 
-    // Optional mode5 light-demo clip (stand + upper-body test). Absent -> mode5 disabled.
+    // 선택 클립: 서기 + 상체 test (light). 없으면 그 칸이 안 생긴다 — 클립 칸은 재생 모드에서
+    // 키 '[' / ']' 로 고른다(0 = 주 클립).
     if (cfg["motion_file_light"]) {
         std::filesystem::path light_file = cfg["motion_file_light"].as<std::string>();
         if (!light_file.is_absolute()) light_file = param::proj_dir / light_file;
         motion_light_ = std::make_shared<MotionLoader_>(light_file.string());
         motion_light = motion_light_;
-        spdlog::info("Loaded mode5 light-demo '{}' with duration {:.2f}s",
+        spdlog::info("Loaded light-demo clip '{}' with duration {:.2f}s",
                      light_file.stem().string(), motion_light_->duration);
     }
-    // Optional mode6 demo clip (keyboard '6'). Absent -> mode6 disabled.
+    // 선택 클립: 추가 데모(demo6). 이 칸만 «들어올 때마다 처음부터» 다시 튼다.
     // ⚠ 이 클립은 «배포 중인 정책이 학습한 것»이어야 한다 — 슬롯의 ONNX_META manifest 에
     //   없는 클립을 재생하면 OOD 라 실기에서 낙상이다.
     if (cfg["motion_file_demo6"]) {
@@ -602,7 +632,7 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
         if (!demo6_file.is_absolute()) demo6_file = param::proj_dir / demo6_file;
         motion_demo6_ = std::make_shared<MotionLoader_>(demo6_file.string());
         motion_demo6 = motion_demo6_;
-        spdlog::info("Loaded mode6 demo '{}' with duration {:.2f}s",
+        spdlog::info("Loaded demo6 clip '{}' with duration {:.2f}s",
                      demo6_file.stem().string(), motion_demo6_->duration);
     }
     if(cfg["time_start"]) {
@@ -649,6 +679,14 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     } else {
         spdlog::info("[deploy 계약] 슬롯 '{}' 은 requires: 를 선언하지 않았다 (옛 슬롯 — 검사 생략)",
                      slot_name);
+    }
+    // 이 슬롯(ONNX)이 아는 모드. 없으면 계약 v1 = {1,2,3,4}.
+    {
+        std::vector<int> ms = {1, 2, 3, 4};
+        if (dcfg["modes"] && dcfg["modes"].IsSequence()) { ms.clear(); for (const auto& n : dcfg["modes"]) ms.push_back(n.as<int>()); }
+        g_mode.set_supported(ms);
+        std::string s; for (int m : ms) s += std::to_string(m) + " ";
+        spdlog::info("[mode] 이 슬롯이 아는 모드: {}", s);
     }
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
         dcfg,
@@ -756,7 +794,7 @@ void State_Mimic::mon_log_summary()
 {
     const float dwell = env->episode_length * env->step_dt;
     spdlog::info("[Mimic_Masked] 체류 {:.1f}s, 최종 mode{}, 종료사유 {}",
-                 dwell, g_cmd_mode, mon_exit_reason_ ? mon_exit_reason_ : "operator");
+                 dwell, g_mode.mode(), mon_exit_reason_ ? mon_exit_reason_ : "operator");
     if (mon_clamp_joint_ >= 0)
         spdlog::info("  pos_clamp  : {} tick (최대 {:.4f} rad 삭감 @ {} {})",
                      mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_, jname(mon_clamp_joint_));
@@ -891,8 +929,8 @@ void State_Mimic::load_gait_cfg(const YAML::Node& g)
         // 정착 파라미터 — 파이썬도 이 둘은 스칼라, settle_steps 만 모드별.
         if (g["settle_eff"])   g_loco.settle_eff   = g["settle_eff"].as<float>();
         if (g["settle_phase"]) g_loco.settle_phase = g["settle_phase"].as<float>();
-        for (int m = 1; m <= 5; ++m) {
-            const YAML::Node n = g["mode" + std::to_string(m)];
+        for (int m = 1; m <= mode_table::N_MODES; ++m) {
+            const YAML::Node n = g[mode_table::row(m).gait_key];
             if (!n || !n.IsMap()) continue;
             auto& mg = g_loco.mode_gait[m];
             const std::string src = n["source"] ? n["source"].as<std::string>() : "quintic";
@@ -940,6 +978,10 @@ void State_Mimic::enter()
     }
 
     motion = motion_; // set for specific motion
+    // 클립 슬롯은 «여기서» 짓는다 — 생성자가 아니라. State_Mimic 은 두 번 만들어지고(dance /
+    // masked) 주 클립(motion)은 enter() 마다 그 인스턴스 것으로 다시 묶이므로, 생성자에서만
+    // 지으면 0번 칸이 나중에 만들어진 쪽을 가리킨 채 남는다. 정책 루프가 뜨기 전이다.
+    g_build_clips();
     // IMU 편향 보정. config.yaml 의 imu_cal 이 원장이고, 환경변수는 «실험용» override 다
     // (sim 에 일부러 편향을 만들어 증상을 재현할 때 쓴다 — G1_IMU_CAL_DEG="4.2,0").
     {
@@ -983,7 +1025,9 @@ void State_Mimic::enter()
     js_qd_warn_latched_ = false;
     js_warn_run_ = js_crit_run_ = 0;
     mon_reset();               // 모니터링 카운터도 체류 단위로 리셋 (요약이 이번 체류만 담게)
-    g_req_mode = g_cmd_mode;   // 진입 시 요청 모드를 현재 모드와 일치시켜 시작(불일치 방지)
+    // 진입 시 «조작자가 요청한 모드» 를 현재 모드와 일치시켜 시작(불일치 방지). 같은 모드 요청은
+    // 이탈 조건을 안 타므로 requested 만 맞춰진다.
+    (void)g_mode.request(g_mode.mode());
     // Start policy thread
     policy_thread_running = true;
     policy_thread = std::thread([this]{
@@ -998,10 +1042,11 @@ void State_Mimic::enter()
         const auto start = clock::now();
         auto sleepTill = start + dt;
 
-        motion->reset(env->robot->data, time_range_[0]);
-        if (motion_light) motion_light->reset(env->robot->data, 0.0f);  // mode5 clip anchor = enter heading
-        if (motion_demo6) motion_demo6->reset(env->robot->data, 0.0f);  // mode6 clip anchor = enter heading
-        g_demo6_t0 = 0.0f;   // env->reset() 이 episode_length 를 0 으로 되돌리므로 오프셋도 짝을 맞춘다
+        motion->reset(env->robot->data, time_range_[0]);   // 0번 칸 = 주 클립(구간 오프셋을 쓴다)
+        for (size_t i = 1; i < g_clips.size(); ++i) {      // 나머지 칸: clip anchor = enter heading
+            g_clips[i].loader->reset(env->robot->data, 0.0f);
+            g_clips[i].t0 = 0.0f;   // env->reset() 이 episode_length 를 0 으로 되돌리므로 원점도 짝을 맞춘다
+        }
         auto ref_yaw = isaaclab::yawQuaternion(motion->root_quaternion()).toRotationMatrix();
         auto robot_yaw = isaaclab::yawQuaternion(robot_quat_w(env.get())).toRotationMatrix();
         init_quat = robot_yaw * ref_yaw.transpose();
@@ -1097,11 +1142,16 @@ void State_Mimic::enter()
         while (policy_thread_running)
         {
             const auto d_t0 = clock::now();
+            // 전환은 «이 틱이 끝났을 때 모드가 달라졌나» 로 본다. 조작 채널(50 Hz GUI/VR)이 모드를
+            // 요청한 같은 틱에 아래 qd 가드가 그것을 되돌리면 그건 전환이 아니다 — 여기서 걸러내지
+            // 않으면 가드가 걸려 있는 동안 notify_mode_switch 가 매 틱 재무장해 base_vel 램프가
+            // 영원히 다시 시작된다(= 조작자 명령이 안 먹는다). 종전의 «현재 모드 != 직전 모드» 비교와 같다.
+            const int mode_at_tick_start = g_mode.mode();
             env->robot->update();   // 보정은 G1Articulation::update() 안에서 이미 걸린다
-            g_poll_inputs(env.get());   // joystick d-pad + keyboard (mode 1/2/3 + WASD/QE vel)
+            g_poll_inputs(env.get());   // joystick d-pad + keyboard (모드 키 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
             const auto d_t_poll = clock::now();
-            // ── L3: 측정 qd 폭주 감지 (policy_thread 50Hz — g_cmd_mode/notify_mode_switch 같은 스레드) ──
+            // ── L3: 측정 qd 폭주 감지 (policy_thread 50Hz — g_mode/notify_mode_switch 같은 스레드) ──
             // 모니터링: |qd| 최댓값은 guard on/off 와 무관하게 항상 추적. 50Hz, I/O 없음.
             // qd_now/qd_j 는 아래 warn/crit 로그가 "지금 값"을 찍도록 재사용한다(체류 최댓값 아님).
             const int qd_j = js_qd_argmax(env->robot->data.joint_vel.data(),
@@ -1111,7 +1161,7 @@ void State_Mimic::enter()
                 mon_qd_max_ = qd_now; mon_qd_joint_ = qd_j;
             }
             if (js_enable_qd_guard_) {
-                const int reqd = g_req_mode;   // 조작자 실제 요청 모드(가드가 강제한 g_cmd_mode와 분리; 입력핸들러만 세팅)
+                const int reqd = g_mode.requested();   // 조작자 실제 요청 모드(가드가 강제한 현재 모드와 분리; 요청이 받아들여질 때만 갱신)
                 int sev = js_qd_severity_v(env->robot->data.joint_vel.data(),
                                            std::min((int)env->robot->data.joint_vel.size(), 29),
                                            js_qd_warn_v_.data(), js_qd_crit_v_.data());
@@ -1125,63 +1175,65 @@ void State_Mimic::enter()
                                   qd_now, qd_j, jname(qd_j), (qd_j>=0&&qd_j<29)?js_qd_crit_v_[qd_j]:js_qd_crit_, js_over_ticks_);
                 if (!crit_before && crit_l)
                     safety_log_.event("qd_crit", qd_j, jname(qd_j), qd_now, (qd_j>=0&&qd_j<29)?js_qd_crit_v_[qd_j]:js_qd_crit_, "-> Passive");
-                // warn 수동복귀: 조작자가 mode1(X/'1')을 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
-                if (js_qd_warn_latched_ && reqd == 1) js_qd_warn_latched_ = false;
-                // 해제 뒤에 로그 → mode1 에서는 같은 틱에 풀리므로(=no-op) 스팸이 안 난다.
+                // warn 수동복귀: 조작자가 폴백 모드(X/'1')를 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
+                if (js_qd_warn_latched_ && reqd == G1_FALLBACK_MODE) js_qd_warn_latched_ = false;
+                // 해제 뒤에 로그 → 폴백 모드에서는 같은 틱에 풀리므로(=no-op) 스팸이 안 난다.
                 if (!warn_before && js_qd_warn_latched_)
-                    spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> mode1 강제. 복귀=키 '1'",
+                    spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> 폴백 모드 강제. 복귀=키 '1'",
                                  qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
                 if (!warn_before && js_qd_warn_latched_)
-                    safety_log_.event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> mode1 강제");
-                if (js_qd_warn_latched_) g_cmd_mode = 1;   // g_poll_vr 뒤에 덮어써 mode1 유지(soft)
+                    safety_log_.event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 폴백 모드 강제");
+                // g_poll_vr 뒤에 덮어써 폴백 모드 유지(soft). B3(SafetyPolicy)가 저자세에선 Passive 로 바꾼다.
+                if (js_qd_warn_latched_) g_mode.force(G1_FALLBACK_MODE);
                 // crit은 아래 registered_check가 Passive로 전이시킴(여기선 latch만).
             }
             const auto d_t_safe = clock::now();
             // Controller: detect a mode switch (spline base_vel + mode1 arm-blend), then advance
             // one step so the obs (base_vel_command / ref_foot_height) see fresh values.
-            if (g_cmd_mode != g_prev_cmd_mode) {
-                g_loco.notify_mode_switch(g_cmd_mode);
-                // mode6 진입: 클립을 frame 0 으로 되감는다. 아래 재앵커가 active_demo_loader()
+            if (g_mode.consume_switch() && g_mode.mode() != mode_at_tick_start) {
+                const mode_table::Row& M = g_mode.row();
+                g_loco.notify_mode_switch(M.id);
+                // 되감는 클립: «들어올 때마다» frame 0 으로. 아래 재앵커가 active_ref_loader()
                 // 의 «현재 프레임» 자세를 기준으로 init_quat 을 잡으므로, 되감기는 반드시
                 // 그보다 먼저다 — 순서가 바뀌면 중간 프레임 heading 에 정렬된 채로 첫
                 // 동작이 재생돼 진입 순간 몸이 돈다.
-                if (g_cmd_mode == 6 && motion_demo6) {
-                    g_demo6_t0 = env->episode_length * env->step_dt;
-                    motion_demo6->reset(env->robot->data, 0.0f);
+                if (g_ref_is_clip()) if (ClipSlot* c = active_clip()) if (c->rewind_on_enter) {
+                    c->t0 = env->episode_length * env->step_dt;
+                    c->loader->reset(env->robot->data, 0.0f);
                 }
                 // RE-ANCHOR at mode change: pin the reference heading to the robot's CURRENT heading
-                // so a referenced motion (mode4 clip / live VR) STARTS from where the robot faces now
+                // so a referenced motion (clip playback / live VR) STARTS from where the robot faces now
                 // — no heading snap/turn before it begins. The motion's OWN internal turning is kept
                 // (only the start is re-aligned). init_quat was otherwise frozen at FSM enter, which
-                // made the robot jump to the enter-heading. (mode1 / mode2-3 standby don't use init_quat.)
-                if (motion && (g_is_demo() || motion->vr_override)) {
-                    auto dl = active_demo_loader();   // mode5 -> light clip, else primary
-                    Eigen::Quaternionf ref_now = g_is_demo() ? dl->root_quaternion_clip()
-                                                             : dl->root_quaternion_vr();
-                    auto ry = isaaclab::yawQuaternion(ref_now).toRotationMatrix();
-                    auto rr = isaaclab::yawQuaternion(robot_quat_w(env.get())).toRotationMatrix();
+                // made the robot jump to the enter-heading. (참조가 없는 모드·VR 없는 standby 는 init_quat 을 안 쓴다.)
+                if (motion && (g_ref_is_clip() || motion->vr_override)) {
+                    auto dl = active_ref_loader();   // 클립 모드면 고른 클립, 아니면 주 로더
+                    Eigen::Quaternionf ref_now = g_ref_is_clip() ? dl->root_quaternion_clip()
+                                                                 : dl->root_quaternion_vr();
+                    // ⚠ auto 금지(이 파일 위쪽 obs 항의 주석과 같은 이유) — 구체 타입으로 받는다.
+                    const Eigen::Matrix3f ry = isaaclab::yawQuaternion(ref_now).toRotationMatrix();
+                    const Eigen::Matrix3f rr = isaaclab::yawQuaternion(robot_quat_w(env.get())).toRotationMatrix();
                     init_quat = rr * ry.transpose();
                 }
                 // 🔬 전환 시점의 «레퍼런스 점프» 를 남긴다. 다리 q_ref 는 1초 램프를 타지만
                 //    발-z 는(ref 모드) 즉시 점프한다 — 그 짝이 안 맞는지 여기서 바로 보인다.
-                if (g_cmd_mode >= 3 && motion) {
-                    auto dl = active_demo_loader();
+                if (M.track_lower && motion) {
+                    auto dl = active_ref_loader();
                     float qmax = 0.0f; int qj = -1;
-                    if (g_is_demo()) {
+                    if (g_ref_is_clip()) {
                         auto qc = dl->joint_pos_clip();
                         for (int i = 0; i < (int)qc.size() && i < 29; ++i) {
                             const float dv = std::fabs(qc[i] - env->robot->data.joint_pos[i]);
                             if (dv > qmax) { qmax = dv; qj = i; }
                         }
                     }
-                    const auto fz = (g_is_demo() && dl->has_foot_z) ? dl->foot_z_clip()
-                                                                    : g_loco.foot_z;
-                    spdlog::info("[diag:switch] -> mode{}  clip frame={}  q_ref 점프 max={:.2f} rad @{} {}"
+                    const auto fz = (g_ref_is_clip() && dl->has_foot_z) ? dl->foot_z_clip()
+                                                                        : g_loco.foot_z;
+                    spdlog::info("[diag:switch] -> mode{} ({})  clip frame={}  q_ref 점프 max={:.2f} rad @{} {}"
                                  "  발-z 목표=({:.3f},{:.3f})  생성기=({:.3f},{:.3f})  원천={}",
-                                 g_cmd_mode, dl ? dl->frame : -1, qmax, qj, qj >= 0 ? jname(qj) : "-",
+                                 M.id, M.name, dl ? dl->frame : -1, qmax, qj, qj >= 0 ? jname(qj) : "-",
                                  fz[0], fz[1], g_loco.foot_z[0], g_loco.foot_z[1], g_footz_src_name);
                 }
-                g_prev_cmd_mode = g_cmd_mode;
             }
             // Low-pass the base_vel target (deploy-side; controller unchanged) so abrupt
             // GUI/keyboard command changes don't jerk the gait. ~A=0.25 -> ~0.2s settle.
@@ -1190,11 +1242,16 @@ void State_Mimic::enter()
                 const float A = 0.25f;
                 auto bv = g_joystick_base_vel(env.get());
                 for (int i = 0; i < 3; ++i) bv_s[i] += A * (bv[i] - bv_s[i]);
-                g_loco.update(bv_s, g_cmd_mode);
+                g_loco.update(bv_s, g_mode.mode());
             }
-            motion->update(env->episode_length * env->step_dt + time_range_[0]);
-            if (motion_light) motion_light->update(env->episode_length * env->step_dt);  // advance mode5 clip
-            if (motion_demo6) motion_demo6->update(env->episode_length * env->step_dt - g_demo6_t0);  // advance mode6 clip (진입 시 되감김)
+            // 클립 시계: 0번 칸 = 주 클립(구간 오프셋), 그 뒤 = 자기 원점(되감는 칸은 진입 시각이 원점).
+            {
+                const float t_ep = env->episode_length * env->step_dt;
+                for (size_t i = 0; i < g_clips.size(); ++i) {
+                    ClipSlot& c = g_clips[i];
+                    c.loader->update(i == 0 ? t_ep + time_range_[0] : t_ep - c.t0);
+                }
+            }
             const auto d_t_ctrl = clock::now();
             env->step();
             const auto d_t1 = clock::now();
@@ -1295,7 +1352,7 @@ void State_Mimic::run()
     }
     // 계측(기본 꺼짐). 명령을 다 실은 «뒤» 라 이 줄의 q_des 는 실제로 나가는 값과 같다.
     if (state_dump_.on()) {
-        GaitAux aux = g_loco.probe(g_cmd_mode);
+        GaitAux aux = g_loco.probe(g_mode.mode());
         // 보정 «후» 중력 — 정책이 실제로 읽는 그 값. 재계산 아님, 그대로 나른다.
         const auto& pg = env->robot->data.projected_gravity_b;
         aux.pg_x = pg[0]; aux.pg_y = pg[1]; aux.pg_z = pg[2];
