@@ -1,0 +1,18 @@
+# 모드의 «배포 사실». 학습 사실(mjlab_g1_motion/mode_spec.py)과 합쳐 include/ModeTable.h 로 생성된다.
+#   python3 deploy/scripts/gen_mode_table_header.py --write
+# 🔴 ModeTable.h 를 손으로 고치지 않는다. 모드를 더할 땐 mode_spec.py 한 줄 + 여기 한 줄 (rules/ADDING_A_MODE.md).
+#   key             키보드 키 한 글자
+#   ref_source      none | vr | clip       관절·자세 참조를 어디서 읽나
+#   foot_z          none | gen | ref       발 높이 명령의 원천 (gen = 발 생성기, ref = 참조 발 높이). none ⇔ 학습 foot_z_live=False
+#   arm_blend_enter 진입 시 팔을 기본 자세로 되돌리는 블렌드
+#   crossfade_enter 진입 시 출력 crossfade (switch_blend_steps)
+#   safety          upright_only | ground_capable
+#   exit            always | upright | standing_hold | via_ground     이 모드에서 «나갈 때» 의 조건
+#   gait            deploy.yaml `gait:` 블록에서 읽을 키. 발 생성기를 안 쓰는 모드도 표 칸은 갖는다
+modes:
+  1: {key: "1", ref_source: none, foot_z: gen,  arm_blend_enter: true,  crossfade_enter: false, safety: upright_only,   exit: always,        gait: mode1}
+  2: {key: "2", ref_source: vr,   foot_z: gen,  arm_blend_enter: false, crossfade_enter: true,  safety: upright_only,   exit: always,        gait: mode2}
+  3: {key: "3", ref_source: vr,   foot_z: ref,  arm_blend_enter: false, crossfade_enter: true,  safety: upright_only,   exit: always,        gait: mode3}
+  4: {key: "4", ref_source: clip, foot_z: ref,  arm_blend_enter: false, crossfade_enter: true,  safety: ground_capable, exit: upright,       gait: mode4}
+  5: {key: "5", ref_source: none, foot_z: none, arm_blend_enter: false, crossfade_enter: true,  safety: ground_capable, exit: standing_hold, gait: mode5}
+  6: {key: "6", ref_source: none, foot_z: none, arm_blend_enter: false, crossfade_enter: true,  safety: ground_capable, exit: via_ground,    gait: mode6}
