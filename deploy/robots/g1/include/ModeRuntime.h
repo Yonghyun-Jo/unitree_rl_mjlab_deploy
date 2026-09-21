@@ -34,20 +34,27 @@ class ModeRuntime {
     if (m != mode_) {
       using mode_table::Exit;
       const bool upright = ctx.z_fk >= EXIT_MIN_Z && ctx.tilt_deg < EXIT_MAX_TILT_DEG;
+      // 기본은 «거부». 각 case 가 허용을 켠다 — switch 에 default 를 두지 않는 것은 새 Exit 값이 생겼을 때
+      // -Wswitch 가 빠진 case 를 경고하게 하려는 것이고, 그래도 빠지면 여기서 막힌다(fail-closed).
+      bool ok = false;
+      const char* why = "알 수 없는 이탈 조건";
       switch (row().exit) {
-        case Exit::Always: break;
+        case Exit::Always:
+          ok = true;
+          break;
         case Exit::Upright:
-          if (!upright) return {false, "먼저 직립 (높이·기울기 조건)"};
+          ok = upright; why = "먼저 직립 (높이·기울기 조건)";
           break;
         case Exit::StandingHold:
           // 저자세끼리(→ 다른 ground_capable 모드)는 여기서 막지 않는다 — 그 가드는 들어가는 쪽 모드의 몫(B2).
-          if (mode_table::row(m).safety != mode_table::Safety::GroundCapable && !(ctx.m5_standing_hold && upright))
-            return {false, "먼저 직립 버튼 (직립 유지 상태에서만 나간다)"};
+          ok = mode_table::row(m).safety == mode_table::Safety::GroundCapable || (ctx.m5_standing_hold && upright);
+          why = "먼저 직립 버튼 (직립 유지 상태에서만 나간다)";
           break;
         case Exit::ViaGround:
-          if (mode_table::row(m).exit != Exit::StandingHold) return {false, "ground 모드를 거쳐서만 나간다"};
+          ok = mode_table::row(m).exit == Exit::StandingHold; why = "ground 모드를 거쳐서만 나간다";
           break;
       }
+      if (!ok) return {false, why};
       mode_ = m; switched_ = true;
     }
     requested_ = m;
