@@ -70,9 +70,9 @@ static inline bool g_ref_is_clip() { return g_mode.row().ref_source == mode_tabl
 // run() read its cached base_vel / foot_z / arm_scale. ⚠ params assume 50 Hz control.
 static MaskedLocoController g_loco;
 
-// ── 🔬 진단 A/B: mode>=3 의 발-z 원천 (env `G1_FOOTZ_SRC`) ──────────────────────
+// ── 🔬 진단 A/B: foot_z==Ref 인 모드의 발-z 원천 (env `G1_FOOTZ_SRC`) ──────────────
 //   ref  (기본) = 레퍼런스 발 world-z. 학습 원장과 같다(aedcc77).
-//   gen         = 생성기. aedcc77 이전의 종전 배포 동작 (mode>=3 에선 stance 상수).
+//   gen         = 생성기. aedcc77 이전의 종전 배포 동작 (그 모드들은 base_vel 이 0 이라 stance 상수).
 //   ramp        = ref 이되 «스위치 램프» 를 같이 탄다 — 다리 q_ref 는 switch_alpha 로 1초에 걸쳐
 //                 현재자세→클립으로 램프되는데(masked_joint_command), 발-z 만 즉시 점프하면
 //                 그 1초 동안 «다리는 아직 서 있는데 발은 0.65 m» 라는 모순된 짝을 먹인다.
@@ -89,7 +89,7 @@ static void g_load_footz_src() {
         else if (v == "ref")  { g_footz_src = FootZSrc::Ref;  g_footz_src_name = "ref"; }
         else spdlog::warn("[diag] G1_FOOTZ_SRC='{}' 는 모르는 값 — ref 유지", v);
     }
-    spdlog::info("[diag] ref_foot_height 원천 = {} (mode>=3 에만 영향)", g_footz_src_name);
+    spdlog::info("[diag] ref_foot_height 원천 = {} (표의 foot_z==Ref 인 모드에만 영향)", g_footz_src_name);
 }
 
 // Accumulated keyboard velocity command (walker_teleop.py style: each keypress ±STEP, space=reset).
@@ -123,7 +123,7 @@ static inline float clamp_vx(float v) { return std::clamp(v, -VX_MAX_BWD, VX_MAX
 struct GuiCtrl {
     int32_t  magic;          // 0x6701 validity tag
     uint32_t seq;            // increments on each GUI change (edge-triggered apply)
-    int32_t  cmd_mode;       // 1/2/3
+    int32_t  cmd_mode;       // 직립 모드만(g_channel_may_request) — 현재 1/2/3
     float    vx, vy, wz;     // base_vel command (deploy velocity caps still apply)
     int32_t  period_steps;   // foot-gen gait period
     float    height_scale;   // foot-gen swing-height multiplier
@@ -144,6 +144,21 @@ static void g_request_mode(int m, const char* src) {
     printf("\r\n[cmd_mode] %s -> %d 거부: %s\r\n", src, m, r.reason); fflush(stdout);
 }
 
+// GUI(/dev/shm)·VR 채널이 요청할 수 있는 모드 — 옛 «1 <= cmd_mode <= 3» 범위 검사를 성질로 옮긴 것이다.
+// 이 둘은 사람이 보고 누르는 키보드·조이스틱과 달리 «남이 쓴 바이트» 가 그대로 들어오므로, 이 검사는
+// 쓰레기 값이 저자세·클립재생 모드를 켜지 못하게 막는 필터이기도 했다. 지금 이 조건 = 모드 1·2·3.
+// ⚠ GUI 에 mode4/5 조작이 생기면 B2 에서 «의도적으로» 넓힌다 — 성질로 적어 두는 이유가 그것이다.
+static inline bool g_channel_may_request(int m) {
+    return mode_table::valid(m) && mode_table::row(m).safety == mode_table::Safety::UprightOnly;
+}
+// 채널에서 들어온 요청. 자격 없는 값은 옛 코드처럼 «아무 일도 안 일어난다»(한 줄만 남긴다).
+static void g_request_mode_from_channel(int m, const char* src) {
+    if (g_channel_may_request(m)) { g_request_mode(m, src); return; }
+    if (m == g_reject_last) return;                      // 50 Hz — 같은 값은 한 번만
+    g_reject_last = m;
+    printf("\r\n[cmd_mode] %s -> %d 무시: 이 채널은 직립 모드만 요청한다\r\n", src, m); fflush(stdout);
+}
+
 static void g_poll_gui()
 {
     FILE* f = std::fopen("/dev/shm/g1_masked_gui", "rb");
@@ -153,7 +168,7 @@ static void g_poll_gui()
     std::fclose(f);
     if (n != 1 || g.magic != 0x6701 || g.seq == g_gui_last_seq) return;
     g_gui_last_seq = g.seq;
-    g_request_mode(g.cmd_mode, "gui");                                // mode-switch detected in loop
+    g_request_mode_from_channel(g.cmd_mode, "gui");                   // mode-switch detected in loop
     g_kb_vx = g.vx; g_kb_vy = g.vy; g_kb_wz = g.wz;                   // clamped in g_joystick_base_vel
     if (g.period_steps > 0)  g_loco.period_steps = g.period_steps;
     if (g.height_scale > 0)  g_loco.height_scale = g.height_scale;
@@ -219,7 +234,7 @@ static void g_poll_vr()
     g_vr_last_seq = v.seq;
     g_vr_stale = 0;
     if (!v.valid) { if (State_Mimic::motion) State_Mimic::motion->clear_vr(); return; }
-    g_request_mode(v.cmd_mode, "vr");
+    g_request_mode_from_channel(v.cmd_mode, "vr");
     g_kb_vx = v.base_vel[0]; g_kb_vy = v.base_vel[1]; g_kb_wz = v.base_vel[2];
     if (State_Mimic::motion) {
         Eigen::VectorXf dp = Eigen::VectorXf::Map(v.dof_pos, 29);
@@ -229,7 +244,7 @@ static void g_poll_vr()
     }
 }
 
-// Poll joystick d-pad + keyboard for mode switch (1/2/3) and keyboard velocity accumulation.
+// Poll joystick d-pad (직립 모드 3개) + keyboard (표의 모드 키 전부) and keyboard velocity accumulation.
 // Called every policy step (same thread as obs). Both input modes are always live.
 static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
 {
@@ -433,7 +448,7 @@ REGISTER_OBSERVATION(command_mask)
 }
 
 // yaw-local base velocity command [vx, vy, wz]. The controller (g_loco, updated once per
-// step) splines this across mode switches and zeroes it in mode3 (mask_lower). Raw joystick
+// step) splines this across mode switches and zeroes it where !base_vel_live. Raw joystick
 // target is computed by g_joystick_base_vel() and fed to g_loco.update() in policy_thread.
 REGISTER_OBSERVATION(base_vel_command)
 {
@@ -450,9 +465,10 @@ REGISTER_OBSERVATION(base_vel_command)
 //     mode1 (stage4_mode1_env_cfg FOOT_GEN foot_source="lut") -> 생성기
 //     mode2 (stage4_mode2_env_cfg FOOT_GEN foot_source="lut") -> 생성기
 //     mode3 (stage4_mode3_env_cfg 에 FOOT_GEN «없음»)         -> 레퍼런스 발 world-z
-//   mode4/5/6 은 마스킹이 mode3 과 같고 같은 head 를 쓰므로 mode3 과 같은 원천이다.
+//   그 «학습 사실» 이 표의 foot_z 칸이다 — 이 함수는 번호가 아니라 그 칸을 본다.
+//   클립 재생 모드(mode4)는 mode3 과 같은 head 를 쓰므로 같은 Ref 다.
 //
-// 종전 배포는 모든 모드에서 생성기를 냈다. mode>=3 은 base_vel 이 0 으로 마스킹돼 eff=0 →
+// 종전 배포는 모든 모드에서 생성기를 냈다. Ref 인 모드는 base_vel 이 0 으로 마스킹돼 eff=0 →
 // 서있기 게이트 → 항상 {stance_z, stance_z} 상수. 즉 클립/VR 이 발을 들어 올리는 동안에도
 // 정책에겐 «두 발 접지» 라고 말하고 있었다 = 학습과 정면으로 다른 obs.
 REGISTER_OBSERVATION(ref_foot_height)
@@ -681,12 +697,17 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
                      slot_name);
     }
     // 이 슬롯(ONNX)이 아는 모드. 없으면 계약 v1 = {1,2,3,4}.
+    // 🔴 여기서는 «읽어 담기만» 한다 — 거는 것은 enter() 다. 이 클래스는 FSM 상태마다 하나씩
+    //    만들어지므로(Mimic_Dance1_subject2 / Mimic_Masked) 생성자에서 전역에 걸면 나중에
+    //    만들어진 쪽이 남의 집합을 조용히 덮어쓴다(g_build_clips 와 같은 함정).
+    if (dcfg["modes"] && dcfg["modes"].IsSequence()) {
+        slot_modes_.clear();
+        for (const auto& n : dcfg["modes"]) slot_modes_.push_back(n.as<int>());
+    }
     {
-        std::vector<int> ms = {1, 2, 3, 4};
-        if (dcfg["modes"] && dcfg["modes"].IsSequence()) { ms.clear(); for (const auto& n : dcfg["modes"]) ms.push_back(n.as<int>()); }
-        g_mode.set_supported(ms);
-        std::string s; for (int m : ms) s += std::to_string(m) + " ";
-        spdlog::info("[mode] 이 슬롯이 아는 모드: {}", s);
+        std::string s; for (int m : slot_modes_) s += std::to_string(m) + " ";
+        spdlog::info("[mode] {} (슬롯 '{}') 이 아는 모드: {}  — 거는 것은 enter()",
+                     state_string, slot_name, s);
     }
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
         dcfg,
@@ -982,6 +1003,15 @@ void State_Mimic::enter()
     // masked) 주 클립(motion)은 enter() 마다 그 인스턴스 것으로 다시 묶이므로, 생성자에서만
     // 지으면 0번 칸이 나중에 만들어진 쪽을 가리킨 채 남는다. 정책 루프가 뜨기 전이다.
     g_build_clips();
+    // 같은 이유로 «이 슬롯이 아는 모드» 도 여기서 건다 — 지금 들어가는 정책의 것이어야 한다.
+    g_mode.set_supported(slot_modes_);
+    // 지난 체류의 모드가 이 슬롯엔 없을 수 있다(예: 계약 v2 에서 mode5 로 나갔다가 v1 슬롯으로 진입).
+    // 그대로 두면 ONNX 가 모르는 모드로 첫 틱이 돈다 → 표의 첫 행(안전 폴백)으로 내린다.
+    if (!g_mode.supports(g_mode.mode())) {
+        spdlog::warn("[mode] 직전 모드 {} 는 이 슬롯이 모른다 -> mode{} 로 내린다",
+                     g_mode.mode(), G1_FALLBACK_MODE);
+        g_mode.force(G1_FALLBACK_MODE);
+    }
     // IMU 편향 보정. config.yaml 의 imu_cal 이 원장이고, 환경변수는 «실험용» override 다
     // (sim 에 일부러 편향을 만들어 증상을 재현할 때 쓴다 — G1_IMU_CAL_DEG="4.2,0").
     {
@@ -1142,11 +1172,6 @@ void State_Mimic::enter()
         while (policy_thread_running)
         {
             const auto d_t0 = clock::now();
-            // 전환은 «이 틱이 끝났을 때 모드가 달라졌나» 로 본다. 조작 채널(50 Hz GUI/VR)이 모드를
-            // 요청한 같은 틱에 아래 qd 가드가 그것을 되돌리면 그건 전환이 아니다 — 여기서 걸러내지
-            // 않으면 가드가 걸려 있는 동안 notify_mode_switch 가 매 틱 재무장해 base_vel 램프가
-            // 영원히 다시 시작된다(= 조작자 명령이 안 먹는다). 종전의 «현재 모드 != 직전 모드» 비교와 같다.
-            const int mode_at_tick_start = g_mode.mode();
             env->robot->update();   // 보정은 G1Articulation::update() 안에서 이미 걸린다
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (모드 키 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
@@ -1190,7 +1215,9 @@ void State_Mimic::enter()
             const auto d_t_safe = clock::now();
             // Controller: detect a mode switch (spline base_vel + mode1 arm-blend), then advance
             // one step so the obs (base_vel_command / ref_foot_height) see fresh values.
-            if (g_mode.consume_switch() && g_mode.mode() != mode_at_tick_start) {
+            // consume_switch() 는 «직전 consume 때의 모드와 지금» 을 견준다 — 조작 채널이 요청한
+            // 것을 같은 틱에 위 qd 가드가 되돌렸으면 전환이 아니다(ModeRuntime.h).
+            if (g_mode.consume_switch()) {
                 const mode_table::Row& M = g_mode.row();
                 g_loco.notify_mode_switch(M.id);
                 // 되감는 클립: «들어올 때마다» frame 0 으로. 아래 재앵커가 active_ref_loader()

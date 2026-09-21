@@ -55,24 +55,26 @@ class ModeRuntime {
           break;
       }
       if (!ok) return {false, why};
-      mode_ = m; switched_ = true;
+      mode_ = m;
     }
     requested_ = m;
     return {true, ""};
   }
 
   // 안전 폴백 — 가드를 타지 않고, 조작자의 요청(requested)은 남긴다(수동 복귀 판정용).
-  void force(int m) { if (mode_table::valid(m) && m != mode_) { mode_ = m; switched_ = true; } }
+  void force(int m) { if (mode_table::valid(m)) mode_ = m; }
 
-  // 직전 호출 이후 모드가 바뀌었으면 한 번 true.
-  bool consume_switch() { const bool s = switched_; switched_ = false; return s; }
+  // 직전 consume 때의 모드와 지금이 다르면 true — 한 틱 안에서 바뀌었다가 되돌아온 것은 전환이 아니다.
+  // (조작 채널이 모드를 요청한 같은 틱에 안전 폴백이 그것을 되돌리는 경우가 그렇다. 전이마다 래치를
+  //  세우면 그 틱이 «전환» 으로 보여 crossfade·램프가 매 틱 재무장한다.)
+  bool consume_switch() { const bool s = mode_ != last_consumed_; last_consumed_ = mode_; return s; }
 
   int  clip_id() const { return clip_id_; }
   bool select_clip(int id, int n_clips) { if (id < 0 || id >= n_clips) return false; clip_id_ = id; return true; }
 
  private:
   int mode_ = 1, requested_ = 1, clip_id_ = 0;
-  bool switched_ = false;
+  int last_consumed_ = 1;                         // consume_switch() 가 마지막으로 본 모드
   std::vector<int> supported_ = {1, 2, 3, 4};      // 계약 v1 슬롯의 기본
 };
 

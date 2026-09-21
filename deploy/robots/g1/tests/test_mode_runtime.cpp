@@ -42,6 +42,21 @@ int main() {
     // 클립 선택
     CHK(rt.clip_id() == 0 && rt.select_clip(2, 3) && rt.clip_id() == 2);
     CHK(!rt.select_clip(3, 3) && !rt.select_clip(-1, 3) && rt.clip_id() == 2);
+
+    // ── 전환 감지는 «직전 consume 때의 모드 ↔ 지금» 이다 (전이마다 세는 래치가 아니다) ──
+    // 왜: 조작 채널(50 Hz)이 모드를 요청한 같은 틱에 안전 폴백이 되돌리면, 래치식은 그 틱을
+    //     «전환» 으로 보고 crossfade·base_vel 램프를 매 틱 재무장시킨다(= 조작이 안 먹는다).
+    {
+        ModeRuntime e;                                    // mode1 에서 시작
+        CHK(!e.consume_switch());                         // 아무 일도 없었다
+        e.request(2); e.force(1);                         // 요청 -> 같은 틱에 가드가 되돌림
+        CHK(e.mode() == 1 && e.requested() == 2 && !e.consume_switch());   // 전환 아님
+        CHK(e.request(2).accepted && e.consume_switch()); // 이제 진짜로 달라졌다
+        e.request(3); e.request(2);                       // 갔다가 그 틱 안에 되돌아옴
+        CHK(e.mode() == 2 && !e.consume_switch());        // 전환 아님
+        CHK(e.request(3).accepted);
+        CHK(e.consume_switch() && !e.consume_switch());   // 한 번만
+    }
     std::printf(fail ? "FAILED (%d)\n" : "OK test_mode_runtime\n", fail);
     return fail ? 1 : 0;
 }

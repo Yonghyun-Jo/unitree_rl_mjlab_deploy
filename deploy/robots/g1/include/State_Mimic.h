@@ -9,6 +9,7 @@
 #include <cnpy.h>
 #include <array>
 #include <atomic>
+#include <vector>
 
 
 class State_Mimic : public FSMState
@@ -30,13 +31,18 @@ public:
     class MotionLoader_;
 
     static std::shared_ptr<MotionLoader_> motion; // for obs computation
-    static std::shared_ptr<MotionLoader_> motion_light; // mode5 test-demo clip (stand + upper-body). null if unset.
-    static std::shared_ptr<MotionLoader_> motion_demo6; // mode6 demo clip (keyboard '6'). null if unset.
+    static std::shared_ptr<MotionLoader_> motion_light; // 선택 클립 «light»(서기+상체 test). 클립 칸 1. null if unset.
+    static std::shared_ptr<MotionLoader_> motion_demo6; // 선택 클립 «demo6»(진입마다 되감음). 클립 칸 2. null if unset.
 private:
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::shared_ptr<MotionLoader_> motion_; // for saving
-    std::shared_ptr<MotionLoader_> motion_light_; // mode5 light-demo loader (owns; motion_light aliases this)
-    std::shared_ptr<MotionLoader_> motion_demo6_; // mode6 demo loader (owns; motion_demo6 aliases this)
+    std::shared_ptr<MotionLoader_> motion_light_; // light 클립 로더 (owns; motion_light aliases this)
+    std::shared_ptr<MotionLoader_> motion_demo6_; // demo6 클립 로더 (owns; motion_demo6 aliases this)
+
+    // 이 슬롯(ONNX)이 아는 모드. 생성자가 deploy.yaml 의 modes: 를 «여기» 에 담고, enter() 가
+    // ModeRuntime 에 건다. 🔴 전역에 바로 걸면 안 된다 — State_Mimic 은 FSM 상태마다 하나씩
+    // 만들어지므로(Mimic_Dance1_subject2 / Mimic_Masked) 나중 생성자가 남의 집합을 덮어쓴다.
+    std::vector<int> slot_modes_ = {1, 2, 3, 4};   // 계약 v1
 
     std::thread policy_thread;
     bool policy_thread_running = false;
