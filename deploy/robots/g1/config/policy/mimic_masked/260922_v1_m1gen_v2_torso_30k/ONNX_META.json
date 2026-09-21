@@ -45,7 +45,7 @@
   },
   "verify": {
     "onnx_md5": "e74eb521788e7a92930efcb5db421754",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "sim2sim_walk": "★★★☆☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s: 낙상 0 · pos_clamp 0 · 기울기 max 13.8°(2 m/s; 대조 260910 v1 14.1°) · |qd| crit 초과 2샘플(R_knee 131 %, 트립 5 미달; 대조 1샘플 102 %). 알려진 결함이 배포 스택에서도 재현: 정지 waist_roll +10~15°·골반 roll +3~5°·무릎 L/R 25/38°(대조 −1~+1°·15/13°), 걷기 hip_yaw (L−R)/2 17~19°(대조 12~13°), 팔벌림 28~32°(대조 20~27°). 계약(obs·requires·안전층)은 통과 — 실기는 «결함 확인용» (2026-09-22)",
     "real_robot": "미실행",
     "onnx_vs_torch": "max|Δ| = 2.831e-06 (OK, tol 0.0001)",
     "graph": "OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
@@ -56,5 +56,10 @@
   "deployed": {
     "status": "pending — stage_candidates --robot 또는 policy_slot push"
   },
-  "export_device": "cpu (com1 GPU 가 mode_switch 학습 중 — CUDA_VISIBLE_DEVICES='' --device cpu, 로그 exported/260922_v1_m1gen_v2_torso_30k/export_cpu.log)"
+  "export_device": "cpu (com1 GPU 가 mode_switch 학습 중 — CUDA_VISIBLE_DEVICES='' --device cpu, 로그 exported/260922_v1_m1gen_v2_torso_30k/export_cpu.log)",
+  "sim2sim": {
+    "stars": 3,
+    "memo": "헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s: 낙상 0 · pos_clamp 0 · 기울기 max 13.8°(2 m/s; 대조 260910 v1 14.1°) · |qd| crit 초과 2샘플(R_knee 131 %, 트립 5 미달; 대조 1샘플 102 %). 알려진 결함이 배포 스택에서도 재현: 정지 waist_roll +10~15°·골반 roll +3~5°·무릎 L/R 25/38°(대조 −1~+1°·15/13°), 걷기 hip_yaw (L−R)/2 17~19°(대조 12~13°), 팔벌림 28~32°(대조 20~27°). 계약(obs·requires·안전층)은 통과 — 실기는 «결함 확인용»",
+    "at": "2026-09-22T08:51"
+  }
 }
