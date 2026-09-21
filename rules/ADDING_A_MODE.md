@@ -10,6 +10,7 @@
 | 배포 repo `deploy/robots/g1/config/modes.yaml` | `key` · `ref_source`(none/vr/clip) · `foot_z`(none/gen/ref) · `arm_blend_enter` · `crossfade_enter` · `safety`(upright_only/ground_capable) · `exit`(always/upright/standing_hold/via_ground) · `gait` |
 
 모드 번호는 1부터 빈칸 없이. 두 표의 모드 집합이 다르면 생성이 그 자리에서 죽는다.
+`gait` 열은 **키일 뿐**이다 — `deploy.yaml` 의 어느 `gait:` 하위블록을 읽을지 고른다. 그 블록 자체는 여기 없다: `foot_z: gen` 모드라면 각 슬롯의 `params/deploy.yaml` 에 **따로** 채워야 한다(3절).
 
 ```bash
 python3 deploy/scripts/gen_mode_table_header.py --write     # ModeTable.h 재생성. 두 표가 모순이면 여기서 실패한다
@@ -33,10 +34,12 @@ bash deploy/robots/g1/tests/run_unit_tests.sh
 
 헤드 수·게이트는 ONNX 그래프 안에 있다 — C++ 은 헤드가 몇 개인지 모른다.
 
+**`foot_z: gen` 모드는 그 모드를 아는 모든 슬롯의 `params/deploy.yaml` 에 `gait: <gait_key>: {...}` 블록이 있어야 한다** (그 head 를 학습시킨 시점의 FOOT_GEN 표에서 값을 옮긴다). `load_gait_cfg` 는 그 키가 없으면 **조용히 `continue`** 해 quintic/table=1(V1) 기본값으로 돈다 — 생성기도 테스트도 이걸 안 잡는다. 기동 로그의 `[gait] modeN: source=... table=V... ` 줄이 그 모드에 대해 찍혔는지로만 확인할 수 있다; 없으면 기본값으로 돈 것이다.
+
 새 모드를 어느 채널로 요청할 수 있게 할지는 따로 정한다:
 - **키보드**: 표의 `key` 로 자동 — 새 행을 채우면 그 키로 바로 요청된다(`State_Mimic.cpp` 가 `mode_table::row(m).key` 로 순회).
 - **클립 고르기**: `[` / `]` 는 모드와 무관하게 `g_clips` 를 순회한다(코드 불필요).
-- **GUI(`/dev/shm/g1_masked_gui`)·VR**: `g_channel_may_request()` 가 **오늘은 `safety == upright_only` 인 모드만** 통과시킨다(옛 `1 <= cmd_mode <= 3` 검사를 성질로 옮긴 것). 새 모드를 GUI/VR 에서도 누르게 하려면 이 필터를 **의도적으로** 넓혀야 한다 — 저절로 넓어지지 않는다.
+- **GUI(`/dev/shm/g1_masked_gui`)·VR**: `g_channel_may_request()` 가 표에서 `safety: upright_only` 인 **모든** 모드를 통과시킨다(옛 `1 <= cmd_mode <= 3` 검사를 성질로 옮긴 것 — 번호가 아니라 성질을 본다). 즉 새 모드를 `upright_only` 로 선언하면 **그 표 행이 생기는 순간 코드를 안 건드려도 GUI/VR 에서 바로 눌린다** — `safety` 를 고를 때 이걸 의식할 것. `ground_capable` 모드만 이 채널에서 막히며, 그 모드도 GUI/VR 에서 누르게 하려면 `g_channel_may_request()` 를 **의도적으로** 넓혀야 한다.
 
 ## 4. 확인
 
@@ -48,4 +51,4 @@ bash deploy/robots/g1/tests/run_unit_tests.sh
 - **(b) `ModeTable.h` 를 손으로 고치지 않는다.** 생성 파일이다 — 고치면 다음 `--write`/`--check` 가 조용히 덮어쓰거나 원장과 어긋난 채로 빌드된다.
 - **(c) 두 표가 서로 맞아야 생성이 된다.** `foot_z: none` ⇔ `foot_z_live=False`, `ref_source: none` ⇔ 추종 없음, `motion_preview` ⇒ `ref_source: clip` — 어긋나면 `gen_mode_table_header.py` 가 그 자리에서 죽는다(1절 참고).
 - **(d) `test_no_mode_ordinals.sh` 는 파서가 아니라 그렙이다.** `cmd_mode`/`new_mode`/`g_mode.mode()`/`.requested()` 를 리터럴로 숫자와 비교하는 패턴만 잡는다. `int m = g_mode.mode(); if (m >= 2) …` 처럼 지역 변수 뒤에 숨은 비교는 통과한다 — 그렙이 초록이어도 리뷰가 직접 봐야 한다.
-- **(e) 새 `Exit` 는 `ModeRuntime::request` 의 `switch` 에 `case` 를 반드시 추가한다.** 그 스위치는 `default:` 가 없다 — 새 `Exit` 값을 빠뜨리면 컴파일러가 `-Wswitch` 로 경고하고, 그래도 놓치면 런타임은 `ok=false`(기본값)로 **그 모드에서 나가는 모든 전환을 거부**한다(fail-closed, 조용히 통과되지 않는다).
+- **(e) 새 `Exit` 는 `ModeRuntime::request` 의 `switch` 에 `case` 를 반드시 추가한다.** 그 스위치는 `default:` 가 없다. 단위 테스트(`run_unit_tests.sh`)가 `test_mode_table`/`test_mode_runtime` 를 `-Werror=switch` 로 빌드하므로 빠뜨리면 **거기서 빌드가 실패한다**(경고가 아니라 에러). 🔴 컨트롤러 자체의 CMake 빌드는 이 경고를 켜지 않는다(`-Wall`/`-Wswitch` 없음) — 그래도 놓치면 런타임은 `ok=false`(기본값)로 **그 모드에서 나가는 모든 전환을 거부**한다(fail-closed, 조용히 통과되지 않는다).

@@ -34,8 +34,11 @@ class ModeRuntime {
     if (m != mode_) {
       using mode_table::Exit;
       const bool upright = ctx.z_fk >= EXIT_MIN_Z && ctx.tilt_deg < EXIT_MAX_TILT_DEG;
-      // 기본은 «거부». 각 case 가 허용을 켠다 — switch 에 default 를 두지 않는 것은 새 Exit 값이 생겼을 때
-      // -Wswitch 가 빠진 case 를 경고하게 하려는 것이고, 그래도 빠지면 여기서 막힌다(fail-closed).
+      // 기본은 «거부». 각 case 가 허용을 켠다 — switch 에 default 를 두지 않는 것은 새 Exit 값이
+      // 생겼을 때 빠진 case 를 잡으려는 것. 단위 테스트 러너(run_unit_tests.sh)가 이 헤더를
+      // -Werror=switch 로 빌드하므로 빠뜨리면 거기서 빌드가 죽는다. 🔴 컨트롤러 자체의 CMake
+      // 빌드는 이 경고를 켜지 않는다(-Wall/-Wswitch 없음) — 그래도 놓치면 여기 런타임은
+      // fail-closed(ok=false)로 그 모드에서 나가는 전환을 전부 거부한다.
       bool ok = false;
       const char* why = "알 수 없는 이탈 조건";
       switch (row().exit) {

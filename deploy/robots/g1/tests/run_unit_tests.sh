@@ -17,7 +17,10 @@ for t in test_estop_channel test_loop_diag; do
   [ -f $t.cpp ] && run $t -std=c++17 -O2 -I../../../include $t.cpp
 done
 for t in test_mode_table test_mode_runtime; do          # 이 계획이 더하는 것 (없으면 건너뜀)
-  [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -I../include $t.cpp
+  # -Werror=switch: Exit(등 enum class) 에 새 값이 생겼는데 ModeRuntime::request 의 switch 에
+  # case 를 안 넣으면 여기서 빌드가 죽는다 (rules/ADDING_A_MODE.md 함정 (e)). 컨트롤러 본체
+  # CMake 빌드는 이 경고를 켜지 않으므로 이 테스트가 유일한 기계 검증이다.
+  [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -Werror=switch -I../include $t.cpp
 done
 [ -f test_no_mode_ordinals.sh ] && { bash test_no_mode_ordinals.sh && echo "ok   no_mode_ordinals" || { echo "FAIL no_mode_ordinals"; fail=1; }; }
 exit $fail
