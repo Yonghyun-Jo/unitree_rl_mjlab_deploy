@@ -9,6 +9,7 @@
 // (no Eigen) so it compiles/tests stand-alone and ports anywhere. Single robot (N=1).
 #pragma once
 #include "GaitLut.h"
+#include "ModeTable.h"
 #include <array>
 #include <cstdio>
 #include <algorithm>
@@ -82,7 +83,7 @@ struct MaskedLocoController {
   static const GlTable& table_of(const ModeGait& mg) {
     return (mg.table == 2) ? GL_T_V2 : GL_T_V1;
   }
-  std::array<ModeGait, 6> mode_gait{};   // index = cmd_mode (1..5). [0]은 미사용.
+  std::array<ModeGait, mode_table::N_MODES + 1> mode_gait{};   // index = 모드 번호. [0] 미사용.
   float walk_max = 1.2f, run_min = 1.7f; // LUT gait 히스테리시스 경계
   // 정착 파라미터 — 파이썬 loco_controller 와 같은 층위(steps 만 모드별, 이 둘은 스칼라).
   float settle_eff   = 0.15f;   // 정착 중 LUT 조회 속도 (작은 걸음: 진폭 ~3 cm)
@@ -131,7 +132,7 @@ struct MaskedLocoController {
   //    (조용히 틀린 값이 아니라) 고치는 자리 바로 옆에서 알려 준다.
   //    호출부(State_Mimic)가 컨트롤러 내부를 알 필요가 없다.
   GaitAux probe(int cmd_mode) const {
-    const ModeGait& mg = mode_gait[std::max(1, std::min(cmd_mode, 5))];
+    const ModeGait& mg = mode_gait[mode_table::row(cmd_mode).id];   // 범위 밖은 mode1 행
     GaitAux g;
     g.lut       = mg.lut ? 1 : 0;
     g.phase     = mg.lut ? phase_f : float(phase) / float(std::max(1, period_steps));
@@ -209,23 +210,24 @@ struct MaskedLocoController {
 
   // Call when cmd_mode changes: spline base_vel from last command + (mode1) start arm-blend.
   void notify_mode_switch(int new_mode) {
+    const mode_table::Row& M = mode_table::row(new_mode);
     bv_ramp_from = bv_last;
     bv_ramp_rem  = bv_ramp_steps;
     bv_blend     = 0.0f;
-    if (new_mode == 1) arm_rem = arm_blend_in + arm_blend_out;
-    if (new_mode >= 2) {                 // crossfade for mode2/3/4/5 (mode1 handled by arm-blend above)
+    if (M.arm_blend_enter) arm_rem = arm_blend_in + arm_blend_out;
+    if (M.crossfade_enter) {             // 출력 crossfade (mode1 은 위 arm-blend 가 맡는다)
       switch_new_mode  = new_mode;
       switch_blend_rem = switch_blend_steps;
       switch_fresh     = true;           // run() freezes the pre-switch pose on the next apply
     }
-    if (new_mode >= 3) leg_fresh = true; // full-body: also ramp the LEG reference (masked_joint_command)
+    if (M.track_lower) leg_fresh = true; // 하체를 추종하는 모드: 다리 참조도 램프 (masked_joint_command)
   }
 
   // Advance one control step; cache base_vel / foot_z / arm_scale. Call ONCE per step pre-obs.
   void update(const std::array<float, 3>& joystick_bv, int cmd_mode) {
     // 0) 이번 스텝에 쓸 모드별 발-z 조건을 고른다. gen_foot_z 가 멤버를 읽으므로 여기서
     //    멤버에 실어 준다(시그니처 유지 -> 기존 golden 테스트 그대로 통과).
-    const ModeGait& mg = mode_gait[std::max(1, std::min(cmd_mode, 5))];
+    const ModeGait& mg = mode_gait[mode_table::row(cmd_mode).id];   // 범위 밖은 mode1 행
     height_scale = mg.height_scale;
     stance_z     = mg.stance_z;
     // 1) base_vel spline (lerp last->target), then mask mode3.
@@ -237,7 +239,7 @@ struct MaskedLocoController {
     if (bv_blend < 1.0f) {
       for (int i = 0; i < 3; ++i) bv[i] = bv_ramp_from[i] + (bv[i] - bv_ramp_from[i]) * bv_blend;
     }
-    if (cmd_mode >= 3) bv = {0.f, 0.f, 0.f};
+    if (!mode_table::row(cmd_mode).base_vel_live) bv = {0.f, 0.f, 0.f};
     // 1-b) standing deadzone: 아주 작은 명령은 0 으로 눌러 «서있기» 로 보낸다. 학습(mode2)
     //      에서 clip 의 vx/wz 가 완전히 0 이 안 돼 계속 구르던 것을 막으려고 넣은 것이라,
     //      배포에 없으면 같은 명령에도 학습은 서있고 배포는 걷는다 = obs 두 항(base_vel +
