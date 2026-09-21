@@ -26,6 +26,7 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 MODES_YAML = REPO / "deploy/robots/g1/config/modes.yaml"
 HEADER = REPO / "deploy/robots/g1/include/ModeTable.h"
 SPEC_REL = "src/mjlab_g1_motion/mode_spec.py"
+PROVENANCE_TAG = "mode_spec.py @ "      # 헤더의 출처 줄 — --check 는 이 줄을 빼고 표만 비교한다
 
 ENUMS = {
     "ref_source": ("RefSource", {"none": "None", "vr": "Vr", "clip": "Clip"}),
@@ -135,9 +136,18 @@ def main() -> None:
     a = ap.parse_args()
     text = build(a.mjlab)
     if a.write:
-        HEADER.write_text(text); print(f"[gen] wrote {HEADER}")
-    elif not HEADER.exists() or HEADER.read_text() != text:
+        HEADER.write_text(text); print(f"[gen] wrote {HEADER}"); return
+    if not HEADER.exists():
+        sys.exit("ModeTable.h 가 없다 — --write 로 생성할 것")
+    # 🔴 «표» 와 «출처 줄» 을 따로 본다. mode_spec.py 에 주석만 고친 커밋이 생겨도 출처 해시는
+    #    바뀌는데, 그걸 «표가 원장과 다르다» 로 실패시키면 배포 전 점검이 헛되이 빨개진다.
+    def body(s: str) -> str:
+        return "\n".join(l for l in s.splitlines() if PROVENANCE_TAG not in l)
+    have = HEADER.read_text()
+    if body(have) != body(text):
         sys.exit("ModeTable.h 가 원장(mode_spec.py + modes.yaml)과 다르다 — --write 로 다시 생성할 것")
+    if have != text:
+        print("[gen] ModeTable.h == 원장 (표 동일 · 출처 줄만 다름 — 다음 --write 때 갱신된다)")
     else:
         print("[gen] ModeTable.h == 원장")
 
