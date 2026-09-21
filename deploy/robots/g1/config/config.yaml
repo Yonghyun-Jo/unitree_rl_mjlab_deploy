@@ -96,7 +96,7 @@ FSM:
     time_end: 1000.0
 
 
-  Mimic_Masked:        # masked-3mode flow student. keyboard: 1/2/3=mode, WASD/QE=vel, p=stop.
+  Mimic_Masked:        # masked flow student. keyboard: 1~4=mode(표 = include/ModeTable.h), [ ]=클립 선택(재생 중엔 거부), WASD/QE=vel, p=stop.
     transitions:
       Passive: LT + B.on_pressed
       Velocity: RT + A.on_pressed
@@ -104,7 +104,7 @@ FSM:
       Passive: p
       Velocity: v
 
-    # keyboard '4' = 제자리 상체 데모. LAFAN dance1_subject3 4~20s(제자리 상체 제스처) +
+    # 클립 «primary»(`[`/`]` 로 고른 뒤 '4' = mode4 재생. 기본 선택) = 제자리 상체 데모. LAFAN dance1_subject3 4~20s(제자리 상체 제스처) +
     # 끝→처음 1.0s Hermite 복귀 구간(총 17.0s). 시작이 4s인 이유 = 3.6s까지 남아있는 T-pose
     # (양팔 수평) 제외. 복귀 구간이 있어야 modulo 루프 이음매가 안 튄다(raw cut은 1.56rad 점프).
     # 🔴 2026-08-29 stage_candidates.py 가 260829_v1_ms8_noslip1_30k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
@@ -118,8 +118,8 @@ FSM:
     # 🔴 2026-09-17 stage_candidates.py 가 260917_v1_com2cm_bvt25_30k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
     #    복귀 = 아래 4줄을 260910_v1_gen9u3_noslip30_60k 로 되돌리면 된다 (--no-archive 라 그 슬롯 폴더·가중치는 그대로 있다).
     motion_file: config/policy/mimic_masked/260917_v1_com2cm_bvt25_30k/params/g1_dance1_subject3_upper16s.npz
-    motion_file_light: config/policy/mimic_masked/260917_v1_com2cm_bvt25_30k/params/g1_aiming_stand10s.npz  # keyboard '5' = 서서 상체만 test demo
-    # keyboard '6' = LAFAN dance1_subject2 통짜 재생(131.5s, 전신+이동). ⚠ mode4/5 와 달리
+    motion_file_light: config/policy/mimic_masked/260917_v1_com2cm_bvt25_30k/params/g1_aiming_stand10s.npz  # 클립 «light» = 서서 상체만 test demo
+    # 클립 «demo6» = LAFAN dance1_subject2 통짜 재생(131.5s, 전신+이동). ⚠ primary/light 와 달리
     #   ① 손질 안 한 원본이라 131.5s 마다 modulo 루프 이음매에서 0.91 rad 점프가 난다
     #   ② 제자리가 아니라 pelvis 가 4.8 m 이동하고 z 가 0.40 m 까지 내려간다(깊은 자세)
     #   → 실기 첫 시도는 반드시 사람이 하드 E-stop 을 잡고, 넓은 공간에서.
