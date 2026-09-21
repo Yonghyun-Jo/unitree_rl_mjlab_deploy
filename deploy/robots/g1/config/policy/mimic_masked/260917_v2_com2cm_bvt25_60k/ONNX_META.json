@@ -46,7 +46,7 @@
   "verify": {
     "onnx_md5": "8d165c66b85f8b6f8e8137d394b2c1ca",
     "sim2sim_walk": "★★★★☆ 헤드리스 램프 0→2 m/s: 세 후보 중 가장 매끈 — 기울기 구간별 ≤6.6°(max 11.2°) · |q̇| max 11.8 · crit 0 · 정지 pitch −1.0° · 팔벌림 24.9/24.4° (2026-09-18)",
-    "real_robot": "미실행",
+    "real_robot": "실기 1회 · 최근 09-18 13:35 · 평가 전",
     "onnx_vs_torch": "max|Δ| = 2.384e-06 (tol 0.0001) OK",
     "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",

@@ -1,0 +1,60 @@
+{
+  "exported_at": "2026-09-22",
+  "slot": "260922_v1_m1gen_v2_torso_30k",
+  "trial": "v1",
+  "trial_day": "2026-09-22",
+  "note": "3차 head(launch 69eca4e, scratch 60k 중 30k) — 260917 v1/v2/v3 와 base·manifest·steps·obs·FOOT_GEN 동일, 바뀐 것은 reward 뿐: 옛 생성기 3항(lower_gen·upper_gen·torso_tilt) 대신 «상태조건 전신 생성기 v2»(입력 자세 치우침을 teacher 쪽으로 되돌리게 증강 학습) 추종 2항(track_gen_q 2.0·track_gen_grav 0.6) + torso_tilt 복원(목표=상체 생성기 v3) · standing_com 제거. 사용자: «잘못 학습되긴 했지만 실기에서 한번 봐야» — 알려진 sim 결함을 안고 올리는 판. sim(같은 자, CPU 16 env): ① 발끝 클리어런스 중앙값 0.8~1.2 cm(1 cm 미만 20~72 %) = 실기에서 걸린 260917 판(1.0~1.8)과 같거나 낮음(7월 재현본 2.5~3.8) → 가속 시 발끝 걸림 재발 예상 ② 정지 허리 roll 이 한쪽으로 +13.4°(32 env 전부 같은 쪽, 26.5k 8.5°→30k 13.4° 표류)·무릎 L−R −12°·골반 1.7 cm 낮은 웅크림 ③ 접지 발 toe-out 20°(260917 판 12~16°) ④ 정지 CoM_x +3.0 cm(p10 +2.3; 260917 v3 +2.4·v2 +0.7)·골반 pitch +3.2° 앞 = 7월 쪽 → 실기 뒤쏠림은 줄 가능성 ⑤ 정지 팔 정상(어깨 +0.8°·팔꿈치 +23°) ⑥ 곡선 @30k: 낙상 0.79·속도추종 0.43(260917 v1 30k 0.335)·MotionSuccess 94.9. 실기 관전 = 가속 시 발끝 걸림이 260917 과 같은가 · 정지 뒤쏠림/뒷걸음이 줄었나 · 정지에서 몸통이 한쪽으로 기우나(sim 예측 13°) · 팔자 · 러닝. 다음 판(4차 = 발끝 클리어런스 항 + 정지 좌우 목표 0)의 실기 대조 기준.",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-09-20_23-05-48_s4_mode1_m1gen_v2_torso_nocom_scratch60k/model_30000.pt",
+  "mode1_run": "2026-09-20_23-05-48_s4_mode1_m1gen_v2_torso_nocom_scratch60k",
+  "mode1_launch_commit": "69eca4e3e5305d62b68d136a8f20310295ecce6e",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_md5": "e74eb521788e7a92930efcb5db421754",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행",
+    "onnx_vs_torch": "max|Δ| = 2.831e-06 (OK, tol 0.0001)",
+    "graph": "OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
+    "obs_contract_sum": "10항 합=1640 == obs 1640  OK",
+    "mask_slice": "(-22, -20) == env.command_mask()  OK"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-09-20_23-05-48_s4_mode1_m1gen_v2_torso_nocom_scratch60k/model_30000.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260922_v1_m1gen_v2_torso_30k/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "export_device": "cpu (com1 GPU 가 mode_switch 학습 중 — CUDA_VISIBLE_DEVICES='' --device cpu, 로그 exported/260922_v1_m1gen_v2_torso_30k/export_cpu.log)"
+}

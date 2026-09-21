@@ -19,6 +19,11 @@ joystick_bits: 16 # Some game controllers may only have 8-bit accuracy
 
 print_scene_information: 1 # Print link, joint and sensors information of robot
 
+# 바닥 슬라이드 마찰 μ 강제. 0 = XML 기본값(=slide 1.0). 실기 고마찰 바닥(μ 2.0~2.5) 재현용.
+# MuJoCo 는 접촉 마찰을 두 geom 원소별 max 로 합치므로 floor slide 만 올리면 발-바닥 유효 μ 가 이 값이 된다.
+# CLI 로도 스윕 가능: ./simulate/build/unitree_mujoco -f 2.5  (CLI 가 이 값을 덮어씀)
+floor_friction: 0.0
+
 enable_elastic_band: 1 # 가상 스프링 밴드 = sim 하네스. G1 29dof 배포 repo 표준 기본값
 # (ASAP sim2real/config/g1_29dof_hist.yaml:25, GR00T-WholeBodyControl g1_29dof_sonic_model12.yaml:20,
 #  g1_29dof_gear_wbc.yaml:22 전부 True. 같은 unitree_mujoco 파생 코드 — 우리만 꺼 두고 있었다.)

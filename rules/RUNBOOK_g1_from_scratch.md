@@ -79,7 +79,7 @@ G1 내부에 L2 이더넷 스위치. 표준 IP (기종/펌웨어 따라 다름 �
 | 호스트 | IP | 로그인 |
 |---|---|---|
 | Locomotion 컴퓨터(저수준 뇌, 접근 불가) | `192.168.123.161` | — |
-| **개발 컴퓨터 = Jetson Orin NX** | `192.168.123.164` | `unitree` / `123` |
+| **개발 컴퓨터 = Jetson Orin NX 16GB** | `192.168.123.164` | `unitree` / `123` |
 | Livox Mid-360 라이다 | `192.168.123.20` | — |
 
 > 지금 당신이 쓰던 `unitree@ubuntu`(Ubuntu20.04/py3.8/aarch64)가 바로 이 **Jetson(.164)** 이다.
@@ -158,7 +158,12 @@ ip addr        # 192.168.123.x 를 가진 iface 찾기 (온보드 Jetson=보통 
 ssh unitree@192.168.123.164        # pw: 123 (인터넷 노출 전 반드시 변경)
 #   또는 Type-C→HDMI로 모니터+키보드 직결
 ```
-- 하드웨어: **Jetson Orin NX 16GB**(EDU), **Unitree 커스텀 캐리어보드**.
+- 하드웨어: **Jetson Orin NX 16GB**(EDU). ← **2026-08-29 온보드 실측** (아래 3-2 표).
+  - 모듈 파트넘버 `p3767-0000` = Orin NX **16GB** (8GB면 `-0001`, Orin Nano면 `-0003`/`-0004`). RAM 15Gi·8코어 일치.
+  - ⚠ **캐리어보드는 미확정.** 예전엔 "Unitree 커스텀 캐리어보드"로 적었으나, 실측 DTS가
+    `tegra234-p3767-0000-p3768-0000-a0.dts` 인데 뒤쪽 `p3768-0000` 이 **NVIDIA 개발자 키트 캐리어**이고 모델 문자열도
+    `NVIDIA Orin NX Developer Kit`이다. (a) 진짜 devkit 캐리어이거나 (b) 커스텀 캐리어에 devkit DTS를
+    그대로 플래시한 것 — **실물 보드를 봐야 갈린다.** 그전까지 커스텀이라고 단정하지 말 것.
 - ⚠ **온보드 Orin에 서드파티 JetPack 이미지 절대 플래시 금지** — Unitree 커스텀 BSP라 벽돌됨. 위험 작업 전 이미지 백업.
 
 ### 3-2. OS/버전 확인
@@ -167,7 +172,27 @@ cat /etc/nv_tegra_release   # L4T R35.x → JetPack 5.1.x
 lsb_release -a              # Ubuntu 20.04
 python3 --version           # 3.8 (시스템 python — 건드리지 말 것)
 ```
-- Ubuntu 20.04 + py3.8 = JetPack 5.1.x / CUDA 11.4. (JetPack6면 22.04/py3.10.)
+
+#### 실측값 (2026-08-29, 해동 연구소 휴머노이드 센터 유닛)
+확인하러 돌리기 전에 **이미 답이 있다.** 다른 유닛이면 위 명령으로 다시 뜰 것.
+
+| 항목 | 값 |
+|---|---|
+| 모델 / DTS | `NVIDIA Orin NX Developer Kit` / `tegra234-p3767-0000-p3768-0000-a0.dts` |
+| **L4T** | **R35.3.1** (2023-03-19, `nvidia-l4t-core 35.3.1-20230319081403`) |
+| **JetPack** | **5.1.1** |
+| **CUDA** | **11.4.19** |
+| OS / Python / 커널 | Ubuntu 20.04.6 LTS / 3.8.10 / 5.10.104-tegra |
+| CPU / RAM / 전력모드 | 8코어 / 15Gi(=16GB) / **MAXN**(mode 0) |
+
+```bash
+# 한 번에 다시 뜨기
+ssh unitree@192.168.123.164 'tr -d "\0" </proc/device-tree/model; echo
+  tr -d "\0" </proc/device-tree/nvidia,dtsfilename; echo
+  cat /etc/nv_tegra_release; dpkg -l nvidia-l4t-core | tail -1; free -h | head -2; nproc'
+```
+
+- Ubuntu 20.04 + py3.8 = JetPack 5.1.x / CUDA 11.4. (JetPack6면 22.04/py3.10.) → 위 실측과 일치.
 - ⚠ **시스템 python3.8을 apt remove/심링크 변경 금지** — L4T·apt가 의존.
 
 ### 3-3. 빌드 툴체인

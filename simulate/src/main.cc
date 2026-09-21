@@ -324,6 +324,26 @@ namespace
       sim.run = 0;
     }
 
+    // Optional floor-friction override — reproduce a high-friction real floor (μ≈2.0~2.5).
+    // MuJoCo combines auto-generated contact friction as the element-wise MAX of the two
+    // geoms, so raising the floor plane's slide coefficient above the foot's (XML default
+    // 1.0) makes the effective foot-ground μ equal to floor_friction. Torsion/roll stay at
+    // the XML default. Set via config.yaml `floor_friction` or CLI `-f`; 0 = no override.
+    if (param::config.floor_friction > 0.0)
+    {
+      int floor_gid = mj_name2id(mnew, mjOBJ_GEOM, "floor");
+      if (floor_gid >= 0)
+      {
+        mnew->geom_friction[3 * floor_gid + 0] = param::config.floor_friction;  // slide only
+        std::printf("floor friction (slide μ) overridden to %.3f\n", param::config.floor_friction);
+      }
+      else
+      {
+        std::printf("floor_friction=%.3f requested, but no geom named \"floor\" in scene — skipped\n",
+                    param::config.floor_friction);
+      }
+    }
+
     return mnew;
   }
 

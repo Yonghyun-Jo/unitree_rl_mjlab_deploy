@@ -46,7 +46,7 @@
   "verify": {
     "onnx_md5": "447f7f7fabc04fa5ca4ccc2e9fc8ac7c",
     "sim2sim_walk": "★★★☆☆ 헤드리스 램프 0→2 m/s: 낙상 0 · 기울기 max 14.9°(2 m/s) · crit 1샘플 초과 3회(트립 5 미달) · 정지 pitch +0.9° · 팔벌림 24.4/25.8°. v2 와 정지 CoM A/B 용 (2026-09-18)",
-    "real_robot": "미실행",
+    "real_robot": "실기 1회 · 최근 09-18 13:37 · 평가 전",
     "onnx_vs_torch": "max|Δ| = 3.755e-06 (tol 0.0001) OK",
     "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",

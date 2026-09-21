@@ -25,6 +25,7 @@ inline struct SimulationConfig
 
     int enable_elastic_band;
     int band_attached_link = 0;
+    double floor_friction = 0.0;  // 0 = keep XML default (slide μ≈1.0); >0 overrides floor geom slide friction
 
     void load_from_yaml(const std::string &filename)
     {
@@ -41,6 +42,8 @@ inline struct SimulationConfig
             joystick_bits = cfg["joystick_bits"].as<int>();
             print_scene_information = cfg["print_scene_information"].as<int>();
             enable_elastic_band = cfg["enable_elastic_band"].as<int>();
+            // optional (backward compatible: absent key keeps floor_friction = 0.0 = no override)
+            if (cfg["floor_friction"]) floor_friction = cfg["floor_friction"].as<double>();
         }
         catch(const std::exception& e)
         {
@@ -63,6 +66,7 @@ inline po::variables_map helper(int argc, char** argv)
         ("network,n", po::value<std::string>(&config.interface), "DDS network interface; -n eth0")
         ("robot,r", po::value<std::string>(&config.robot), "Robot type; -r go2")
         ("scene,s", po::value<std::filesystem::path>(&config.robot_scene), "Robot scene file; -s scene_terrain.xml")
+        ("floor_friction,f", po::value<double>(&config.floor_friction), "Override floor slide friction (μ); -f 2.5 (0/omit = XML default)")
     ;
 
     po::variables_map vm;
