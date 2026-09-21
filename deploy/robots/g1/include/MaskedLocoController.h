@@ -230,7 +230,8 @@ struct MaskedLocoController {
     const ModeGait& mg = mode_gait[mode_table::row(cmd_mode).id];   // 범위 밖은 mode1 행
     height_scale = mg.height_scale;
     stance_z     = mg.stance_z;
-    // 1) base_vel spline (lerp last->target), then mask mode3.
+    // 1) base_vel spline (lerp last->target), then zero the command where the table says the mode
+    //    does not take one (base_vel_live == false). 번호가 아니라 성질이다.
     if (bv_ramp_rem > 0) {
       bv_ramp_rem -= 1;
       bv_blend = 1.0f - float(bv_ramp_rem) / std::max(1, bv_ramp_steps);

@@ -1,6 +1,6 @@
 #pragma once
 // ModeTable.h — 🔴 생성 파일. 손으로 고치지 않는다.  python3 deploy/scripts/gen_mode_table_header.py --write
-//   학습 사실: mjlab_g1_motion/mode_spec.py @ 45dc2c9
+//   학습 사실: mjlab_g1_motion/mode_spec.py @ 45dc2c9c9be0
 //   배포 사실: deploy/robots/g1/config/modes.yaml
 // C++ 은 모드를 «번호» 로 비교하지 않고 이 표의 «성질» 을 묻는다 (rules/ADDING_A_MODE.md).
 #include <array>

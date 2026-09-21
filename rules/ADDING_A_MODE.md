@@ -38,7 +38,7 @@ bash deploy/robots/g1/tests/run_unit_tests.sh
 
 새 모드를 어느 채널로 요청할 수 있게 할지는 따로 정한다:
 - **키보드**: 표의 `key` 로 자동 — 새 행을 채우면 그 키로 바로 요청된다(`State_Mimic.cpp` 가 `mode_table::row(m).key` 로 순회).
-- **클립 고르기**: `[` / `]` 는 모드와 무관하게 `g_clips` 를 순회한다(코드 불필요).
+- **클립 고르기**: `[` / `]` 가 `g_clips` 를 순회한다(코드 불필요). 단 **`ref_source: clip` 인 모드에 있는 동안은 거부**된다(한 줄 남기고 아무 일도 안 일어난다) — 클립을 «재생 중에» 갈면 참조가 crossfade·다리 램프·되감기·재앵커 없이 점프한다. 고르는 것은 그 모드에 **들어가기 전**이다.
 - **GUI(`/dev/shm/g1_masked_gui`)·VR**: `g_channel_may_request()` 가 표에서 `safety: upright_only` 인 **모든** 모드를 통과시킨다(옛 `1 <= cmd_mode <= 3` 검사를 성질로 옮긴 것 — 번호가 아니라 성질을 본다). 즉 새 모드를 `upright_only` 로 선언하면 **그 표 행이 생기는 순간 코드를 안 건드려도 GUI/VR 에서 바로 눌린다** — `safety` 를 고를 때 이걸 의식할 것. `ground_capable` 모드만 이 채널에서 막히며, 그 모드도 GUI/VR 에서 누르게 하려면 `g_channel_may_request()` 를 **의도적으로** 넓혀야 한다.
 
 ## 4. 확인

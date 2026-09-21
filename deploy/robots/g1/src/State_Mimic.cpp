@@ -135,10 +135,13 @@ static uint32_t g_gui_last_seq = 0;
 // 조작자의 모드 요청이 들어오는 유일한 문. 거부되면 이유를 한 줄 남긴다(같은 모드 재요청은 조용히 통과).
 // ⚠ GUI·VR 은 50 Hz 로 들어온다 — 같은 거부를 매 틱 찍으면 정책 스레드에서 초당 50번 I/O 다.
 //    그래서 «값이 바뀔 때만» 남긴다.
-static int g_reject_last = 0;
+// 🔴 «아무것도 안 눌렀다» 표시는 -1 이다. 0 이 아니다 — 초기화 안 된 shm 구조체는 0 으로 읽히므로
+//    0 을 센티넬로 쓰면 그 쓰레기 값의 거부가 영영 안 찍힌다(있는데 안 보이는 고장).
+static constexpr int G1_REJECT_NONE = -1;
+static int g_reject_last = G1_REJECT_NONE;
 static void g_request_mode(int m, const char* src) {
     const g1::ModeResult r = g_mode.request(m);          // B2: ExitContext 에 높이 추정·자세 버튼 상태를 넣는다
-    if (r.accepted) { g_reject_last = 0; return; }
+    if (r.accepted) { g_reject_last = G1_REJECT_NONE; return; }
     if (m == g_reject_last) return;
     g_reject_last = m;
     printf("\r\n[cmd_mode] %s -> %d 거부: %s\r\n", src, m, r.reason); fflush(stdout);
@@ -261,7 +264,7 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     if (k == g_kb_last) return;
     g_kb_last = k;
     if (k.empty()) return;
-    g_reject_last = 0;   // 사람이 «누른» 입력에는 매번 한 줄 답한다 (중복 억제는 50 Hz 채널 전용)
+    g_reject_last = G1_REJECT_NONE;   // 사람이 «누른» 입력에는 매번 한 줄 답한다 (중복 억제는 50 Hz 채널 전용)
     bool vel_changed = false;
     if      (k == "w") { g_kb_vx = clamp_vx(g_kb_vx + KB_STEP); vel_changed = true; }  // forward
     else if (k == "s") { g_kb_vx = clamp_vx(g_kb_vx - KB_STEP); vel_changed = true; }  // backward
@@ -270,12 +273,24 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     else if (k == "q") { g_kb_wz = std::clamp(g_kb_wz + KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CCW (반시계)
     else if (k == "e") { g_kb_wz = std::clamp(g_kb_wz - KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CW  (시계)
     else if (k == " ") { g_kb_vx = g_kb_vy = g_kb_wz = 0.0f;                          vel_changed = true; }  // stop
-    else if (k == "[" || k == "]") {                       // 클립 모드가 재생할 클립 고르기
-        const int n = (int)g_clips.size();
-        if (n > 0) {
-            const int next = (g_mode.clip_id() + (k == "]" ? 1 : n - 1)) % n;
-            g_mode.select_clip(next, n);
-            printf("\r\n[clip] %d/%d «%s»\r\n", next, n, g_clips[next].name); fflush(stdout);
+    else if (k == "[" || k == "]") {                       // 클립 모드가 «들어가기 전에» 고른다
+        // 🔴 재생 중(ref_source=clip)에는 바꾸지 않는다. 클립 정체가 바뀌면 참조가 통째로 갈리는데,
+        //    그것을 무해하게 만드는 넷(crossfade · 다리 q_ref 램프 · 되감기 · init_quat 재앵커)은
+        //    전부 «전환 블록»(g_mode.consume_switch()) 안에서만 돈다. 여기서 바꾸면 그 밖이다:
+        //    masked_joint_command 가 switch_alpha==1.0 으로 새 로더를 즉시 읽어 전신 q_ref 가
+        //    한 틱에 점프하고, init_quat 은 옛 클립에 앵커된 채 남고, 되감는 칸은 t0 가 낡아
+        //    중간 프레임부터 시작하며, ref_foot_height 도 같이 튄다. 실기에선 모터 보호정지다.
+        //    옛 코드에는 이 구멍이 없었다 — 클립 정체는 «모드 전환과 함께만» 바뀌었다.
+        if (g_ref_is_clip()) {
+            printf("\r\n[clip] 재생 중에는 못 바꾼다 — 먼저 다른 모드로 나갔다가 고를 것\r\n");
+            fflush(stdout);
+        } else {
+            const int n = (int)g_clips.size();
+            if (n > 0) {
+                const int next = (g_mode.clip_id() + (k == "]" ? 1 : n - 1)) % n;
+                g_mode.select_clip(next, n);
+                printf("\r\n[clip] %d/%d «%s»\r\n", next, n, g_clips[next].name); fflush(stdout);
+            }
         }
     }
     else {
@@ -473,6 +488,8 @@ REGISTER_OBSERVATION(base_vel_command)
 // 정책에겐 «두 발 접지» 라고 말하고 있었다 = 학습과 정면으로 다른 obs.
 REGISTER_OBSERVATION(ref_foot_height)
 {
+    // foot_z: none = 학습에서 foot_z_live=False → 발-z 명령 두 칸은 «정확히 0» 이다(생성기 stance 값이 아니다).
+    if (g_mode.row().foot_z == mode_table::FootZ::None) return std::vector<float>{0.f, 0.f};
     if (g_footz_src != FootZSrc::Gen && g_mode.row().foot_z == mode_table::FootZ::Ref) {
         auto loader = active_ref_loader();     // 레퍼런스 발 z 가 원천인 모드
         bool have = false;
@@ -700,9 +717,43 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     // 🔴 여기서는 «읽어 담기만» 한다 — 거는 것은 enter() 다. 이 클래스는 FSM 상태마다 하나씩
     //    만들어지므로(Mimic_Dance1_subject2 / Mimic_Masked) 생성자에서 전역에 걸면 나중에
     //    만들어진 쪽이 남의 집합을 조용히 덮어쓴다(g_build_clips 와 같은 함정).
-    if (dcfg["modes"] && dcfg["modes"].IsSequence()) {
-        slot_modes_.clear();
-        for (const auto& n : dcfg["modes"]) slot_modes_.push_back(n.as<int>());
+    // 🔴 검증하고 죽인다 — requires: 와 같은 자리, 같은 방식(critical + die_startup). 이유 셋:
+    //    ① n.as<int>() 는 오타(`modes: [1, 2, tree]`)에 YAML::TypedBadConversion 을 던지는데 이
+    //       생성자는 CtrlFSM(YAML) -> main() 까지 catch 가 하나도 없다 = std::terminate/abort.
+    //       조작자에겐 core dump 뿐이고 «어느 슬롯의 무슨 값이 틀렸나» 가 안 남는다.
+    //    ② 폴백 모드가 빠진 목록(또는 `modes: []`)은 qd 안전 래치를 «영원히» 못 풀게 만든다 —
+    //       force() 는 supports() 를 안 보지만 request() 는 보므로, 조작자가 키를 눌러도
+    //       requested() 가 폴백으로 안 바뀐다 (rules/ADDING_A_MODE.md 함정 (a)).
+    //    ③ 표에 없는 번호는 row() 가 조용히 첫 행으로 바꿔 «아는 모드» 인 척한다.
+    if (dcfg["modes"]) {
+        if (!dcfg["modes"].IsSequence()) {
+            spdlog::critical("[mode] 슬롯 '{}' 의 deploy.yaml 에 modes: 가 목록이 아니다 — `modes: [1, 2, 3, 4]` 형식이어야 한다",
+                             slot_name);
+            die_startup();
+        }
+        std::vector<int> ms;
+        for (const auto& n : dcfg["modes"]) {
+            int m = 0;
+            try {
+                m = n.as<int>();
+            } catch (const std::exception& e) {
+                spdlog::critical("[mode] 슬롯 '{}' 의 modes: 에 정수가 아닌 값이 있다: '{}' ({})",
+                                 slot_name, n.Scalar(), e.what());
+                die_startup();
+            }
+            if (!mode_table::valid(m)) {
+                spdlog::critical("[mode] 슬롯 '{}' 의 modes: 에 표에 없는 모드 {} 가 있다 (표는 1~{}, config/modes.yaml)",
+                                 slot_name, m, mode_table::N_MODES);
+                die_startup();
+            }
+            ms.push_back(m);
+        }
+        if (std::find(ms.begin(), ms.end(), G1_FALLBACK_MODE) == ms.end()) {
+            spdlog::critical("[mode] 슬롯 '{}' 의 modes: 에 폴백 모드 {} 가 없다 — qd 안전 래치를 조작자가 풀 수 없다 "
+                             "(rules/ADDING_A_MODE.md 함정 (a))", slot_name, G1_FALLBACK_MODE);
+            die_startup();
+        }
+        slot_modes_ = ms;
     }
     {
         std::string s; for (int m : slot_modes_) s += std::to_string(m) + " ";

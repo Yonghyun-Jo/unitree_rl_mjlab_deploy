@@ -47,8 +47,17 @@ def load_mode_spec(mjlab: pathlib.Path):
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod          # dataclass 가 모듈을 찾을 수 있게
     spec.loader.exec_module(mod)
-    commit = subprocess.run(["git", "-C", str(mjlab), "log", "-1", "--format=%h", "--", SPEC_REL],
-                            capture_output=True, text=True).stdout.strip() or "unknown"
+    # 🔴 길이를 여기서 고정한다. `%h` 의 축약 길이는 repo 크기·core.abbrev 에 따라 «머신마다» 달라서
+    #    (7 vs 8 …) 그대로 헤더에 박으면 다른 머신의 --check 가 내용은 같은데 «원장과 다르다» 로
+    #    헛되이 실패한다. %H 를 받아 파이썬에서 12 자로 자른다.
+    full = subprocess.run(["git", "-C", str(mjlab), "log", "-1", "--format=%H", "--", SPEC_REL],
+                          capture_output=True, text=True).stdout.strip()
+    commit = full[:12] if full else "unknown"
+    # 커밋 안 된 변경이 있으면 그 해시는 «방금 읽은 내용» 이 아니다 — 표시해 둔다(재현 불가 표시).
+    dirty = subprocess.run(["git", "-C", str(mjlab), "status", "--porcelain", "--", SPEC_REL],
+                           capture_output=True, text=True).stdout.strip()
+    if dirty:
+        commit += "+dirty"
     return mod, commit
 
 

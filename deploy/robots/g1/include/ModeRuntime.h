@@ -70,6 +70,13 @@ class ModeRuntime {
   // 직전 consume 때의 모드와 지금이 다르면 true — 한 틱 안에서 바뀌었다가 되돌아온 것은 전환이 아니다.
   // (조작 채널이 모드를 요청한 같은 틱에 안전 폴백이 그것을 되돌리는 경우가 그렇다. 전이마다 래치를
   //  세우면 그 틱이 «전환» 으로 보여 crossfade·램프가 매 틱 재무장한다.)
+  //
+  // 🔴 계약: 이름은 질문처럼 생겼지만 «상태를 소비한다» — 한 번 true 를 내면 그 에지는 사라진다.
+  //    ▸ 제어 틱마다 **호출자는 정확히 하나**다 = 정책 루프(State_Mimic.cpp policy_thread).
+  //    ▸ 둘째 소비자를 두지 않는다. 두면 먼저 부른 쪽이 에지를 «훔쳐» 다른 쪽은 전환을 영영 못 본다
+  //      (crossfade·다리 램프·되감기·재앵커가 조용히 빠진다 — 에러 없이 거동만 틀려진다).
+  //    ▸ 전환을 알아야 하는 코드가 더 생기면 여기를 또 부르지 말고 **첫 호출자의 결과(bool)를 받아 쓴다.**
+  //    ▸ 「지금 무슨 모드인가」만 알고 싶으면 mode()/row() 를 쓴다 — 이건 그 질문의 답이 아니다.
   bool consume_switch() { const bool s = mode_ != last_consumed_; last_consumed_ = mode_; return s; }
 
   int  clip_id() const { return clip_id_; }

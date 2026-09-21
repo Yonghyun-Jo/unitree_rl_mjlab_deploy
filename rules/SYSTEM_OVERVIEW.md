@@ -48,17 +48,19 @@ C++ 제어기 **`g1_ctrl`가 "뇌"**이고, PICO VR 입력은 그 뇌에 **`/dev
 - FSM(`config/config.yaml`): `Passive → FixStand → Velocity / Mimic_Masked`
   - `Velocity`(id 3): 순수 보행 정책. **PICO 불필요.**
   - `Mimic_Masked`(id 6, `gmt_multihead_v0` ONNX): 텔레옵 정책. **여기가 PICO 대상.**
-- **cmd_mode 3단 마스킹** (`State_Mimic.cpp:17-24`):
-  | mode | 의미 | 다리 | 상체(팔·waist) | VR ref |
-  |---|---|---|---|---|
-  | 1 | full-auto 보행 | 자율 | 자율 | 무시(썸스틱 base_vel만) |
-  | 2 | 상체 teleop | 자율 | VR 추종 | 상체만 사용 |
-  | 3 | 전신 teleop | VR 추종 | VR 추종 | 전신 사용 |
-  | 4/5 | 데모 클립 | 클립 | 클립 | VR 무시 |
+- **모드 마스킹** — 모드의 성질은 표가 갖는다(`config/modes.yaml` + 학습 `mode_spec.py` → 생성 `include/ModeTable.h`). C++는 번호를 비교하지 않는다(`rules/ADDING_A_MODE.md`):
+  | mode | 표 이름 | 의미 | 다리 | 상체(팔·waist) | VR ref |
+  |---|---|---|---|---|---|
+  | 1 | `loco` | full-auto 보행 | 자율 | 자율 | 무시(썸스틱 base_vel만) |
+  | 2 | `upper` | 상체 teleop | 자율 | VR 추종 | 상체만 사용 |
+  | 3 | `track` | 전신 teleop | VR 추종 | VR 추종 | 전신 사용 |
+  | 4 | `playback` | **고른** 클립 재생 | 클립 | 클립 | VR 무시 |
+
+  로그 라벨(`[cmd_mode] -> N (이름)`)은 이 표 이름이다. 표엔 `5`(`ground`)·`6`(`crawl`) 행도 있지만 **지금 슬롯의 ONNX가 모르므로** 요청하면 거부 한 줄만 찍힌다(`이 슬롯(ONNX)이 모르는 모드`).
 - shm 폴링: `g_poll_gui()`(`State_Mimic.cpp:65`), `g_poll_vr()`(`:109`) — 매 제어 스텝.
 - 시뮬/로봇 연결: `./g1_ctrl --network=<iface>` (`main.cpp:37` ChannelFactory Init).
   - **sim2sim = `lo`**, **실로봇 = 실제 iface(예: enp5s0)**.
-- 키보드 백업(터미널 포커스): `1/2/3`=mode, `WASD/QE`=속도, `p`=정지, `v`=Velocity, `m`=Mimic_Masked.
+- 키보드 백업(터미널 포커스): `1/2/3/4`=mode(표의 `key` 열), `[`/`]`=재생할 클립 고르기(**클립 재생 모드가 아닐 때만** — 재생 중엔 거부 한 줄), `5`/`6`=표엔 있으나 지금 슬롯이 모르는 모드 → 거부 로그, `WASD/QE`=속도, `p`=정지, `v`=Velocity, `m`=Mimic_Masked.
 
 ### 2.2 IPC 채널 (파일 계약 — Python↔C++ 레이아웃 동기 필수)
 | 파일 | magic | 내용 | 쓰는 쪽 | 읽는 쪽 |
@@ -253,13 +255,15 @@ motor에 쓰는 q_target의 **per-tick 변화량**을 `vel_max · dt`로 캡한�
 
 ### Layer 3 — 측정 qd 폭주 → warn/crit (active, `enable_qd_guard`, policy_thread 50Hz)
 
-`policy_thread`(50Hz — `g_cmd_mode`/`notify_mode_switch`와 같은 스레드) 루프에서 측정
+`policy_thread`(50Hz — `g_mode`(`ModeRuntime`)/`notify_mode_switch`와 같은 스레드) 루프에서 측정
 `joint_vel`의 `max|qd|`를 매 틱 감시한다(`js_qd_severity`). **`over_ticks`(기본 5 = 0.1s@50Hz)
 연속 초과** 시:
-- **warn**(`max|qd| > qd_warn`) → **mode1 강제(래치)**. 래치 중엔 매 틱 `g_cmd_mode = 1`로
-  덮어써 mode1을 유지(soft). **수동 복귀**: 조작자가 mode1을 **명시적으로 요청**(X버튼 또는
-  키보드 `'1'`, 내부적으로 `g_req_mode == 1`)해야 래치 해제 — qd가 아직 높으면 다음 sustained
-  구간에서 재래치될 수 있다.
+- **warn**(`max|qd| > qd_warn`) → **폴백 모드(표의 첫 행 = mode1) 강제(래치)**. 래치 중엔 매 틱
+  `g_mode.force(G1_FALLBACK_MODE)`로 덮어써 유지(soft — `force()`는 이탈 조건·슬롯 지원을 안 본다).
+  **수동 복귀**: 조작자가 폴백 모드를 **명시적으로 요청**(X버튼 또는 키보드 `'1'`)해서
+  `g_mode.requested() == G1_FALLBACK_MODE`가 되어야 래치 해제 — qd가 아직 높으면 다음 sustained
+  구간에서 재래치될 수 있다. ⚠ `requested()`는 요청이 **받아들여질 때만** 갱신되므로, 슬롯
+  `deploy.yaml`의 `modes:`에 폴백 모드가 없으면 래치를 영영 못 푼다(기동 시 거부하고 죽는다).
 - **crit**(`max|qd| > qd_crit`) → `js_qd_crit_latched_`(atomic) 래치 → FSM `registered_checks`가
   이를 읽어 **Passive(damping) 전이**(래치, hard). 복귀: 키보드 `'f'`로 FixStand 재기립 후,
   `Mimic_Masked`를 **다시 진입**(FSM 재진입, `enter()`에서 warn/crit 래치·카운터 리셋)해야 해제.
