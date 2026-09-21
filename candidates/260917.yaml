@@ -1,0 +1,27 @@
+# 실기 후보 — 2026-09-17 (stage_candidates.py 입력). 슬롯 이름 = <day>_<alias>_<label>
+day: 260917
+base: logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt
+manifest: motions/g1_flow_specialists_v2.yaml
+mode2_ckpt: logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt
+mode3_ckpt: logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt
+sampling_steps: 6
+template_slot: 260910_v1_gen9u3_noslip30_60k   # 직전 실기 슬롯 — 계약(obs·FOOT_GEN·requires) 동일, 차이는 주석뿐
+candidates:
+  - alias: v1
+    label: com2cm_bvt25_30k
+    mode1_ckpt: logs/rsl_rl/g1_student/2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_30000.pt
+    # ↑ 원본 그대로 있음(09-18 확인). 솎기 대비 같은 바이트 사본: <run>/keep_rr260917_v1_model_30000.pt
+    min_swing: 0.08
+    note: "260910 v1(gen9u3_noslip30 60k) 과 base·생성기 2벌·manifest·steps·obs·FOOT_GEN 동일, 바뀐 것은 reward·DR 뿐 (launch 100f80f, scratch): ① 마찰 DR 0.3~3.0 → 0.8~1.6 ② 정지 상체 목표 ≈4°→10°(scale 1.15, 보상 세기 1.0) ③ standing_com 목표 +4→+2 cm · 아주 저속(eff≤0.15)까지 ④ no_slip −1.5×정지배율 20 (정지 실효 30 = v1) ⑤ base_vel_track 2.0→2.5 ⑥ contact_force_limit −1→−0.5 · contact_momentum −1e-3→−5e-4 ⑦ 저속 편중 빈도 절반(slow_prob 0.075). 30k 중간 곡선(같은 iteration, v1 계보 scratch 대비): reward 52.3 vs 49.0(가중치 인공물 +0.15) · 낙상 0.71 vs 0.75 · 속도추종(가중치 제거) +15 % · MotionSuccess 95.62 vs 95.46 · 정지 중 발 들기(stand_planted) 09-15 run 의 1/4 = v1 수준. 명령 0 프로브: 09-15 run@19k 들기 33회/env·뒷걸음 p50 −5.6 cm 재현, 이 후보는 들기 0·dx p50 −0.2 cm, 정지 CoM_x +1.8~2.1 cm (260910 v1 +2.4~2.7). 실기 관전 = 260914 v1 대비 러닝 보폭 · 정지 때 뒤로 기울기/뒷걸음 · 정지 상체 10° 자연스러움 · 발 절기."
+
+  - alias: v2
+    label: com2cm_bvt25_60k
+    mode1_ckpt: logs/rsl_rl/g1_student/2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_59999.pt
+    min_swing: 0.08
+    note: "v1(같은 run 30k) 의 완주본 60k. 곡선(최종 1k 중앙값, 가중치 제거): reward 57.4(30k 52.3 · 260910 v1 52.5) — 54~57k 57.32 → 57~60k 57.36 평탄 · 낙상 0.625(= 260910 v1) · 속도추종 0.526(v1 +12 %) · foot_z 0.790(v1 0.763) · upper_gen 0.772(v1 0.781) · 착지 충격 contact_force_limit 0.060/momentum 45.9(v1 0.044/41.8 — 가중치 절반이라 더 세게 딛음, 의도) · MotionSuccess 95.95(v1 95.91). 정지 프로브(64~128 env, 정지 1 s 뒤 9 s): 발 들기 0 · 뒷걸음 없음(dx p50 −1.0 cm, 뒤로 >5 cm 0~2 %) · ⚠ 정지 CoM_x +0.3~0.8 cm (DR on +0.6~1.0) = 30k(+1.8~2.2)·260910 v1(+2.4~2.8) 보다 뒤, 목표 2 cm 미달 — 55k +3.6/+1.4 · 57.5k +2.6/+2.0 으로 체크포인트마다 ±1.5 cm 출렁임(추세 아님). 정지 팔벌림 p50 22.9°(p95 26.9, 30k 20.4 · v1 20.8) · torso pitch +9.6°(30k +8.9 · v1 +3.8). 실기 관전 = 30k 대비 러닝 보폭(추종 +14 %) · 정지 뒤로 기울기(CoM 이 가장 뒤인 판)."
+  - alias: v3
+    label: com2cm_bvt25_57k5
+    mode1_ckpt: logs/rsl_rl/g1_student/2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_57500.pt
+    # ↑ 솎기 대비 같은 바이트 사본: <run>/keep_rr260917_v3_model_57500.pt
+    min_swing: 0.08
+    note: "v2(60k) 와 같은 run 의 57.5k — 정지 CoM 이 목표(+2 cm)에 가장 가까운 체크포인트. 곡선(57~58k 중앙값, 가중치 제거): reward 57.3(60k 57.4) · 낙상 0.667(60k 0.625) · 속도추종 0.521(60k 0.526, 260910 v1 0.468) · foot_z 0.786 · upper_gen 0.773 · MotionSuccess 95.84(60k 95.95). 정지 프로브(DR off, 64 env): 발 들기 0 · 뒷걸음 없음(dx p50 +2.7/+0.9 cm, 후반 4.5 s −0.4/−0.6) · 정지 CoM_x +2.6/+2.0 cm (30k +2.1/+1.8 · 60k +0.8/+0.3 · 260910 v1 +2.4/+2.7). 정지 팔벌림 p50 21.0°(p95 25.6, CPU 32 env) · torso pitch +9.4°. 실기 관전 = v2 와 거의 같은 보행에서 정지 CoM 만 다를 때 «정지 뒤로 기울기» 가 줄어드는가 (v2 vs v3 가 정지 CoM 의 A/B)."
