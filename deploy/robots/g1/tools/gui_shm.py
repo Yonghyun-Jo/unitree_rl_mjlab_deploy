@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import struct
+import time
 
 SHM_PATH = "/dev/shm/g1_masked_gui"
 MAGIC = 0x6704          # v2 (2026-09-22). v1 = 0x6701 — C++ 가 거부한다(옛 GUI 가 새 제어기를 조종하지 않게).
@@ -41,7 +42,11 @@ def write(state: dict) -> None:
     """Atomically publish the control struct. 필수 키: seq, vx, vy, wz, period_steps, height_scale, turn_k.
     선택 키: mode_req(0), m5_preset(0), m5_press_seq(0), clip_req(−1). Increments state['seq'].
     1회성 칸(mode_req · m5_preset · clip_req)은 보낸 뒤 «요청 없음» 으로 되돌린다. seq·m5_press_seq 는
-    구조체 칸이 uint32 라 32 bit 에서 감는다(struct 'I' 는 넘치면 예외를 던진다)."""
+    구조체 칸이 uint32 라 32 bit 에서 감는다(struct 'I' 는 넘치면 예외를 던진다).
+    seq 가 0 이면(쓰는 쪽의 첫 쓰기) 시각(ns)으로 시드한다 — 쓰는 쪽 셋(GUI·PICO 브리지·replay_cmd)이 모두
+    0 부터 세면, 다른 쓰는 쪽이 방금 쓴 것과 같은 seq 의 프레임을 제어기가 «이미 읽은 것» 으로 버린다."""
+    if int(state["seq"]) == 0:
+        state["seq"] = time.time_ns() & 0xFFFFFFFF
     state["seq"] = (int(state["seq"]) + 1) & 0xFFFFFFFF
     buf = struct.pack(FMT, MAGIC, state["seq"], int(state.get("mode_req", 0)),
                       state["vx"], state["vy"], state["wz"],

@@ -24,6 +24,7 @@ extern std::string g_network_iface;   // main.cpp — 진단 부하 인터록 �
 #include <string>
 #include <cstdint>     // GUI shared-memory struct
 #include <cstdio>      // printf (base_vel command readout)
+#include <cmath>       // std::isfinite (GUI 프레임의 비유한 값 거름)
 #include <cstdlib>     // std::getenv (G1_FOOTZ_SRC 진단 스위치)
 
 static Eigen::Quaternionf init_quat;
@@ -266,6 +267,20 @@ static void g_poll_gui()
         return;
     }
     if (n != sizeof(g) || g.magic != GUI_CTRL_MAGIC) return;         // (기준선은 유효한 v2 프레임을 볼 때까지 미룬다)
+    // 비유한(NaN·inf) 실수 칸이 하나라도 있으면 프레임을 통째로 버린다 — std::clamp 는 NaN 을 그대로 통과시켜
+    // 속도 명령·발 생성기에 NaN 이 들어간다. seq 는 기준으로 삼아 같은 프레임을 매 틱 다시 읽지 않는다
+    // (알림은 나쁜 프레임마다 한 번). 다음 정상 프레임은 그대로 먹는다.
+    if (!std::isfinite(g.vx) || !std::isfinite(g.vy) || !std::isfinite(g.wz) ||
+        !std::isfinite(g.turn_k) || !std::isfinite(g.height_scale)) {
+        if (g.seq != g_gui_last_seq) {
+            g_gui_last_seq = g.seq;
+            g_gui_rebase = false;                                     // 이 체류의 기준선도 이것으로 끝
+            printf("\r\n[gui seq=%u] 거부: 비유한 값(vx=%g vy=%g wz=%g turn_k=%g height_scale=%g) — 프레임 통째로 무시\r\n",
+                   g.seq, g.vx, g.vy, g.wz, g.turn_k, g.height_scale);
+            fflush(stdout);
+        }
+        return;
+    }
     if (g_gui_rebase) {
         // 1회성 요청도 파일에는 «마지막 쓰기» 로 남는다 — 그대로 먹으면 Mimic 밖에서 누른 «5» 가 m 직후
         // 재생된다(서 있던 로봇이 드러눕는다). 속도·foot-gen 도 적용하지 않는다: 체류마다 다시 잡으므로
@@ -1299,6 +1314,13 @@ void State_Mimic::enter()
                                          // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
     g_gui_rebase = true;                 // GUI 파일은 지우지 않는다(GUI 가 다시 안 쓸 수 있다) — 이 체류의 첫 poll 이
                                          // 기준선만 잡는다(g_poll_gui). 정책 스레드가 뜨기 전이라 경합 없음.
+    // 🔴 모든 체류는 «멈춤» 으로 시작한다 — 속도 명령은 사람이 다시 준다. g_kb_* 는 체류를 넘어 남는데,
+    //    Mimic 밖에서 쓴 «속도를 낮추는» 프레임(넘어져 Passive 인 동안 스틱을 놓음 vx=0 · FixStand 에서 GUI 정지)은
+    //    위 기준선에 삼켜지므로, 안 지우면 p→f→m 뒤 스틱이 가운데인데도 옛 속도(최대 2.5 m/s)로 걷는다.
+    //    컨트롤러의 명령·램프(g_loco)도 같이 — env->reset() 전이라 base_vel 관측 이력도 0 으로 채워진다.
+    //    (계약 v1 슬롯의 재진입에도 걸리는 의도된 변화: 전엔 지난 체류의 키보드·GUI 속도가 이어졌다.)
+    g_kb_vx = g_kb_vy = g_kb_wz = 0.0f;
+    g_loco.reset_command();
     { // mode2/3 hold this neutral pose (robot default) until VR provides a reference — never the clip
         const auto& dj = env->robot->data.default_joint_pos;
         Eigen::VectorXf dpos((int)dj.size());
@@ -1337,6 +1359,9 @@ void State_Mimic::enter()
         // Initialize timing
         const auto start = clock::now();
         auto sleepTill = start + dt;
+        // base_vel 저역통과 상태 — 이 스레드(= 이 체류)의 지역 변수라 체류마다 0 에서 시작한다
+        // (전엔 루프 안의 함수 static 이라 지난 체류의 값에서 이어졌다).
+        std::array<float, 3> bv_s = {0.f, 0.f, 0.f};
 
         motion->reset(env->robot->data, time_range_[0]);   // 0번 칸 = 주 클립(구간 오프셋을 쓴다)
         for (size_t i = 1; i < g_clips.size(); ++i) {      // 나머지 칸: clip anchor = enter heading
@@ -1581,7 +1606,6 @@ void State_Mimic::enter()
             // Low-pass the base_vel target (deploy-side; controller unchanged) so abrupt
             // GUI/keyboard command changes don't jerk the gait. ~A=0.25 -> ~0.2s settle.
             {
-                static std::array<float, 3> bv_s = {0.f, 0.f, 0.f};
                 const float A = 0.25f;
                 auto bv = g_joystick_base_vel(env.get());
                 for (int i = 0; i < 3; ++i) bv_s[i] += A * (bv[i] - bv_s[i]);

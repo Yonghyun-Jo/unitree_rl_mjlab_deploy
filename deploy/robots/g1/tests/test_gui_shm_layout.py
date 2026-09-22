@@ -111,6 +111,27 @@ def test_write_wraps_uint32_counters():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_write_seeds_seq_from_clock():
+    """seq 가 0 인 첫 쓰기는 시각(ns)으로 시드한다 — 쓰는 쪽 셋(GUI·PICO·replay)이 모두 1, 2, … 로 세면
+    다른 쓰는 쪽이 방금 쓴 것과 같은 seq 가 나와 제어기가 그 프레임을 «이미 읽음» 으로 버린다."""
+    import types
+    import gui_shm
+    d = Path(tempfile.mkdtemp(prefix="g1_gui_shm_test_"))
+    real_path, real_time = gui_shm.SHM_PATH, gui_shm.time
+    try:
+        gui_shm.SHM_PATH = str(d / "g1_masked_gui_test")
+        gui_shm.time = types.SimpleNamespace(time_ns=lambda: (7 << 32) + 41)   # 32 bit 로 잘려 41
+        st = dict(seq=0, vx=0.0, vy=0.0, wz=0.0, period_steps=43, height_scale=1.0, turn_k=0.3)
+        gui_shm.write(st)
+        r = struct.unpack(gui_shm.FMT, Path(gui_shm.SHM_PATH).read_bytes())
+        assert st["seq"] == r[1] == 42, f"첫 쓰기 seq = 시각 시드 + 1 이어야 한다: {st['seq']}"
+        gui_shm.write(st)
+        assert st["seq"] == 43, f"시드 뒤에는 +1 씩: {st['seq']}"
+    finally:
+        gui_shm.SHM_PATH, gui_shm.time = real_path, real_time
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_replay_requests_mode_on_change():
     """replay_cmd(세 번째 쓰는 쪽)는 첫 표본과 모드가 바뀔 때 mode_req 를 싣는다 — v2 엔 cmd_mode 칸이 없어서
     안 실으면 재생본의 모드 전환이 조용히 전부 사라진다. 바뀐 뒤 잠깐(MODE_REQ_HOLD_S)은 재전송, 그 뒤엔 없음."""

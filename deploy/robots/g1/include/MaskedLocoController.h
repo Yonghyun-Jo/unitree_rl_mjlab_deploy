@@ -208,6 +208,16 @@ struct MaskedLocoController {
     return z;
   }
 
+  // 체류(Mimic 진입)마다 «멈춤» 에서 시작 — 지난 체류의 속도 명령과 진행 중이던 모드 전환 램프를 버린다
+  // (State_Mimic::enter, env->reset() 전 — 관측 이력 10칸도 0 으로 채워지게). 안 버리면 넘어져 Passive 로
+  // 간 뒤 p→f→m 에서 램프가 옛 속도(bv_ramp_from)에서 다시 풀린다(최대 bv_ramp_steps 틱).
+  // 🔴 속도 명령만 — 위상·정착·팔 블렌드 상태는 건드리지 않는다(파이썬 원본에 없는 배포 쪽 경계 처리).
+  void reset_command() {
+    base_vel = bv_last = bv_ramp_from = {0.f, 0.f, 0.f};
+    bv_ramp_rem = 0;
+    bv_blend    = 1.0f;
+  }
+
   // Call when cmd_mode changes: spline base_vel from last command + (mode1) start arm-blend.
   void notify_mode_switch(int new_mode) {
     const mode_table::Row& M = mode_table::row(new_mode);

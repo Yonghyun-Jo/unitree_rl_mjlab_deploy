@@ -47,6 +47,30 @@ int main() {
   chk(40, 0.36f,     0.28f,     0.733333f);  // mid spline, mid arm ease-in
   chk(50, 0.0f,      0.0f,      0.6f);        // switch to mode3: base_vel masked to 0 (arm-blend mid-ease)
 
+  // reset_command(): 체류 경계(State_Mimic::enter)에서 속도 명령·진행 중 램프를 버린다 → 다음 update(0) 이 곧 0.
+  // 대조군(리셋 없음)은 램프가 옛 속도에서 풀려 0 이 아니어야 한다 — 그래야 이 검사가 뭔가를 잡는다.
+  {
+    auto run = [](bool reset) {
+      MaskedLocoController r;
+      for (int i = 0; i < 10; ++i) r.update({2.0f, 0, 0}, 1);
+      r.notify_mode_switch(1);                 // 램프 시작 (bv_ramp_from = 2.0)
+      r.update({2.0f, 0, 0}, 1);
+      if (reset) r.reset_command();
+      r.update({0, 0, 0}, 1);
+      return r;
+    };
+    const MaskedLocoController a = run(true), b = run(false);
+    if (a.base_vel[0] != 0.0f || a.base_vel[1] != 0.0f || a.base_vel[2] != 0.0f || a.bv_ramp_rem != 0) {
+      printf("FAIL reset_command: base_vel=[%.4f %.4f %.4f] ramp_rem=%d (want 0)\n",
+             a.base_vel[0], a.base_vel[1], a.base_vel[2], a.bv_ramp_rem);
+      ++fail;
+    }
+    if (!(b.base_vel[0] > 0.5f)) {
+      printf("FAIL reset_command control: 리셋 없이도 0 (%.4f) — 검사가 아무것도 안 잡는다\n", b.base_vel[0]);
+      ++fail;
+    }
+  }
+
   if (fail == 0) printf("OK: MaskedLocoController C++ matches golden checkpoints\n");
   return fail;
 }

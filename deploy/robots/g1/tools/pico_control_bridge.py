@@ -14,7 +14,8 @@ bridge (variant B), which needs GMR.
   Right stick X → wz (yaw)
   X button → mode 1 (full-auto walk)   Y → mode 2 (upper-teleop)   A → mode 3 (full-teleop)
   B button → stop (base_vel = 0)
-Scaled to deploy caps (VCAP=1.0 m/s, WCAP=0.6 rad/s); g1_ctrl clamps again.
+Scaled to the deploy caps in gui_shm.py (VXCAP / VYCAP / WCAP = the training base_vel envelope,
+now 2.5 m/s · 0.8 m/s · 2.0 rad/s); g1_ctrl clamps again (backward vx to VX_MAX_BWD = 1.5 m/s).
 
 ── Provenance (reference_code) ──
   axis→velocity layout: TWIST2/deploy_real/xrobot_teleop_to_robot_w_hand.py
