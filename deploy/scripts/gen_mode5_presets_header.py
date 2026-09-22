@@ -34,7 +34,7 @@ MODES_YAML = G1 / "config/modes.yaml"
 HEADER = G1 / "include/Mode5Presets.h"
 PYGEN = G1 / "tools/mode5_presets_gen.py"
 GOLDEN = G1 / "tests/golden_mode5_driver.inc"
-PROVENANCE_TAG = "mode5_presets.py @ "
+PROVENANCE_TAG = "mode5_presets.py @ "     # 생성 파일 셋의 출처 줄이 전부 이 문자열을 품는다 — --check 가 그 줄만 빼고 대조
 RESERVED = set("wasdqe pvfm[]")                # 조작 키 (State_Mimic g_poll_inputs · FSM keyboard_transitions)
 
 
@@ -200,7 +200,7 @@ PRESETS = [  # (index, name, key, n)
                      f"{{{', '.join(f32(x) for x in r['g'])}}}, {int(r['hold'])}, "
                      f"{{{', '.join(f32(x) for x in r['cmd'])}}}}},")
     golden = f"""// 🔴 생성 파일. deploy/scripts/gen_mode5_presets_header.py --write
-//   파이썬 mode5_presets.GoalDriver @ {commit} 를 그대로 돌린 출력열 (dt={dt!r}).
+//   파이썬 mode5_presets.py @ {commit} 의 GoalDriver 를 그대로 돌린 출력열 (dt={dt!r}).
 struct GoldenStep {{ int reset; int press; double z; float g[3]; int hold; float cmd[{mode_spec.MODE5_CMD_DIM}]; }};
 static const GoldenStep kGoldenM5[] = {{
 {chr(10).join(lines)}

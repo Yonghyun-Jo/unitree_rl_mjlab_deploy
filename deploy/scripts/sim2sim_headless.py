@@ -209,6 +209,27 @@ class LogTail:
         self.f.close()
 
 
+def pre_t0_failure(lines):
+    """t=0(밴드 해제 확인) 에 아직 Mimic_Masked 인가 — 아니면 그 이유(마지막 FSM 전환 줄), 맞으면 None.
+
+    해제 확인(발목 |tau| ≥ 1)은 «밴드에서 떨어져 넘어지는 중» 에도 통과한다 — 넘어지는 로봇의 발목도 토크를
+    문다(실측: 해제 1.8 s 뒤 bad_orientation → Passive 인데 15 Nm 로 «풀림»). 그 판은 아무것도 안 잰다.
+    lines = 콘솔 줄(문자열) 목록. --script 판(LogTail)과 --stand/--replay 판(파일 통째로)이 같이 쓴다."""
+    fsm = [s.strip() for s in lines if "FSM: Change state from" in s]
+    if not fsm or not fsm[-1].endswith("to Mimic_Masked"):
+        return fsm[-1] if fsm else "FSM 전환 줄 없음"
+    return None
+
+
+def _console_lines(path):
+    """g1_ctrl 콘솔 파일 → 줄 목록(ANSI 색·CR 제거). 없으면 빈 목록."""
+    try:
+        raw = open(path, "rb").read()
+    except OSError:
+        return []
+    return [ANSI.sub("", b.decode("utf-8", "replace")).replace("\r", "").rstrip() for b in raw.split(b"\n")]
+
+
 def _read_state_csv(path):
     """StateDump CSV → [(wall_time, dq[29], tilt_deg, cmd_mode)]. 파일·열이 없으면 빈 리스트."""
     import csv
@@ -525,18 +546,25 @@ def main():
             if not released:
                 print("🔴 밴드를 못 풀었다 (3회 시도). 이 로그는 판정에 못 쓴다."); raise RuntimeError("band")
 
+            if steps is None:
+                # --stand / --replay 판도 같은 구멍이 있다(최종 검토 M-12 — --script 판만 막혀 있었다): 해제 «확인» 은
+                # 넘어지는 중에도 통과하고, 뒤의 check_band_released 는 CSV 뒤쪽 절반만 봐서 그 판을 «풀림» 으로 받는다.
+                pre_fail = pre_t0_failure(_console_lines("/tmp/s2s_ctl.log"))
+                if pre_fail is not None:
+                    print("🔴 t=0 에 Mimic_Masked 가 아니다 (%s) — 밴드 해제 중에 넘어졌다. 이 판은 판정에 못 쓴다"
+                          % pre_fail)
             if a.replay:
-                print("[재생] %s" % os.path.basename(a.replay))
-                subprocess.run([sys.executable, os.path.join(G1, "tools/replay_cmd.py"), a.replay])
+                if pre_fail is None:
+                    print("[재생] %s" % os.path.basename(a.replay))
+                    subprocess.run([sys.executable, os.path.join(G1, "tools/replay_cmd.py"), a.replay])
             elif steps is not None:
                 # t=0 = 밴드 풀림을 «확인한» 시각. 그 전에 읽힌 줄은 해제 전(pre)으로 친다.
                 tail.poll(); i0 = len(tail.lines); t0 = time.monotonic()
                 # 🔴 해제 확인(발목 |tau| ≥ 1)은 «밴드에서 떨어져 넘어지는 중» 에도 통과한다 — 넘어지는 로봇의
                 #    발목도 토크를 문다(실측: 해제 1.8 s 뒤 bad_orientation → Passive 인데 15 Nm 로 «풀림»).
                 #    그 판은 스크립트 키가 Passive 로 들어가 아무것도 안 잰다. t=0 에 아직 Mimic 인지 본다.
-                fsm = [s.strip() for _, s in tail.lines if "FSM: Change state from" in s]
-                if not fsm or not fsm[-1].endswith("to Mimic_Masked"):
-                    pre_fail = fsm[-1] if fsm else "FSM 전환 줄 없음"
+                pre_fail = pre_t0_failure([s for _, s in tail.lines])
+                if pre_fail is not None:
                     print("🔴 t=0 에 Mimic_Masked 가 아니다 (%s) — 밴드 해제 중에 넘어졌다. 이 판은 스크립트 측정에 못 쓴다"
                           % pre_fail)
                 else:
@@ -558,7 +586,7 @@ def main():
                         print("🔴 g1_ctrl 이 스크립트 도중 끝났다 (rc=%s) — 여기까지 요약한다" % ctl.returncode)
                         break
                     time.sleep(0.02)
-            else:
+            elif pre_fail is None:
                 print("[정지] %.0f 초 유지" % a.stand)
                 time.sleep(a.stand)
             os.write(mfd, b"p")
@@ -585,6 +613,9 @@ def main():
             print("[바닥] 씬 원복")
 
     band_csv = a.out
+    if steps is None and pre_fail is not None:
+        print("🔴 판정하지 않는다 — t=0 전에 Mimic 을 나갔다: %s (로그 /tmp/s2s_ctl.log)" % pre_fail)
+        return 1
     if steps is not None and t0 is not None:
         tail.close()
         tlog = os.path.splitext(a.out)[0] + "_ctl_t.log"   # 줄마다 t(밴드 해제 뒤 초)를 붙인 콘솔 사본

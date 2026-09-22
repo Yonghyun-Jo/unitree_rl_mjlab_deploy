@@ -1,5 +1,5 @@
 // 🔴 생성 파일. deploy/scripts/gen_mode5_presets_header.py --write
-//   파이썬 mode5_presets.GoalDriver @ 4ea947cbe0c7 를 그대로 돌린 출력열 (dt=0.02).
+//   파이썬 mode5_presets.py @ 4ea947cbe0c7 의 GoalDriver 를 그대로 돌린 출력열 (dt=0.02).
 struct GoldenStep { int reset; int press; double z; float g[3]; int hold; float cmd[53]; };
 static const GoldenStep kGoldenM5[] = {
   {1, 0, 0.76, {-0.0179970842f, 0.0f, -0.999838054f}, 0, {0.0f, 0.0f, 0.0f, 0.75999999f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.296965271f, 0.0f, -0.954888344f, -0.0179970842f, 0.0f, -0.999837995f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},

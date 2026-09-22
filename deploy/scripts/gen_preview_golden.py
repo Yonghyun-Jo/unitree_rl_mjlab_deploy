@@ -7,7 +7,10 @@
 않게 한다 = 학습 함수로 «mod n» 의미를 얻는다.
 
 클립 = 실제 배포 클립의 구간 120 프레임(골반 = body 0). 이 구간의 원자료도 골든에 같이 싣는다
-(C++ 테스트가 npz 없이 돈다).
+(C++ 테스트가 npz 없이 돈다). 원천은 **학습 repo** 의 COLMOv2/dance/dance1_subject2.npz — 실기 v1 슬롯의 demo6
+(params/g1_dance1_subject2_colmov2.npz)과 바이트 동일(md5 b94bddb7…)이다. 슬롯 사본을 원천으로 두면 그 슬롯이
+보관소로 나가는 순간 com1 에서도 --check 가 «클립이 없다» 로 조용히 skip 된다(최종 검토 M-4). 학습 repo 는 이
+생성기가 import 하는 mjlab_g1_motion 의 repo 다(`uv run --project <그 repo>`).
 
 mjlab 의 uv 환경 (conda deactivate 후):
   ~/.local/bin/uv run --project ~/mjlab1.4/mjlab_g1_mode45 --no-sync python deploy/scripts/gen_preview_golden.py --write | --check
@@ -22,11 +25,14 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
+import mjlab_g1_motion
 from mjlab_g1_motion.tasks.g1_mimic_env import TAR_MOTION_STEPS_PRIV, G1MimicEnv
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 GOLDEN = REPO / "deploy/robots/g1/tests/golden_motion_preview.inc"
-CLIP = REPO / "deploy/robots/g1/config/policy/mimic_masked/260922_v1_m1gen_v2_torso_30k/params/g1_dance1_subject2_colmov2.npz"
+MJLAB = pathlib.Path(mjlab_g1_motion.__file__).resolve().parents[2]      # src/mjlab_g1_motion/__init__.py → repo
+CLIP_REL = "COLMOv2/dance/dance1_subject2.npz"
+CLIP = MJLAB / CLIP_REL
 START, F = 1200, 120
 CURS = [0, 1, 7, 24, 60, 99, 118, 119]
 
@@ -68,7 +74,8 @@ def build() -> str:
         cases.append(f"  {{{cur}, {{{', '.join(f32(x) for x in blk)}}}}},")
     arr = lambda a: ", ".join(f32(x) for x in a.reshape(-1))            # noqa: E731
     return f"""// 🔴 생성 파일. deploy/scripts/gen_preview_golden.py --write
-//   학습 함수 G1MimicEnv.calc_future_motion_obs 를 그대로 부른 값. 클립 = {CLIP.name} [{START}:{START + F}] (골반 = body 0).
+//   학습 함수 G1MimicEnv.calc_future_motion_obs 를 그대로 부른 값. 클립 = 학습 repo {CLIP_REL} [{START}:{START + F}] (골반 = body 0).
+//   (= 실기 v1 슬롯 demo6 g1_dance1_subject2_colmov2.npz 와 바이트 동일)
 static const int kClipN = {F};
 static const float kClipJp[{F}][29] = {{ {arr(jp)} }};
 static const float kClipQ[{F}][4] = {{ {arr(q)} }};           // wxyz

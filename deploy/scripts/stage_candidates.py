@@ -28,14 +28,14 @@
         ...
 
 # 무엇을 하나 (순서)
-  ① 후보마다 mjlab 에서 ONNX export (이미 있으면 건너뜀) — parity 실패면 그 후보는 중단
+  ① 후보마다 mjlab 에서 ONNX export (이미 있고 메타 base·헤드·steps 가 같으면 건너뜀, 다르면 다시) — parity 실패면 그 후보는 중단
   ② 슬롯 생성: exported/policy.onnx · params/deploy.yaml(템플릿 + mode1 min_swing) · params/*.npz
      (그날 첫 슬롯만 실사본, 나머지는 상대 심링크 — 저장 규칙) · ONNX_META.json
   ③ 학습측 FOOT_GEN 과 gait 패리티 대조 (체크포인트의 launch 커밋에서 읽음) — 다르면 경고 + META 기록
   ④ ACTIVE.yaml = 이 파일의 별칭 전부 (day 교체)
   ⑤ 직전 ACTIVE 에 있었지만 이번에 없는 슬롯은 **보관소로** (policy_slot archive) — «옛 정책 치우기»
   ⑥ check · index · git add(정체만) · commit
-  ⑦ --robot: 가중치 rsync(policy_slot push) + robot.sh deploy. 로봇이 안 닿으면 명령만 찍는다
+  ⑦ --robot: 가중치 rsync(policy_slot push) + robot.sh deploy. push 가 거부되면 멈춘다. 로봇이 안 닿으면 명령만 찍는다
 
 # 지키는 것
   - 커밋에는 정체(deploy.yaml · ONNX_META.json · ACTIVE.yaml · POLICY_INDEX.md)만 (.gitignore 가 무게를 막는다)
@@ -170,6 +170,48 @@ def foot_gen_at(commit):
 
 
 # ── ① export ─────────────────────────────────────────────────────────────
+def _norm_ckpt(p):
+    """체크포인트 경로 비교용 — mjlab 상대경로·절대경로·심링크(워크트리의 logs → 원본)를 같은 문자열로."""
+    if not p or str(p).strip().lower() in ("none", ""):
+        return "none"
+    p = str(p).strip()
+    return os.path.realpath(p if os.path.isabs(p) else os.path.join(MJLAB, p))
+
+
+def export_mismatch(meta, cfg, cand):
+    """이미 있는 ONNX 의 메타가 이 후보의 export 와 같은가. 다르면 이유 목록(비면 같다).
+
+    같은 --out 을 다른 후보(다른 base·헤드·steps)가 다시 쓰면 옛 ONNX 가 새 슬롯에 들어갔다(최종 검토 M-13).
+    본다: flow_base_checkpoint · sampling_steps · 헤드(mode1~3 체크포인트). 헤드는 새 export 도구의 `heads`
+    («1=<ckpt|none>,2=…»)가 있으면 그것을, 없으면 옛 도구의 mode{N}_ckpt 를 본다. 메타를 못 읽으면 «확인 불가» 로 다르다."""
+    if not meta:
+        return ["메타를 못 읽었다(onnx·uv 없음?) — 같은지 확인할 수 없다"]
+    why = []
+    if _norm_ckpt(meta.get("flow_base_checkpoint")) != _norm_ckpt(cfg["base"]):
+        why.append("flow_base_checkpoint %s ≠ 후보 %s" % (meta.get("flow_base_checkpoint"), cfg["base"]))
+    want_steps = str(cfg.get("sampling_steps", 6))
+    if str(meta.get("sampling_steps", "")).strip() != want_steps:
+        why.append("sampling_steps %s ≠ 후보 %s" % (meta.get("sampling_steps"), want_steps))
+    want = {1: cand["mode1_ckpt"], 2: cfg["mode2_ckpt"], 3: cfg["mode3_ckpt"]}
+    if meta.get("heads"):
+        have = {}
+        for item in meta["heads"].split(","):
+            if "=" in item:
+                k, v = item.split("=", 1)
+                try:
+                    have[int(k.strip())] = v.strip()
+                except ValueError:
+                    why.append("heads 항목을 못 읽음: %r" % item)
+        for m in sorted(set(have) | set(want)):
+            if _norm_ckpt(have.get(m)) != _norm_ckpt(want.get(m)):
+                why.append("head %d: %s ≠ 후보 %s" % (m, have.get(m, "(없음)"), want.get(m, "none")))
+    else:
+        for m, ck in want.items():
+            if _norm_ckpt(meta.get("mode%d_ckpt" % m)) != _norm_ckpt(ck):
+                why.append("mode%d_ckpt %s ≠ 후보 %s" % (m, meta.get("mode%d_ckpt" % m), ck))
+    return why
+
+
 def export_onnx(cfg, cand, slot, dry):
     out_rel = os.path.join("exported", slot, "policy.onnx")
     out_abs = os.path.join(MJLAB, out_rel)
@@ -181,8 +223,13 @@ def export_onnx(cfg, cand, slot, dry):
            "--out", out_rel]
     export_cmd = "cd %s && %s" % (MJLAB, " ".join(cmd))
     if os.path.exists(out_abs):
-        log("   export 건너뜀 — 이미 있다: %s" % out_rel)
-        return out_abs, export_cmd, {}
+        why = export_mismatch(onnx_metadata(out_abs), cfg, cand)
+        if not why:
+            log("   export 건너뜀 — 이미 있고 메타(base·헤드·steps)가 이 후보와 같다: %s" % out_rel)
+            return out_abs, export_cmd, {}
+        log("   ⚠ 이미 있는 %s 가 이 후보와 다르다 — 다시 export 한다:" % out_rel)
+        for w in why:
+            log("      - " + w)
     log("   export → %s" % out_rel)
     if dry:
         log("   (dry-run) " + export_cmd)
@@ -584,7 +631,12 @@ def main():
         else:
             sh(["git", "push", "origin", subprocess.run(["git", "branch", "--show-current"], cwd=REPO,
                                                          text=True, capture_output=True).stdout.strip()], cwd=REPO)
-            sh([sys.executable, SLOT_PY, "push"], cwd=REPO, check=False)
+            # 🔴 push 가 거부되면(deployable_real=false 슬롯 등 — policy_slot.py cmd_push) 여기서 멈춘다.
+            #    예전엔 check=False 라 거부 뒤에도 로봇 빌드(deploy)까지 갔다(최종 검토 M-13).
+            try:
+                sh([sys.executable, SLOT_PY, "push"], cwd=REPO)
+            except RuntimeError as e:
+                die("policy_slot push 가 거부/실패했다 — 로봇 빌드(deploy)를 하지 않는다: %s" % e)
             sh([ROBOT_SH, "deploy"], check=False)
     else:
         log("   (전송 생략) 로봇 옆에서:  cd %s && git push origin $(git branch --show-current) && %s && %s"

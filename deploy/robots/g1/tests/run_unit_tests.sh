@@ -38,8 +38,8 @@ for t in test_height_estimator test_motion_preview test_safety_policy; do   # Ei
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -Werror=switch -I../include -I/usr/include/eigen3 $t.cpp
 done
 [ -f test_no_mode_ordinals.sh ] && { bash test_no_mode_ordinals.sh && echo "ok   no_mode_ordinals" || { echo "FAIL no_mode_ordinals"; fail=1; }; }
-# shm 바이트 배치(C++ 구조체 ↔ python FMT) + policy_slot push 게이트 — 표준 라이브러리만 쓴다(uv 불필요)
-for t in test_gui_shm_layout test_vr_shm_layout test_policy_slot_gate; do
+# shm 바이트 배치(C++ 구조체 ↔ python FMT) + policy_slot push 게이트 + 헤드리스 도구의 t=0 판정 — 표준 라이브러리만 쓴다(uv 불필요)
+for t in test_gui_shm_layout test_vr_shm_layout test_policy_slot_gate test_headless_pre_t0; do
   [ -f $t.py ] && { python3 $t.py >"$OUT/$t.out" 2>&1 && echo "ok   $t" || { echo "FAIL $t"; tail -5 "$OUT/$t.out"; fail=1; }; }
 done
 
@@ -70,12 +70,36 @@ if [ -x "$HOME/.local/bin/uv" ] && [ -f "$MJLAB/src/mjlab_g1_motion/mode5_preset
   # 구·캡슐 충돌 장면(scene_g1_prim.xml)이 학습 충돌 33개와 같고 액추에이터·센서가 scene_g1.xml 과 같은가
   if "${UVPY[@]}" test_prim_scene.py >"$OUT/prim.out" 2>&1; then echo "ok   test_prim_scene"
   else echo "FAIL test_prim_scene"; tail -5 "$OUT/prim.out"; fail=1; fi
-  # gen_preview_golden 은 배포 슬롯 npz(git 밖)가 있어야 --check 가 된다. 없는 머신(로봇·깨끗한
-  # clone)에서는 생성기 스스로가 "클립이 없다" 로 끝내므로 그 경우만 skip 으로 통과시킨다.
+  # gen_preview_golden 은 학습 repo 의 클립 npz(COLMOv2/dance/dance1_subject2.npz, git 밖)가 있어야 --check 가
+  # 된다. 없는 머신(로봇·깨끗한 clone)에서는 생성기 스스로가 "클립이 없다" 로 끝내므로 그 경우만 skip 으로 통과.
   if "${UVPY[@]}" ../../../scripts/gen_preview_golden.py --check >"$OUT/pv.out" 2>&1; then echo "ok   gen_preview_golden"
   elif grep -q "클립이 없다" "$OUT/pv.out"; then echo "skip gen_preview_golden (클립 npz 없음)"
   else echo "FAIL gen_preview_golden"; tail -5 "$OUT/pv.out"; fail=1; fi
 else
   echo "skip uv 생성기 검사 (mjlab uv 환경 없음)"
 fi
+
+# 계약 v2 슬롯의 deploy.yaml `observations:` 블록 == gen_obs_block.py(그 슬롯 ONNX 의 계약) — 배포 항 이름 ↔ 학습 항
+# 매핑이 틀린 것은 C++ 기동 대조가 못 잡는다(최종 검토 M-5). ONNX 는 git 밖이라 exported/policy.onnx 가 있는 슬롯만,
+# onnx 를 import 하는 파이썬(시스템 python3, 없으면 mjlab uv)이 없으면 skip. 계약 v1 슬롯의 블록은 손으로 쓴 것이라 대상 밖.
+OBSPY=()
+if command -v python3 >/dev/null 2>&1 && python3 -c "import onnx" >/dev/null 2>&1; then OBSPY=(python3)
+elif [ -x "$HOME/.local/bin/uv" ] && [ -d "$MJLAB" ] && "${UVPY[@]}" -c "import onnx" >/dev/null 2>&1; then OBSPY=("${UVPY[@]}")
+fi
+n_obs=0; n_skip=0
+for onnx_f in ../config/policy/*/*/exported/policy.onnx; do
+  [ -f "$onnx_f" ] || continue
+  slot=$(dirname "$(dirname "$onnx_f")")
+  [ -f "$slot/ONNX_META.json" ] && [ -f "$slot/params/deploy.yaml" ] || continue
+  command -v python3 >/dev/null 2>&1 || continue
+  python3 -c 'import json,sys; sys.exit(0 if str(json.load(open(sys.argv[1])).get("obs_contract_version")) == "2" else 1)' \
+    "$slot/ONNX_META.json" 2>/dev/null || continue
+  name="obs_block_generated[$(basename "$slot")]"
+  if [ ${#OBSPY[@]} -eq 0 ]; then echo "skip $name (onnx 를 import 하는 파이썬 없음)"; n_skip=$((n_skip + 1)); continue; fi
+  n_obs=$((n_obs + 1))
+  if "${OBSPY[@]}" ../../../scripts/gen_obs_block.py "$onnx_f" --check "$slot/params/deploy.yaml" >"$OUT/obs.out" 2>&1
+  then echo "ok   $name"
+  else echo "FAIL $name"; tail -5 "$OUT/obs.out"; fail=1; fi
+done
+[ $n_obs -eq 0 ] && [ $n_skip -eq 0 ] && echo "skip obs_block_generated (exported/policy.onnx 가 있는 계약 v2 슬롯 없음)"
 exit $fail

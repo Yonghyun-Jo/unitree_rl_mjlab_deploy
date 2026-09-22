@@ -81,6 +81,20 @@ def main() -> int:
     chk(names(pr, mujoco.mjtObj.mjOBJ_ACTUATOR, pr.nu) == names(base, mujoco.mjtObj.mjOBJ_ACTUATOR, base.nu),
         "액추에이터 이름·순서 = scene_g1.xml")
     chk(np.array_equal(pr.actuator_ctrlrange, base.actuator_ctrlrange), "액추에이터 ctrlrange = scene_g1.xml")
+    # 충돌만 바꾼 장면이다 — 관절·구동 동역학이 조금이라도 다르면 두 장면의 sim2sim 비교가 무효가 된다(최종 검토 M-12).
+    same = lambda a, b: a.shape == b.shape and np.array_equal(a, b)  # noqa: E731
+    chk(same(pr.actuator_gainprm, base.actuator_gainprm) and same(pr.actuator_biasprm, base.actuator_biasprm)
+        and same(pr.actuator_gaintype, base.actuator_gaintype) and same(pr.actuator_biastype, base.actuator_biastype),
+        "액추에이터 gain·bias (종류·파라미터) = scene_g1.xml")
+    chk(same(pr.actuator_forcerange, base.actuator_forcerange) and same(pr.actuator_forcelimited, base.actuator_forcelimited)
+        and same(pr.actuator_ctrllimited, base.actuator_ctrllimited) and same(pr.actuator_gear, base.actuator_gear),
+        "액추에이터 forcerange·gear·limited = scene_g1.xml")
+    chk(names(pr, mujoco.mjtObj.mjOBJ_JOINT, pr.njnt) == names(base, mujoco.mjtObj.mjOBJ_JOINT, base.njnt)
+        and same(pr.jnt_range, base.jnt_range) and same(pr.jnt_limited, base.jnt_limited),
+        "관절 이름·순서·range·limited = scene_g1.xml")
+    chk(same(pr.dof_damping, base.dof_damping) and same(pr.dof_armature, base.dof_armature)
+        and same(pr.dof_frictionloss, base.dof_frictionloss),
+        "dof damping·armature·frictionloss = scene_g1.xml")
     chk(names(pr, mujoco.mjtObj.mjOBJ_SENSOR, pr.nsensor) == names(base, mujoco.mjtObj.mjOBJ_SENSOR, base.nsensor),
         "센서 이름·순서 = scene_g1.xml")
     chk(pr.nq == base.nq and pr.nv == base.nv, "자유도 = scene_g1.xml")
