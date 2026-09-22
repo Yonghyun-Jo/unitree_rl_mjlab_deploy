@@ -1,0 +1,94 @@
+{
+  "exported_at": "2026-09-22",
+  "slot": "260922_dev_v5_m45",
+  "trial": "dev",
+  "trial_day": "2026-09-22",
+  "note": "개발용 — 최종은 v5m6 base + 헤드 5",
+  "deployable_real": false,
+  "purpose": "B2 Task 9: 관측 계약 v2(1×2966) 기동 확인 · mode4(클립 재생)·mode5(저자세 자세) 헤드 경로 개발. mode1 은 base 만(헤드 없음) — 폴백용, 실기 금지. base 는 헤드와 짝인 v5 109.5k (A-1 평가상 v5m6@139.5k 가 모드1~4 +4~9 pp — 최종은 그쪽).",
+  "staged_by": "B2 Task 9 (손으로 — stage_candidates.py 아님)",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint",
+    "mode_table",
+    "obs_contract_v2",
+    "mode5_driver",
+    "ground_safety"
+  ],
+  "modes": [
+    1,
+    4,
+    5
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "2966",
+  "obs_contract_version": "2",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:8:10,foot_z:2:10,mode5_cmd:53:10,preview_on:1:1,preview_k1:35:1,preview:700:1",
+  "flow_base_checkpoint": "/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-02_10-05-13_stage2_v5_m5goal_tgoal_cap1024_steps6_resume49k_to120k/model_109500.pt",
+  "mode1_ckpt": "none",
+  "mode2_ckpt": "none",
+  "mode3_ckpt": "none",
+  "heads": "1=none,2=none,3=none,4=/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-06_10-55-11_s4_mode4_base109k_trackonly_mu3_resume100k_to160k/model_159997.pt,5=/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-20_19-35-40_s4_mode5_graphC_lead_resume60k_to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v4.yaml",
+  "residual_delta_clip": "None",
+  "onnxruntime_version": "1.22.0",
+  "flow_base_run": "2026-09-02_10-05-13_stage2_v5_m5goal_tgoal_cap1024_steps6_resume49k_to120k",
+  "flow_base_ckpt": "logs/rsl_rl/g1_student/2026-09-02_10-05-13_stage2_v5_m5goal_tgoal_cap1024_steps6_resume49k_to120k/model_109500.pt",
+  "mode4_ckpt": "logs/rsl_rl/g1_student/2026-09-06_10-55-11_s4_mode4_base109k_trackonly_mu3_resume100k_to160k/model_159997.pt",
+  "mode4_run": "2026-09-06_10-55-11_s4_mode4_base109k_trackonly_mu3_resume100k_to160k",
+  "mode4_train": "cmd_mode 4 · manifest motions/g1_flow_specialists_v4.yaml · actor [512,512,256] · base = 위 109.5k (train_args.json)",
+  "mode5_ckpt": "logs/rsl_rl/g1_student/2026-09-20_19-35-40_s4_mode5_graphC_lead_resume60k_to90k/model_89997.pt",
+  "mode5_run": "2026-09-20_19-35-40_s4_mode5_graphC_lead_resume60k_to90k",
+  "mode5_train": "cmd_mode 5 · manifest logs/_motion_data/mode5_gen/_subset_graphC_v2.yaml · actor [512,512,256] · base = 위 109.5k (train_args.json, 상대경로)",
+  "clips": {
+    "_rule": "--policy <슬롯> (G1_POLICY_SLOT) 은 policy_dir 만 바꾼다 — motion_file* 는 config.yaml 그대로(State_Mimic.cpp 생성자). 지금 config.yaml = 260922_v1_m1gen_v2_torso_30k/params. 이 슬롯의 params/*.npz 는 그 세 파일의 실사본(같은 이름·같은 md5) — config.yaml 을 이 슬롯으로 옮겨도 그대로 뜬다.",
+    "primary": {
+      "file": "g1_dance1_subject3_upper16s.npz",
+      "md5": "78ea9689a301721ef0735d5746cdd03b",
+      "source": "COLMOv2/dance/dance1_subject3.npz 프레임 200–999 그대로 + 50프레임 복귀 구간(850f, 17.0 s)",
+      "manifest_v4": "COLMO/dance/dance1_subject3.npz (v1 리타겟, md5 b2ceba35380ccb8436dfc4ba03fac71c) — 다른 리타겟. mode4 가 학습한 판이 아니다"
+    },
+    "light": {
+      "file": "g1_aiming_stand10s.npz",
+      "md5": "b9231c18c6b34d1e097b110400fff645",
+      "source": "COLMOv2/aiming/aiming1_subject1.npz 프레임 1857–2356 (7 배열 전부 Δ=0)",
+      "manifest_v4": "COLMOv2/aiming/aiming1_subject1.npz (md5 b639aa30b51cc9a93c365b302223ddb6) — 같은 데이터의 구간"
+    },
+    "demo6": {
+      "file": "g1_dance1_subject2_colmov2.npz",
+      "md5": "b94bddb7f3f31627db4ea95e042237e5",
+      "source": "COLMOv2/dance/dance1_subject2.npz",
+      "manifest_v4": "COLMOv2/dance/dance1_subject2.npz (md5 b94bddb7f3f31627db4ea95e042237e5) — 바이트 동일"
+    }
+  },
+  "verify": {
+    "onnx_md5": "e15d58e0051cfc85b3ca84af653e4899",
+    "onnx_vs_torch": "max|Δ| = 4.768e-06 (OK, tol 0.0001) modes 1,2,3,4,5 · ORT 1.22.0",
+    "parity_per_mode": {
+      "1": "3.010e-06",
+      "2": "4.768e-06",
+      "3": "4.530e-06",
+      "4": "4.292e-06",
+      "5": "3.815e-06"
+    },
+    "graph": "OK — GEMM 54 = enc 4 + motion 2 + actor 5×6 + heads 18",
+    "obs_contract_sum": "14항 합=2966 == obs 2966  OK (policy 2230 + motion 736)",
+    "mask_slice": "(1672, 1680) == env.command_mask()  OK (모드 1~5)",
+    "head_pairing": "mode4·mode5: base 짝 OK · cmd_mode 4/5 일치",
+    "startup": "요구 기능 10개 전부 지원 · ONNX 계약 v2 — 항 14개 통과 · 아는 모드 1 4 5 · 클립 미리보기 항 있음(세 클립 모두 body_lin/ang_vel_w)",
+    "sim2sim_stand": "헤드리스 :97, mode1(base 만) 밴드 해제 뒤 20 s 정지 🟢 — scene_g1.xml: 기울기 max 5.3° · |qd| max 5.83 · pos_clamp 0 · 최종 mode1 / scene_g1_prim.xml: 기울기 max 5.1° · |qd| max 5.31 · pos_clamp 0 · 최종 mode1. xvfb99 재시작 0 (2026-09-22)",
+    "real_robot": "금지 (개발용)"
+  },
+  "export_repo": "/home/piene/mjlab1.4/mjlab_g1_mode45 @ c25bebe (mode45_playback_ground)",
+  "export_device": "cpu (CUDA_VISIBLE_DEVICES='' --device cpu — com1 GPU 는 다른 세션 학습 중, Ruling 28). 로그 = /home/piene/mjlab1.4/mjlab_g1_motion/exported/260922_dev_v5_m45/export_cpu.log",
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_mode45 && CUDA_VISIBLE_DEVICES= ~/.local/bin/uv run --no-sync --with onnxruntime==1.22.0 python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --device cpu --flow-base-checkpoint /home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-02_10-05-13_stage2_v5_m5goal_tgoal_cap1024_steps6_resume49k_to120k/model_109500.pt --manifest motions/g1_flow_specialists_v4.yaml --head 4=/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-06_10-55-11_s4_mode4_base109k_trackonly_mu3_resume100k_to160k/model_159997.pt --head 5=/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-20_19-35-40_s4_mode5_graphC_lead_resume60k_to90k/model_89997.pt --num-envs 4 --out /home/piene/mjlab1.4/mjlab_g1_motion/exported/260922_dev_v5_m45/policy.onnx",
+  "obs_block": "params/deploy.yaml observations: = deploy/scripts/gen_obs_block.py exported/policy.onnx 출력 그대로",
+  "deployed": {
+    "status": "안 함 — 개발용 (policy_slot push 금지)"
+  }
+}
