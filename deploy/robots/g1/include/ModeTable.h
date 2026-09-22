@@ -38,4 +38,25 @@ inline constexpr bool valid(int mode) { return mode >= 1 && mode <= N_MODES; }
 // 범위 밖은 안전측(mode1 = 명령만으로 서서 걷는 모드)으로.
 inline constexpr const Row& row(int mode) { return ROWS[valid(mode) ? mode - 1 : 0]; }
 
+// ── 관측 계약 v2 (spec §4.2) ─────────────────────────────────────────────────
+//   미리보기 오프셋: mjlab_g1_motion/src/mjlab_g1_motion/tasks/g1_mimic_env.py TAR_MOTION_STEPS_PRIV
+inline constexpr int N_DOF = 29;
+inline constexpr int MODE5_CMD_DIM = 53;
+struct Slot { int lo, hi; };
+inline constexpr Slot M5_BASE_VEL{0, 3};
+inline constexpr Slot M5_Z{3, 4};
+inline constexpr Slot M5_Z_MASK{4, 5};
+inline constexpr Slot M5_C{5, 18};
+inline constexpr Slot M5_M{18, 31};
+inline constexpr Slot M5_G_TORSO{31, 34};
+inline constexpr Slot M5_G_PELVIS{34, 37};
+inline constexpr Slot M5_GM{37, 39};
+inline constexpr Slot M5_SITE_Z{39, 52};
+inline constexpr Slot M5_T_GOAL{52, 53};
+inline constexpr float M5_T_GOAL_MAX = 3.0f;
+inline constexpr int MOTION_STEP_DIM = 6 + N_DOF;
+inline constexpr int N_PREVIEW = 20;
+inline constexpr std::array<int, N_PREVIEW> PREVIEW_OFFSETS = {{1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95}};
+inline constexpr int MOTION_BLOCK_DIM = 1 + MOTION_STEP_DIM + N_PREVIEW * MOTION_STEP_DIM;
+
 }  // namespace mode_table

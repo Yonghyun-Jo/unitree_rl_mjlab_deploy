@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import pathlib
 import subprocess
@@ -27,6 +28,9 @@ MODES_YAML = REPO / "deploy/robots/g1/config/modes.yaml"
 HEADER = REPO / "deploy/robots/g1/include/ModeTable.h"
 SPEC_REL = "src/mjlab_g1_motion/mode_spec.py"
 PROVENANCE_TAG = "mode_spec.py @ "      # 헤더의 출처 줄 — --check 는 이 줄을 빼고 표만 비교한다
+PREVIEW_SRC_REL = "src/mjlab_g1_motion/tasks/g1_mimic_env.py"   # TAR_MOTION_STEPS_PRIV 의 원장
+PYGEN = REPO / "deploy/robots/g1/tools/mode_table_gen.py"        # GUI 가 읽는 같은 표 (파이썬)
+N_DOF = 29                                                       # G1 관절 수 (deploy joint_ids_map 길이)
 
 ENUMS = {
     "ref_source": ("RefSource", {"none": "None", "vr": "Vr", "clip": "Clip"}),
@@ -62,8 +66,25 @@ def load_mode_spec(mjlab: pathlib.Path):
     return mod, commit
 
 
-def build(mjlab: pathlib.Path) -> str:
+def load_preview_offsets(mjlab: pathlib.Path) -> list[int]:
+    """미리보기 오프셋을 **import 없이** 읽는다 — g1_mimic_env 는 mjlab 전체를 끌어온다."""
+    path = mjlab / PREVIEW_SRC_REL
+    if not path.exists():
+        sys.exit(f"g1_mimic_env.py 가 없다: {path}")
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "TAR_MOTION_STEPS_PRIV"
+                                                for t in node.targets):
+            v = ast.literal_eval(node.value)
+            if not (isinstance(v, list) and v and all(isinstance(x, int) for x in v)
+                    and v == sorted(v) and v[0] >= 1):
+                sys.exit(f"TAR_MOTION_STEPS_PRIV 가 오름차순 양의 정수 목록이 아니다: {v!r}")
+            return v
+    sys.exit("TAR_MOTION_STEPS_PRIV 를 g1_mimic_env.py 에서 못 찾았다")
+
+
+def build(mjlab: pathlib.Path) -> tuple[str, str]:
     ms, commit = load_mode_spec(mjlab)
+    offs = load_preview_offsets(mjlab)
     dep = yaml.safe_load(MODES_YAML.read_text())["modes"]
     train_ids, dep_ids = sorted(ms.MODES), sorted(int(k) for k in dep)
     if train_ids != dep_ids:
@@ -92,7 +113,24 @@ def build(mjlab: pathlib.Path) -> str:
             f'Exit::{ENUMS["exit"][1][d["exit"]]}, "{d["gait"]}"}},')
     enum_src = "\n".join(f"enum class {name} : unsigned char {{ {', '.join(vals.values())} }};"
                          for name, vals in (v for v in ENUMS.values()))
-    return f"""#pragma once
+    slots = "\n".join(
+        f"inline constexpr Slot M5_{k.upper()}{{{s.start}, {s.stop}}};" for k, s in ms.MODE5_SLOTS.items())
+    if max(s.stop for s in ms.MODE5_SLOTS.values()) != ms.MODE5_CMD_DIM:
+        sys.exit("MODE5_SLOTS 의 끝이 MODE5_CMD_DIM 과 다르다")
+    v2 = f"""
+// ── 관측 계약 v2 (spec §4.2) ─────────────────────────────────────────────────
+//   미리보기 오프셋: mjlab_g1_motion/{PREVIEW_SRC_REL} TAR_MOTION_STEPS_PRIV
+inline constexpr int N_DOF = {N_DOF};
+inline constexpr int MODE5_CMD_DIM = {ms.MODE5_CMD_DIM};
+struct Slot {{ int lo, hi; }};
+{slots}
+inline constexpr float M5_T_GOAL_MAX = {float(ms.MODE5_T_GOAL_MAX)!r}f;
+inline constexpr int MOTION_STEP_DIM = 6 + N_DOF;
+inline constexpr int N_PREVIEW = {len(offs)};
+inline constexpr std::array<int, N_PREVIEW> PREVIEW_OFFSETS = {{{{{", ".join(map(str, offs))}}}}};
+inline constexpr int MOTION_BLOCK_DIM = 1 + MOTION_STEP_DIM + N_PREVIEW * MOTION_STEP_DIM;
+"""
+    header_text = f"""#pragma once
 // ModeTable.h — 🔴 생성 파일. 손으로 고치지 않는다.  python3 deploy/scripts/gen_mode_table_header.py --write
 //   학습 사실: mjlab_g1_motion/mode_spec.py @ {commit}
 //   배포 사실: deploy/robots/g1/config/modes.yaml
@@ -123,9 +161,21 @@ inline constexpr std::array<Row, N_MODES> ROWS = {{{{
 inline constexpr bool valid(int mode) {{ return mode >= 1 && mode <= N_MODES; }}
 // 범위 밖은 안전측(mode1 = 명령만으로 서서 걷는 모드)으로.
 inline constexpr const Row& row(int mode) {{ return ROWS[valid(mode) ? mode - 1 : 0]; }}
-
+{v2}
 }}  // namespace mode_table
 """
+    py_rows = "\n".join(
+        f'    ({m}, "{ms.MODES[m].name}", "{(dep[m] if m in dep else dep[str(m)])["key"]}", '
+        f'"{(dep[m] if m in dep else dep[str(m)])["safety"]}"),' for m in train_ids)
+    py = f'''# 🔴 생성 파일. 손으로 고치지 않는다.  python3 deploy/scripts/gen_mode_table_header.py --write
+#   학습 사실: mjlab_g1_motion/mode_spec.py @ {commit}
+#   배포 사실: deploy/robots/g1/config/modes.yaml
+"""모드 표의 파이썬 판 — GUI(masked_gui.py)가 버튼을 이 표에서 만든다(번호를 코드에 박지 않는다)."""
+MODES = [  # (id, name, key, safety)
+{py_rows}
+]
+'''
+    return header_text, py
 
 
 def main() -> None:
@@ -134,22 +184,30 @@ def main() -> None:
     g.add_argument("--check", action="store_true"); g.add_argument("--write", action="store_true")
     ap.add_argument("--mjlab", type=pathlib.Path, default=pathlib.Path.home() / "mjlab1.4/mjlab_g1_mode45")
     a = ap.parse_args()
-    text = build(a.mjlab)
+    header_text, py_text = build(a.mjlab)
+    outputs = [(HEADER, header_text), (PYGEN, py_text)]
     if a.write:
-        HEADER.write_text(text); print(f"[gen] wrote {HEADER}"); return
-    if not HEADER.exists():
-        sys.exit("ModeTable.h 가 없다 — --write 로 생성할 것")
+        for path, text in outputs:
+            path.write_text(text)
+            print(f"[gen] wrote {path}")
+        return
     # 🔴 «표» 와 «출처 줄» 을 따로 본다. mode_spec.py 에 주석만 고친 커밋이 생겨도 출처 해시는
     #    바뀌는데, 그걸 «표가 원장과 다르다» 로 실패시키면 배포 전 점검이 헛되이 빨개진다.
     def body(s: str) -> str:
         return "\n".join(l for l in s.splitlines() if PROVENANCE_TAG not in l)
-    have = HEADER.read_text()
-    if body(have) != body(text):
-        sys.exit("ModeTable.h 가 원장(mode_spec.py + modes.yaml)과 다르다 — --write 로 다시 생성할 것")
-    if have != text:
-        print("[gen] ModeTable.h == 원장 (표 동일 · 출처 줄만 다름 — 다음 --write 때 갱신된다)")
+    stale = False
+    for path, text in outputs:
+        if not path.exists():
+            sys.exit(f"{path} 가 없다 — --write 로 생성할 것")
+        have = path.read_text()
+        if body(have) != body(text):
+            sys.exit(f"{path} 가 원장(mode_spec.py + modes.yaml)과 다르다 — --write 로 다시 생성할 것")
+        if have != text:
+            stale = True
+    if stale:
+        print("[gen] ModeTable.h / mode_table_gen.py == 원장 (표 동일 · 출처 줄만 다름 — 다음 --write 때 갱신된다)")
     else:
-        print("[gen] ModeTable.h == 원장")
+        print("[gen] ModeTable.h / mode_table_gen.py == 원장")
 
 
 if __name__ == "__main__":

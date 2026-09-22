@@ -8,6 +8,18 @@ using namespace mode_table;
 static int fail = 0;
 #define CHK(c) do { if (!(c)) { std::printf("FAIL line %d: %s\n", __LINE__, #c); ++fail; } } while (0)
 
+// ── 계약 v2 상수 (학습 원장에서 생성) — 값이 바뀌면 ONNX 입력 배치가 바뀐다. 바뀌었다면 여기도 같이.
+static_assert(mode_table::N_DOF == 29, "G1 29-DOF");
+static_assert(mode_table::MODE5_CMD_DIM == 53, "mode5 명령 53칸 (mode_spec.MODE5_CMD_DIM)");
+static_assert(mode_table::M5_Z_MASK.lo == 4 && mode_table::M5_Z_MASK.hi == 5, "z_mask 슬롯");
+static_assert(mode_table::M5_T_GOAL.lo == 52 && mode_table::M5_T_GOAL.hi == 53, "t_goal 슬롯 = 끝");
+static_assert(mode_table::M5_C.hi - mode_table::M5_C.lo == 13 && mode_table::M5_M.lo == mode_table::M5_C.hi,
+              "«c 13 뒤 m 13» (interleave 아님)");
+static_assert(mode_table::MOTION_STEP_DIM == 35, "미리보기 한 스텝 = root6 + dof29");
+static_assert(mode_table::N_PREVIEW == 20, "미리보기 20스텝");
+static_assert(mode_table::PREVIEW_OFFSETS[0] == 1 && mode_table::PREVIEW_OFFSETS[19] == 95, "[1, 5, …, 95]");
+static_assert(mode_table::MOTION_BLOCK_DIM == 736, "on 1 + k1 35 + 20×35");
+
 int main() {
     CHK(N_MODES >= 6); CHK(MASK_DIM == 8);
     // (1) 옛 번호 비교와의 동치 — 이 계획이 옮기는 23곳의 진리표
