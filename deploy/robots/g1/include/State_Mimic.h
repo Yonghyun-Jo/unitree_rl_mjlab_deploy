@@ -65,7 +65,8 @@ private:
     std::array<float,29> js_q_prev_{};
     bool js_q_prev_valid_ = false;
 
-    // L3: 측정 qd 폭주 감지 (gated, 기본 off). policy_thread(50Hz)에서 검사 -> warn(mode1 래치)/crit(Passive 래치).
+    // L3: 측정 qd 폭주 감지 (gated, 기본 off). policy_thread(50Hz)에서 검사 -> warn(래치: 처분은 SafetyPolicy.h
+    //     qd_warn_action — 폴백 모드 강제, GroundCapable 의 낮거나 기운 자세면 Passive)/crit(Passive 래치).
     bool  js_enable_qd_guard_ = false;
     float js_qd_warn_ = 0.f, js_qd_crit_ = 0.f;   // 로그용 대표값(관절별 최소). 판정은 아래 배열
     std::array<float,29> js_qd_warn_v_{}, js_qd_crit_v_{};   // 관절별 임계 (스칼라면 전 관절 복사)

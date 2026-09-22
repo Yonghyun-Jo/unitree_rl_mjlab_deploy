@@ -62,6 +62,7 @@ C++ 제어기 **`g1_ctrl`가 "뇌"**이고, PICO VR 입력은 그 뇌에 **`/dev
   - **sim2sim = `lo`**, **실로봇 = 실제 iface(예: enp5s0)**.
 - 키보드 백업(터미널 포커스): `1/2/3/4`=mode(표의 `key` 열), `[`/`]`=재생할 클립 고르기(**클립 재생 모드가 아닐 때만** — 재생 중엔 거부 한 줄), `5`/`6`=표엔 있으나 지금 슬롯이 모르는 모드 → 거부 로그, `config/mode5_keys.yaml` 의 키(지금 `z x c b n h`)=mode5 자세(직립·네발·포복·앉기·눕기·크랩, **mode5 에서만** — 다른 모드에선 한 줄 안내만), `WASD/QE`=속도, `p`=정지, `v`=Velocity, `m`=Mimic_Masked.
   mode4(와 mode5)는 **직립일 때만**(골반 높이 추정 `z_fk ≥ 0.65 m` ∧ 걸러진 기울기 `< 30°`) 떠날 수 있다 — 아니면 요청이 거부되고 `[cmd_mode] … 거부: …` 한 줄이 남는다(계약 v1 슬롯의 mode4 도 같다. mode5 는 직립 모드로 나갈 때 직립 버튼 `z` 의 유지 상태까지 요구하고, 저자세 모드끼리는 막지 않는다).
+  안전층도 mode4·5 에선 다르다(`SafetyPolicy.h`, 계약 v1 슬롯의 mode4 포함): **낮거나 기운 자세**(`z_fk < 0.65` ∨ 기울기 `≥ 30°`)에서 qd_warn 이 걸리면 폴백 모드 대신 **Passive** 로 간다(로그 `qd_warn LATCHED … -> Passive. 복귀=p→f→m` — 복귀는 `p` → `f` → `m`). 넘어짐 판정(기울기 `> 57.3°` → Passive)은 **명령이 직립이고**(재생 클립의 현재 프레임 골반 높이 / mode5 자세의 목표 높이 `≥ 0.65 m`) **최근 1 s 안에 섰을**(`z_fk ≥ 0.65`) 때만 건다 — 서 있다 넘어지면 잡고, 일부러 내려가기·누운 데서 일어나기는 넘어짐으로 치지 않는다(명령에 높이가 없는 mode6 은 넘어짐 판정을 안 건다). mode1~3 은 종전 그대로(넘어짐 판정 항상 · qd_warn → 폴백 모드).
 
 ### 2.2 IPC 채널 (파일 계약 — Python↔C++ 레이아웃 동기 필수)
 | 파일 | magic | 내용 | 쓰는 쪽 | 읽는 쪽 |
@@ -259,7 +260,8 @@ motor에 쓰는 q_target의 **per-tick 변화량**을 `vel_max · dt`로 캡한�
 `policy_thread`(50Hz — `g_mode`(`ModeRuntime`)/`notify_mode_switch`와 같은 스레드) 루프에서 측정
 `joint_vel`의 `max|qd|`를 매 틱 감시한다(`js_qd_severity`). **`over_ticks`(기본 5 = 0.1s@50Hz)
 연속 초과** 시:
-- **warn**(`max|qd| > qd_warn`) → **폴백 모드(표의 첫 행 = mode1) 강제(래치)**. 래치 중엔 매 틱
+- **warn**(`max|qd| > qd_warn`) → **폴백 모드(표의 첫 행 = mode1) 강제(래치)** — 단 mode4·5 의 낮거나 기운
+  자세면 Passive(§2.1 끝, `SafetyPolicy.h`). 래치 중엔 매 틱
   `g_mode.force(G1_FALLBACK_MODE)`로 덮어써 유지(soft — `force()`는 이탈 조건·슬롯 지원을 안 본다).
   **수동 복귀**: 조작자가 폴백 모드를 **명시적으로 요청**(X버튼 또는 키보드 `'1'`)해서
   `g_mode.requested() == G1_FALLBACK_MODE`가 되어야 래치 해제 — qd가 아직 높으면 다음 sustained

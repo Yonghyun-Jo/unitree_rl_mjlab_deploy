@@ -8,7 +8,7 @@
 #include "HeightEstimator.h"
 #include "Mode5Driver.h"
 #include "MotionPreview.h"
-#include "SafetyPolicy.h"           // 넘어짐·qd_warn 을 표의 안전 등급 + z_fk 로 가른다
+#include "SafetyPolicy.h"           // 넘어짐·qd_warn 을 표의 안전 등급 + 명령·자세로 가른다
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include <atomic>
@@ -17,6 +17,7 @@
 #include <thread>
 #include <algorithm>   // std::clamp
 #include <array>
+#include <optional>    // g_commanded_upright → SafetyPolicy.h commanded_upright
 #include <string>
 
 extern std::string g_network_iface;   // main.cpp — 진단 부하 인터록 전용 (조작 경로 아님)
@@ -38,6 +39,7 @@ static g1::ModeRuntime g_mode;
 //    (관측 항은 항마다 따로 불리므로 거기서 계산하면 미리보기 736칸을 세 번 만든다).
 static float g_z_fk = 1e9f;                                  // 골반 높이 추정 (HeightEstimator.h)
 static g1::TiltFilter g_tilt;                                // 걸러진 기울기 [deg]
+static g1::safety::RecentHigh g_recent_high;                 // 최근 1 s 안에 z_fk ≥ 0.65 였나 (넘어짐 관문)
 static g1::Mode5Driver g_m5;                                 // mode5 자세 버튼 상태
 static g1::Mode5Driver::Cmd g_m5_cmd{};                      // mode5_cmd_live 가 아니면 전부 0
 static std::vector<float> g_motion_block(g1::preview::DIM, 0.f);   // motion_preview 가 아니면 전부 0
@@ -48,6 +50,10 @@ static std::vector<float> g_motion_block(g1::preview::DIM, 0.f);   // motion_pre
 static bool g_obs_has_preview = false;
 // 모드 이탈 조건이 보는 로봇 상태 (ModeRuntime::request). B1 에선 기본값(«직립으로 친다») 이었다.
 static g1::ExitContext g_exit_ctx() { return g1::ExitContext{g_z_fk, g_tilt.value(), g_m5.standing_hold()}; }
+// «직립» 은 한 가지 뜻이다 — 이탈 조건(ModeRuntime.h)과 안전 규칙(SafetyPolicy.h)이 같은 문턱을 쓴다.
+static_assert(g1::safety::UPRIGHT_MIN_Z == g1::EXIT_MIN_Z, "SafetyPolicy.h UPRIGHT_MIN_Z != ModeRuntime.h EXIT_MIN_Z");
+static_assert(g1::safety::QD_FALLBACK_MAX_TILT == g1::EXIT_MAX_TILT_DEG,
+              "SafetyPolicy.h QD_FALLBACK_MAX_TILT != ModeRuntime.h EXIT_MAX_TILT_DEG");
 // mode5 자세 키 안내 = 표(Mode5Presets.h ← config/mode5_keys.yaml)의 키, 표 순서. 손으로 쓰지 않는다.
 // 정적 버퍼(힙 없음)를 처음 부를 때 한 번 채운다 — 부르는 곳은 정책 스레드 하나(전환 에지).
 static const char* g_m5_key_hint() {
@@ -93,6 +99,23 @@ static inline std::shared_ptr<State_Mimic::MotionLoader_> active_ref_loader() {
     return State_Mimic::motion;
 }
 static inline bool g_ref_is_clip() { return g_mode.row().ref_source == mode_table::RefSource::Clip; }
+// 넘어짐 관문(SafetyPolicy.h commanded_upright)에 «지금 명령의 높이» 를 모아 넘긴다 — 표의 성질로만(모드 번호 없음).
+//   ref_source=clip → 재생 중인 클립의 현재 프레임 골반 높이. z() 는 root_positions(모든 클립에 있다)만
+//                     읽는다 — lin()/ang() 는 부르지 않는다(속도 배열은 미리보기 슬롯의 클립에만 있다).
+//   mode5_cmd_live  → 활성 자세의 목표 높이(Mode5Presets.h).
+//   그 밖           → 명령에 높이가 없다 → «직립 아님».
+// 정책 스레드 전용: g_mode · g_clips · 로더 frame · g_m5 가 전부 그 스레드의 것이다.
+static bool g_commanded_upright() {
+    const mode_table::Row& row = g_mode.row();
+    std::optional<float> clip_z;
+    if (row.ref_source == mode_table::RefSource::Clip)
+        if (ClipSlot* c = active_clip())
+            if (c->loader && c->loader->frame >= 0 && c->loader->frame < (int)c->loader->root_positions.size())
+                clip_z = c->loader->z(c->loader->frame);
+    std::optional<double> m5_z;
+    if (row.mode5_cmd_live && g_m5.active()) m5_z = m5::PRESETS[g_m5.preset()].z;
+    return g1::safety::commanded_upright(row, clip_z, m5_z);
+}
 
 // Deploy-clean controller (1:1 with mjlab_g1_motion loco_controller.py; golden-verified).
 // Updated once per policy step (see policy_thread) BEFORE obs are computed; obs terms +
@@ -905,7 +928,8 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
                 const auto & g = env->robot->data.projected_gravity_b;
                 const float tilt_deg = std::acos(std::clamp(-g[2], -1.0f, 1.0f)) * 57.29578f;
                 if (tilt_deg > mon_tilt_max_deg_) mon_tilt_max_deg_ = tilt_deg;
-                // 바닥이 목적인 모드의 낮은 자세에선 판정하지 않는다(SafetyPolicy.h). 1·2·3 은 종전 그대로.
+                // GroundCapable 모드는 «명령=직립 ∧ 최근 1 s 에 섰음» 일 때만 판정한다(SafetyPolicy.h) —
+                // 관문은 정책 스레드가 매 틱 계산해 orient_gate_ 에 둔다. UprightOnly 는 종전 그대로(항상 판정).
                 const bool trip = isaaclab::mdp::bad_orientation(env.get(), 1.0) && orient_gate_.load();
                 if (trip && !mon_exit_reason_) {
                     mon_exit_reason_ = "bad_orientation";
@@ -1232,6 +1256,7 @@ void State_Mimic::enter()
     js_lowpose_passive_.store(false);
     orient_gate_.store(true);
     g_tilt.reset();
+    g_recent_high.reset();     // 지난 체류의 «섰음» 이 남지 않게 — 첫 틱의 z_fk 부터 다시 센다
     mon_reset();               // 모니터링 카운터도 체류 단위로 리셋 (요약이 이번 체류만 담게)
     // 진입 시 «조작자가 요청한 모드» 를 현재 모드와 일치시켜 시작(불일치 방지). 같은 모드 요청은
     // 이탈 조건을 안 타므로 requested 만 맞춰진다.
@@ -1356,7 +1381,10 @@ void State_Mimic::enter()
                 const auto& rd = env->robot->data;
                 g_z_fk = g1::z_fk(rd.joint_pos.data(), rd.root_quat_w);
                 g_tilt.update({rd.projected_gravity_b[0], rd.projected_gravity_b[1], rd.projected_gravity_b[2]});
-                orient_gate_.store(g1::safety::orientation_check_applies(g_mode.row().safety, g_z_fk));
+                g_recent_high.update(g_z_fk);
+                // 넘어짐 관문: 정책 스레드가 여기서만 쓰고, FSM 스레드의 bad_orientation 람다는 이 원자값만 읽는다.
+                orient_gate_.store(g1::safety::orientation_check_applies(
+                    g_mode.row().safety, g_commanded_upright(), g_recent_high.value()));
             }
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (모드 키 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
@@ -1387,21 +1415,35 @@ void State_Mimic::enter()
                     safety_log_.event("qd_crit", qd_j, jname(qd_j), qd_now, (qd_j>=0&&qd_j<29)?js_qd_crit_v_[qd_j]:js_qd_crit_, "-> Passive");
                 // warn 수동복귀: 조작자가 폴백 모드(X/'1')를 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
                 if (js_qd_warn_latched_ && reqd == G1_FALLBACK_MODE) js_qd_warn_latched_ = false;
-                // 해제 뒤에 로그 → 폴백 모드에서는 같은 틱에 풀리므로(=no-op) 스팸이 안 난다.
-                if (!warn_before && js_qd_warn_latched_)
-                    spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> 폴백 모드 강제. 복귀=키 '1'",
-                                 qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
-                if (!warn_before && js_qd_warn_latched_)
-                    safety_log_.event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 폴백 모드 강제");
                 // g_poll_vr 뒤에 덮어써 폴백 모드 유지(soft).
                 if (js_qd_warn_latched_) {
-                    // 직립 모드면 종전 그대로 폴백 모드. 바닥이 목적인 모드의 낮은 자세면 Passive(SafetyPolicy.h).
-                    if (g1::safety::qd_warn_action(g_mode.row().safety, g_z_fk, g_tilt.value())
-                            == g1::safety::QdWarnAction::Passive) {
-                        if (!js_lowpose_passive_.exchange(true)) {
-                            spdlog::error("[safety] qd_warn 바닥 자세 (mode{} z_fk={:.2f} 기울기={:.0f}°) -> Passive",
+                    // 처분은 «그 순간의 모드» 행으로 정한다(SafetyPolicy.h qd_warn_action): UprightOnly 는 종전
+                    // 그대로 폴백 모드, GroundCapable 의 낮거나 기운 자세는 Passive. 로그가 실제 처분을 말하게
+                    // 먼저 구한다. ⚠ 래치 중 조작자가 GroundCapable 모드를 누른 그 틱이면 그 모드의 행으로
+                    // 판정된다(z_fk < 0.65 ∨ 기울기 ≥ 30° 면 Passive, 아니면 같은 틱에 폴백 모드로 되돌린다) —
+                    // spec §4.7 대로 «그 순간의 모드» 기준. 래치 중엔 폴백 모드로 서 있으므로 드물다.
+                    const bool to_passive = g1::safety::qd_warn_action(g_mode.row().safety, g_z_fk, g_tilt.value())
+                                            == g1::safety::QdWarnAction::Passive;
+                    // 래치 에지에서 로그 1줄 + CSV 1건. 해제 뒤라 폴백 모드에서는 같은 틱에 풀려(=no-op) 스팸이 안 난다.
+                    if (!warn_before) {
+                        if (to_passive) {
+                            spdlog::error("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과)"
+                                          "  mode{} z_fk={:.2f} 기울기={:.0f}° -> Passive. 복귀=p→f→m",
+                                          qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_,
                                           g_mode.row().id, g_z_fk, g_tilt.value());
-                            safety_log_.event("qd_warn_lowpose", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive");
+                            safety_log_.event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
+                        } else {
+                            spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> 폴백 모드 강제. 복귀=키 '1'",
+                                         qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
+                            safety_log_.event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 폴백 모드 강제");
+                        }
+                    }
+                    if (to_passive) {
+                        // 래치 에지가 아닌데 처분이 Passive 가 된 경우(래치 중 모드가 바뀐 틱)만 따로 한 번 남긴다.
+                        if (!js_lowpose_passive_.exchange(true) && warn_before) {
+                            spdlog::error("[safety] qd_warn 래치 중 (mode{} z_fk={:.2f} 기울기={:.0f}°) -> Passive. 복귀=p→f→m",
+                                          g_mode.row().id, g_z_fk, g_tilt.value());
+                            safety_log_.event("qd_warn_lowpose", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
                         }
                     } else {
                         g_mode.force(G1_FALLBACK_MODE);
