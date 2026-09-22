@@ -18,11 +18,18 @@ venv 도 안 건드린다.
 
 끝나면 `check_band_released.py` 로 **스스로 판정**한다 — 밴드가 안 풀렸으면 실패로 끝난다.
 """
+# 🔴 2026-09-22 사고: 이 스크립트가 시작할 때마다 부킹 에이전트 전용 Xvfb(:99,
+# xvfb99.service, "예약 브라우저 전용")를 이름으로 pkill 하고 그 자리에 자기 Xvfb 를
+# 띄웠다 — 하루 433회 systemd 재시작 + 예약 브라우저 점검 실패. g1_ctrl/unitree_mujoco
+# 도 이름으로 pkill 해 다른 사람의 sim 까지 죽일 수 있었다. 처방: 기본 디스플레이를
+# :97 로 옮기고 :99 는 아예 거부, 시작 시 "이미 떠 있으면 죽이지 말고 거부"로 바꾸고,
+# 종료 시에는 이 스크립트가 **직접 띄운 Popen 객체만** 정리한다 — 이름 기반 pkill 금지.
 from __future__ import annotations
 
 import argparse
 import os
 import pty
+import re
 import signal
 import subprocess
 import sys
@@ -64,8 +71,57 @@ print("KEYS_SENT", flush=True)
 '''
 
 
-def sh(cmd, **kw):
-    return subprocess.run(cmd, shell=isinstance(cmd, str), **kw)
+def _pgrep_af(pattern):
+    """pgrep -af <정규식>: 매치 줄('pid cmdline') 리스트. 없으면 빈 리스트."""
+    r = subprocess.run(["pgrep", "-af", pattern], capture_output=True, text=True)
+    return [ln for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def _pgrep_ax(name):
+    """pgrep -a -x <name>: comm 이 정확히 일치하는 프로세스만."""
+    r = subprocess.run(["pgrep", "-a", "-x", name], capture_output=True, text=True)
+    return [ln for ln in r.stdout.splitlines() if ln.strip()]
+
+
+def _pid_alive(pid):
+    return os.path.exists("/proc/%d" % pid)
+
+
+def check_display_free(display):
+    """이 display 를 이미 쓰는 Xvfb(또는 살아있는 락)가 있는지 검사만 한다 — 절대 안 죽인다.
+
+    반환: 사용 가능하면 None. 아니면 사람이 읽을 에러 메시지(str) — 호출부가 찍고 종료한다.
+    죽은 프로세스의 stale lock 파일은 여기서 지운다(로그 남김); 살아있는 서버의 락은 건드리지 않는다.
+    """
+    hits = _pgrep_af(r"Xvfb %s( |$)" % re.escape(display))
+    if hits:
+        lines = "\n".join("   " + h for h in hits)
+        return "디스플레이 %s 는 이미 다른 Xvfb 가 쓰는 중 — 죽이지 않는다:\n%s" % (display, lines)
+
+    lock_path = "/tmp/.X%s-lock" % display.lstrip(":")
+    if os.path.exists(lock_path):
+        try:
+            pid = int(open(lock_path, encoding="utf-8").read().strip())
+        except (ValueError, OSError):
+            pid = None
+        if pid is not None and _pid_alive(pid):
+            return "%s 락이 살아있는 pid %d 를 가리킨다 — 그 프로세스가 쓰는 중, 안 건드린다." % (lock_path, pid)
+        print("[정리] %s 는 죽은 pid(%s) 의 잔류 락 — 삭제" % (lock_path, pid))
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
+    return None
+
+
+def check_no_other_sim():
+    """g1_ctrl / unitree_mujoco 가 이미 돌고 있으면 에러 메시지, 없으면 None. 절대 안 죽인다."""
+    for name in ("g1_ctrl", "unitree_mujoco"):
+        hits = _pgrep_ax(name)
+        if hits:
+            lines = "\n".join("   " + h for h in hits)
+            return "%s 가 이미 돌고 있다 — 다른 sim 이 돌고 있다, 끝난 뒤 다시:\n%s" % (name, lines)
+    return None
 
 
 def main():
@@ -75,10 +131,25 @@ def main():
     ap.add_argument("--mode", default="1")
     ap.add_argument("--stand", type=float, default=35.0, help="밴드 해제 뒤 정지 유지 [s]")
     ap.add_argument("--replay", default=None, help="이 실기 gait CSV 의 명령을 재생")
-    ap.add_argument("--display", default=":99")
+    ap.add_argument("--display", default=":97",
+                    help="Xvfb 디스플레이. :99 는 예약 브라우저 전용(xvfb99.service) — 사용 금지")
     ap.add_argument("--floor-friction", type=float, default=None,
                     help="바닥 마찰 μ 를 이 값으로 바꿔 돌린다(끝나면 원복). 학습 DR 은 (0.3,1.6).")
     a = ap.parse_args()
+
+    if a.display == ":99":
+        print("🔴 :99 는 예약 브라우저 전용(xvfb99.service) — 다른 번호를 쓸 것")
+        return 1
+
+    print("[확인] 남의 프로세스는 안 죽인다 — 떠 있으면 거부만 한다")
+    err = check_no_other_sim()
+    if err:
+        print("🔴 " + err)
+        return 1
+    err = check_display_free(a.display)
+    if err:
+        print("🔴 " + err)
+        return 1
 
     slot = a.policy
     act = os.path.join(G1, "config/policy/ACTIVE.yaml")
@@ -106,13 +177,6 @@ def main():
             print("🔴 바닥 geom 을 못 찾았다 — 마찰을 못 바꾼다"); return 1
         open(scene, "w", encoding="utf-8").write(src2)
         print("[바닥] μ = %g (끝나면 원복한다)" % a.floor_friction)
-
-    print("[정리] 잔류 프로세스")
-    for p in ("g1_ctrl", "unitree_mujoco"):
-        sh(["pkill", "-x", p], stderr=subprocess.DEVNULL)
-    sh(["pkill", "-f", "Xvfb %s" % a.display], stderr=subprocess.DEVNULL)
-    time.sleep(2)
-    sh(["rm", "-f", "/tmp/.X%s-lock" % a.display.lstrip(":")], stderr=subprocess.DEVNULL)
 
     xv = subprocess.Popen(["Xvfb", a.display, "-screen", "0", "1280x1024x24"],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -188,6 +252,8 @@ def main():
             time.sleep(a.stand)
         os.write(mfd, b"p"); time.sleep(2)
     finally:
+        # 🔴 여기서 정리하는 건 이 스크립트가 직접 띄운 Popen(ctl/sim/xv)뿐이다.
+        #    이름 기반 pkill 은 남의 프로세스(부킹 에이전트 Xvfb 등)를 같이 죽일 수 있어 금지.
         ctl.send_signal(signal.SIGINT)
         try: ctl.wait(timeout=10)
         except Exception: ctl.kill()
@@ -195,8 +261,8 @@ def main():
         try: sim.wait(timeout=8)
         except Exception: sim.kill()
         xv.terminate()
-        for p in ("g1_ctrl", "unitree_mujoco"):
-            sh(["pkill", "-x", p], stderr=subprocess.DEVNULL)
+        try: xv.wait(timeout=8)
+        except Exception: xv.kill()
         if scene_backup is not None:                 # 🔴 무슨 일이 있어도 원복
             open(scene, "w", encoding="utf-8").write(scene_backup)
             print("[바닥] 씬 원복")
