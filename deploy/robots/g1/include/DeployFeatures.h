@@ -51,8 +51,9 @@ inline const std::vector<std::string>& known()
         "obs_contract_v2",
         // mode5 자세 버튼(Mode5Driver) + 골반 높이 추정(z_fk) + 이탈 조건에 실측 자세. 2026-09-22.
         "mode5_driver",
-        // 넘어짐·qd_warn 을 표의 안전 등급으로 가른다(SafetyPolicy.h). 2026-09-22. GroundCapable 모드는
-        //   넘어짐 판정을 «명령 직립 ∧ 최근 1 s 에 섰음(z_fk ≥ 0.65 ∧ 기울기 < 57.3°)» 일 때만,
+        // 넘어짐·qd_warn 을 표의 안전 등급으로 가른다(SafetyPolicy.h). 2026-09-22. GroundCapable 모드의
+        //   넘어짐 판정 관문: 클립 재생 = 클립 현재 프레임 골반 기울기 < 57.3° (이력 안 봄) · mode5 = «명령 직립 ∧
+        //   최근 1 s 에 섰음(z_fk ≥ 0.65 ∧ 기울기 < 57.3°)» · 명령에 자세가 없는 모드 = 판정 안 함.
         //   qd_warn 은 낮거나 기운 자세(z_fk < 0.65 ∨ 기울기 ≥ 30°)면 Passive. UprightOnly 는 종전 그대로.
         "ground_safety",
     };

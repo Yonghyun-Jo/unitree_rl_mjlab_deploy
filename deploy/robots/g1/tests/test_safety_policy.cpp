@@ -4,6 +4,7 @@
 #include "SafetyPolicy.h"
 #include "HeightEstimator.h"
 #include "Mode5Presets.h"
+#include "golden_motion_preview.inc"   // 실기 v1 슬롯 demo6 클립(dance1_subject2) 의 실제 프레임 120개 — 골반 자세·높이
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -31,42 +32,105 @@ int main() {
   for (float z : {0.05f, 0.40f, 0.60f, 0.80f})
     chk(s::qd_warn_action(Safety::UprightOnly, z, 80.f) == QdWarnAction::Fallback, "UprightOnly: qd_warn → 폴백");
 
-  std::printf("-- GroundCapable (mode4·5·6): 넘어짐 관문 = 명령 직립 ∧ 최근에 섰음 --\n");
+  std::printf("-- GroundCapable 등급식 (mode5 행이 쓰는 식): 넘어짐 관문 = 명령 직립 ∧ 최근에 섰음 --\n");
   chk(s::orientation_check_applies(Safety::GroundCapable, true, true), "명령 직립 ∧ 최근에 섰음: 적용 (서 있다 넘어짐)");
   chk(!s::orientation_check_applies(Safety::GroundCapable, false, true), "명령이 낮음: 적용 안 함 (일부러 내려가기)");
   chk(!s::orientation_check_applies(Safety::GroundCapable, true, false), "최근에 선 적 없음: 적용 안 함 (누운 데서 일어나기)");
   chk(!s::orientation_check_applies(Safety::GroundCapable, false, false), "둘 다 아님: 적용 안 함");
 
-  std::printf("-- commanded_upright: 표의 성질로만 (모드 번호 없음) --\n");
+  std::printf("-- commanded_upright · 관문(행): 표의 성질로만 (모드 번호 없음) --\n");
   {
     const std::optional<float> NOF;
     const std::optional<double> NOD;
+    const float T = s::ORIENT_TRIP_DEG;
     int n_clip = 0, n_m5 = 0, n_none = 0;
     for (const mode_table::Row& r : mode_table::ROWS) {
       if (r.ref_source == mode_table::RefSource::Clip) {
         ++n_clip;
-        chk(s::commanded_upright(r, 0.78f, NOD), "클립 모드: 클립 골반 0.78 → 직립");
-        chk(s::commanded_upright(r, 0.65f, NOD), "클립 모드: 경계 0.65 → 직립");
-        chk(!s::commanded_upright(r, 0.40f, 0.76), "클립 모드: 클립 골반 0.40 → 아님 (mode5 값은 안 본다)");
+        // 클립 모드의 «명령 직립» = 클립 현재 프레임 골반 «기울기» < 57.3° (Ruling 34 I-2 — 높이가 아니다)
+        chk(s::commanded_upright(r, 5.f, NOD), "클립 모드: 골반 기울기 5° → 직립");
+        chk(s::commanded_upright(r, 39.f, NOD), "클립 모드: 깊이 앉는 프레임(골반 낮음·기울기 39°) → 직립 (높이는 안 본다)");
+        chk(s::commanded_upright(r, T - 0.01f, NOD), "클립 모드: 57.3° 바로 아래 → 직립");
+        chk(!s::commanded_upright(r, T, NOD), "클립 모드: 57.3° 부터 → 아님 (그 구간은 클립이 눕힌다)");
+        chk(!s::commanded_upright(r, 70.f, 0.76), "클립 모드: 기울기 70° → 아님 (mode5 값은 안 본다)");
         chk(!s::commanded_upright(r, NOF, 0.76), "클립 모드: 활성 클립 없음 → 아님");
-        chk(!s::commanded_upright(r, std::nanf(""), NOD), "클립 모드: 골반 NaN → 아님");
+        chk(!s::commanded_upright(r, std::nanf(""), NOD), "클립 모드: 기울기 NaN → 아님");
+        // 관문은 «최근 섰음» 을 묻지 않는다 — 클립은 참조 궤적이다
+        chk(!s::gate_needs_recent_high(r), "클립 모드: 관문은 «최근 1 s 에 섰음» 을 묻지 않는다");
+        chk(s::orientation_check_applies(r, s::commanded_upright(r, 39.f, NOD), /*recently_high=*/false),
+            "클립 모드: 깊은 앉기 프레임(39°) · 최근 섰음 없음 → 넘어짐 판정 적용");
+        chk(!s::orientation_check_applies(r, s::commanded_upright(r, 70.f, NOD), /*recently_high=*/true),
+            "클립 모드: 70° 로 눕히는 프레임 → 판정 끔 (최근 섰어도)");
       } else if (r.mode5_cmd_live) {
         ++n_m5;
         chk(s::commanded_upright(r, NOF, 0.76), "mode5 명령: 자세 z 0.76 → 직립");
-        chk(!s::commanded_upright(r, 0.78f, 0.42), "mode5 명령: 자세 z 0.42 → 아님 (클립 값은 안 본다)");
-        chk(!s::commanded_upright(r, 0.78f, NOD), "mode5 명령: 활성 자세 없음 → 아님");
+        chk(!s::commanded_upright(r, 5.f, 0.42), "mode5 명령: 자세 z 0.42 → 아님 (클립 값은 안 본다)");
+        chk(!s::commanded_upright(r, 5.f, NOD), "mode5 명령: 활성 자세 없음 → 아님");
         for (const m5::Preset& p : m5::PRESETS)
           chk(s::commanded_upright(r, NOF, p.z) == (p.z >= s::UPRIGHT_MIN_Z), "mode5 명령: 프리셋마다 z ≥ 0.65 ⇔ 직립");
         chk(s::commanded_upright(r, NOF, m5::PRESETS[m5::ENTER_PRESET].z),
             "mode5 진입 자세는 직립 — 서서 들어오면 넘어짐 판정이 켜진 채로 시작");
+        // 관문은 종전 그대로: 명령 직립 ∧ 최근 1 s 에 섰음
+        chk(s::gate_needs_recent_high(r), "mode5 명령: 관문은 «최근 섰음» 을 묻는다 (종전 그대로)");
+        chk(s::orientation_check_applies(r, true, true) && !s::orientation_check_applies(r, true, false)
+            && !s::orientation_check_applies(r, false, true), "mode5 명령: 명령 직립 ∧ 최근 섰음 일 때만 (종전 그대로)");
       } else {
         ++n_none;
-        chk(!s::commanded_upright(r, 0.78f, 0.76), "명령에 높이가 없는 모드: 아님");
+        chk(!s::commanded_upright(r, 5.f, 0.76), "명령에 자세가 없는 모드: 아님");
+        if (r.safety == Safety::UprightOnly)
+          chk(s::orientation_check_applies(r, false, false), "UprightOnly 행: 관문은 늘 열림 (종전 그대로)");
+        else
+          chk(!s::orientation_check_applies(r, false, true), "명령에 자세가 없는 GroundCapable 행(기기): 판정 안 함");
       }
     }
-    std::printf("     표 %d 행: 클립 %d · mode5 명령 %d · 높이 없음 %d\n",
+    std::printf("     표 %d 행: 클립 %d · mode5 명령 %d · 명령 자세 없음 %d\n",
                 static_cast<int>(mode_table::ROWS.size()), n_clip, n_m5, n_none);
     chk(n_clip > 0 && n_m5 > 0, "표에 클립 모드와 mode5 명령 모드가 있다 (위 행들이 실제로 돌았다)");
+  }
+
+  std::printf("-- quat_tilt_deg: 쿼터니언의 기울기 (yaw 무관 · TiltFilter 의 acos(-g_z) 와 같은 양) --\n");
+  {
+    chk(std::fabs(g1::quat_tilt_deg(Eigen::Quaternionf::Identity())) < 1e-3f, "단위 쿼터니언 → 0°");
+    const Eigen::Quaternionf q39(Eigen::AngleAxisf(39.f * 3.14159265f / 180.f, Eigen::Vector3f::UnitY()));
+    chk(std::fabs(g1::quat_tilt_deg(q39) - 39.f) < 1e-3f, "pitch 39° → 39°");
+    const Eigen::Quaternionf q70 = Eigen::Quaternionf(Eigen::AngleAxisf(2.1f, Eigen::Vector3f::UnitZ()))
+                                 * Eigen::Quaternionf(Eigen::AngleAxisf(70.f * 3.14159265f / 180.f, Eigen::Vector3f::UnitX()));
+    chk(std::fabs(g1::quat_tilt_deg(q70) - 70.f) < 1e-3f, "yaw 120° · roll 70° → 70° (yaw 무관)");
+    const Eigen::Quaternionf q2(2.f * q39.w(), 2.f * q39.x(), 2.f * q39.y(), 2.f * q39.z());
+    chk(std::fabs(g1::quat_tilt_deg(q2) - 39.f) < 1e-3f, "정규화 안 된 쿼터니언(|q|=2)도 같은 각");
+    chk(std::isnan(g1::quat_tilt_deg(Eigen::Quaternionf(std::nanf(""), 0.f, 0.f, 0.f))), "NaN 쿼터니언 → NaN (받는 쪽이 «아님»)");
+    float worst = 0.f;
+    for (int i = 0; i < 64; ++i) {                     // 로봇 쪽 측정(TiltFilter: acos(-g_z), g = Rᵀ(0,0,-1))과 같은 양
+      const Eigen::Quaternionf q = Eigen::Quaternionf(Eigen::AngleAxisf(0.37f * i, Eigen::Vector3f::UnitZ()))
+          * Eigen::Quaternionf(Eigen::AngleAxisf(0.05f * i, Eigen::Vector3f(1.f, 0.3f, 0.f).normalized()));
+      const Eigen::Vector3f g = q.conjugate() * Eigen::Vector3f(0.f, 0.f, -1.f);
+      worst = std::max(worst, std::fabs(g1::quat_tilt_deg(q) - g1::TiltFilter().update({g.x(), g.y(), g.z()})));
+    }
+    std::printf("     quat_tilt_deg ↔ TiltFilter 원시값 최대 차 %.2e°\n", worst);
+    chk(worst < 1e-2f, "쿼터니언 기울기 = 로봇 기울기 측정과 같은 정의");
+  }
+
+  std::printf("-- 실제 클립: 실기 v1 슬롯 demo6(dance1_subject2) 프레임 %d 개 — 낮게 앉는 구간에서도 관문이 열려 있다 --\n", kClipN);
+  {
+    const mode_table::Row* clip_row = nullptr;
+    for (const mode_table::Row& r : mode_table::ROWS) if (r.ref_source == mode_table::RefSource::Clip) { clip_row = &r; break; }
+    chk(clip_row != nullptr, "표에 클립 재생 행이 있다");
+    int n_low = 0, n_open = 0, n_open_old = 0;
+    float tilt_max = 0.f, z_min = 1e9f;
+    for (int i = 0; clip_row && i < kClipN; ++i) {
+      const Eigen::Quaternionf q(kClipQ[i][0], kClipQ[i][1], kClipQ[i][2], kClipQ[i][3]);   // wxyz
+      const float tilt = g1::quat_tilt_deg(q);
+      tilt_max = std::max(tilt_max, tilt); z_min = std::min(z_min, kClipZ[i]);
+      if (kClipZ[i] < s::UPRIGHT_MIN_Z) ++n_low;
+      // 새 관문: 클립 기울기만. 최근 섰음은 «없음» 으로 준다 — 묻지 않으므로 결과가 같아야 한다.
+      if (s::orientation_check_applies(*clip_row, s::commanded_upright(*clip_row, tilt, std::nullopt), false)) ++n_open;
+      // 옛 관문(B2 이전 원고, 714cb3a): 클립 골반 높이 ≥ 0.65 ∧ 최근 섰음 — 여기선 «섰음» 을 준다(가장 너그럽게)
+      if (kClipZ[i] >= s::UPRIGHT_MIN_Z) ++n_open_old;
+    }
+    std::printf("     골반 높이 최소 %.3f m · < 0.65 m 프레임 %d · 골반 기울기 최대 %.1f° · 관문 열림 %d/%d (옛 높이 규칙 %d/%d)\n",
+                z_min, n_low, tilt_max, n_open, kClipN, n_open_old, kClipN);
+    chk(n_low > 0, "이 구간엔 골반 < 0.65 m 인 프레임이 있다 (옛 높이 규칙이 판정을 끄던 곳)");
+    chk(n_open == kClipN, "모든 프레임에서 넘어짐 판정 관문이 열려 있다 (base 와 같은 보호)");
   }
 
   std::printf("-- GroundCapable: qd_warn 처분 (종전과 같다) --\n");
@@ -135,6 +199,18 @@ int main() {
         "raw() = 직전 update 의 원시 기울기(90°), value() 는 걸러진 값(늦다)");
     tf.reset();
     chk(tf.raw() == 0.f && tf.value() == 0.f, "reset() 은 원시값도 0 으로");
+    // 비유한 IMU 한 틱은 버린다 (최종 검토 M-10 — 옛 필터는 NaN 한 번에 체류 끝까지 NaN 이었다)
+    g1::TiltFilter tn;
+    tn.update({0.f, 0.f, -1.f});
+    const float v0 = tn.update({0.5f, 0.f, -0.8660254f});            // 30° 쪽으로 한 틱
+    const float r0 = tn.raw();
+    const float vn = tn.update({std::nanf(""), std::nanf(""), std::nanf("")});
+    chk(vn == v0 && tn.value() == v0 && tn.raw() == r0, "NaN 한 틱은 버린다 — 걸러진 값·원시값 그대로");
+    const float v1 = tn.update({0.5f, 0.f, -0.8660254f});
+    chk(std::isfinite(v1) && v1 > v0 && std::fabs(tn.raw() - 30.f) < 1e-2f, "다음 정상 틱부터 이어 걸러진다 (NaN 에 갇히지 않는다)");
+    g1::TiltFilter tf0;                                               // 첫 틱이 NaN 이어도 다음 정상 틱이 원시값으로 시작
+    tf0.update({std::nanf(""), 0.f, std::nanf("")});
+    chk(std::fabs(tf0.update({0.5f, 0.f, -0.8660254f}) - 30.f) < 1e-2f, "첫 틱 NaN → 다음 정상 틱이 원시값으로 시작");
   }
 
   std::printf("-- FK (a): 엉덩이부터 드는 기립 — 골반 60° 숙임·다리 곧음 --\n");

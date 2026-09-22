@@ -55,13 +55,27 @@ inline float z_fk(const float* q29, const Eigen::Quaternionf& pelvis_quat_w) {
   return -low;
 }
 
+// 자세 쿼터니언(wxyz, 세계 기준)의 기울기 [deg] = 몸 z축과 세계 z축 사이의 각 — yaw 와 무관하다.
+//   몸 z축의 세계 z 성분 = R(2,2) = 1 − 2(x²+y²)/|q|²  (= TiltFilter 의 −g_z 와 같은 양, g = Rᵀ·(0,0,−1)).
+//   쓰는 곳: 클립 모드의 «명령 직립» = 클립 현재 프레임 골반 자세의 기울기 (SafetyPolicy.h commanded_upright).
+//   비유한 쿼터니언(또는 |q| = 0)은 NaN 을 낸다 — 받는 쪽이 «직립 아님» 으로 친다.
+inline float quat_tilt_deg(const Eigen::Quaternionf& q) {
+  const float n2 = q.w() * q.w() + q.x() * q.x() + q.y() * q.y() + q.z() * q.z();
+  const float zz = 1.f - 2.f * (q.x() * q.x() + q.y() * q.y()) / n2;
+  return std::acos(std::clamp(zz, -1.f, 1.f)) * 57.29578f;
+}
+
 // 기울기 [deg] = 골반 z축과 세계 수직의 각 = acos(−g_z), g = projected_gravity_b (직립이면 (0,0,−1)).
 // 1차 저역통과(τ): 이탈 조건이 한 틱의 스파이크로 거부되지 않게(B1 Ruling 7 — «걸러서» 넣는다).
+// 비유한(NaN·inf) IMU 한 틱은 버린다(상태 그대로, 직전 값을 돌려준다) — 한 번 섞이면 필터가 체류 끝까지
+// NaN 이 되어 GroundCapable 의 관문·이탈·qd_warn 처분이 전부 «기울었음» 쪽으로 굳었다(최종 검토 M-10).
 class TiltFilter {
  public:
   explicit TiltFilter(float dt = 0.02f, float tau = 0.2f) : a_(dt / (tau + dt)) {}
   float update(const std::array<float, 3>& g_b) {
-    raw_ = std::acos(std::clamp(-g_b[2], -1.f, 1.f)) * 57.29578f;
+    const float r = std::acos(std::clamp(-g_b[2], -1.f, 1.f)) * 57.29578f;
+    if (!std::isfinite(r)) return y_;
+    raw_ = r;
     y_ = init_ ? y_ + a_ * (raw_ - y_) : raw_;
     init_ = true;
     return y_;

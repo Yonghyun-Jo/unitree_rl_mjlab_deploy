@@ -27,6 +27,38 @@ int main() {
     ExitContext tilt; tilt.tilt_deg = 45.f;
     CHK(!rt.request(1, low).accepted && !rt.request(1, tilt).accepted && rt.mode() == 4);
     CHK(rt.request(1, ExitContext{}).accepted && rt.mode() == 1);
+    // 들어가는 쪽 — mode4(exit=upright)는 직립에서만 들어간다 (최종 검토 I-1(a), Ruling 34).
+    // mode1 에서 무릎이 무너져 앉은 채(기울기 < 57.3° 라 mode1 넘어짐 판정 안 걸림) 4 → 거부, 상태 불변.
+    // (옛 코드는 1·2·3 → 4 를 무조건 받아, 바닥에서 클립 재생 = 넘어짐 판정 꺼짐 · 이탈 거부 · 출구 p 뿐이었다.)
+    ExitContext sitting; sitting.z_fk = 0.45f; sitting.tilt_deg = 20.f;
+    ModeResult r14 = rt.request(4, sitting);
+    CHK(!r14.accepted && std::strstr(r14.reason, "직립에서만 들어간다") && rt.mode() == 1 && rt.requested() == 1);
+    CHK(!rt.request(4, low).accepted && !rt.request(4, tilt).accepted && rt.mode() == 1);   // 낮아도·기울어도 거부
+    rt.request(3); rt.consume_switch();
+    CHK(!rt.request(4, sitting).accepted && rt.mode() == 3);                              // 3 → 4 도 같다
+    ExitContext standing; standing.z_fk = 0.76f; standing.tilt_deg = 3.f;
+    CHK(rt.request(4, standing).accepted && rt.mode() == 4);                               // 서 있으면 수락
+    CHK(rt.request(1, standing).accepted && rt.mode() == 1);
+    rt.consume_switch();
+    // 체류 시작 (I-1(b)): 바닥 모드 중 스스로 일어서는 명령이 없는 행(클립 재생·기기)으로는 체류를 시작하지 않는다
+    CHK(ModeRuntime::may_start_stay_in(mode_table::ROWS[0]));                             // 폴백(첫 행)은 시작할 수 있다
+    CHK(ModeRuntime::may_start_stay_in(mode_table::row(1)) && ModeRuntime::may_start_stay_in(mode_table::row(5)));
+    CHK(!ModeRuntime::may_start_stay_in(mode_table::row(4)) && !ModeRuntime::may_start_stay_in(mode_table::row(6)));
+    {
+        ModeRuntime s;                                    // 지난 체류가 mode4 로 끝났다(넘어짐 → Passive)
+        CHK(s.request(4, standing).accepted && s.consume_switch());
+        const char* why = s.begin_stay(1);
+        CHK(why && std::strstr(why, "바닥 모드") && s.mode() == 1);    // 재진입은 폴백으로 시작
+        CHK(s.begin_stay(1) == nullptr && s.mode() == 1);              // 이미 폴백이면 그대로
+        ModeRuntime u;                                    // 슬롯이 모르는 모드(v2 에서 5 로 나갔다가 v1 슬롯)
+        u.set_supported({1, 2, 3, 4, 5}); CHK(u.request(5).accepted);
+        u.set_supported({1, 2, 3, 4});
+        const char* why_u = u.begin_stay(1);
+        CHK(why_u && std::strstr(why_u, "모른다") && u.mode() == 1);
+        ModeRuntime m5;                                   // mode5 는 체류를 시작할 수 있다(진입 자세 = 직립 버튼)
+        m5.set_supported({1, 4, 5}); CHK(m5.request(5).accepted);
+        CHK(m5.begin_stay(1) == nullptr && m5.mode() == 5);
+    }
     // mode5(exit=standing_hold) · mode6(exit=via_ground) — 계약 v2 슬롯
     rt.set_supported({1, 2, 3, 4, 5, 6});
     CHK(rt.request(5).accepted);

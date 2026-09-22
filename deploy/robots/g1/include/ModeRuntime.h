@@ -1,6 +1,7 @@
 #pragma once
 // ModeRuntime.h — «지금 어느 모드인가» 의 유일한 자리. 순수 C++ (DDS·ONNX·Eigen 무의존 = 단위 테스트 가능).
-//   · 조작자 요청(request)은 표의 이탈 조건과 슬롯이 아는 모드로 걸러진다. 안전 폴백(force)은 거르지 않는다.
+//   · 조작자 요청(request)은 표의 이탈 조건(지금 모드의 exit)·진입 조건(목적지의 exit — upright 면 직립에서만)과
+//     슬롯이 아는 모드로 걸러진다. 안전 폴백(force)은 거르지 않는다.
 //   · 코드 어디서도 모드를 번호로 비교하지 않는다 — row() 의 성질을 묻는다 (rules/ADDING_A_MODE.md).
 #include "ModeTable.h"
 #include <algorithm>
@@ -60,6 +61,21 @@ class ModeRuntime {
           break;
       }
       if (!ok) return {false, why};
+      // 들어가는 쪽 조건 — 목적지 행의 exit 가 정한다. exit == Upright 인 모드(지금 클립 재생)는 «직립에서만
+      // 나가는» 모드라 들어갈 때도 직립이어야 한다: 바닥에서 들어가면 그 모드는 스스로 일어서는 명령이 없고
+      // 이탈도 거부돼 출구가 p 뿐이다(최종 검토 I-1, Ruling 34). 나가는 쪽과 같이 기본은 거부, case 가 허용을 켠다.
+      bool enter_ok = false;
+      switch (mode_table::row(m).exit) {
+        case Exit::Upright:
+          enter_ok = upright;
+          break;
+        case Exit::Always:
+        case Exit::StandingHold:
+        case Exit::ViaGround:
+          enter_ok = true;
+          break;
+      }
+      if (!enter_ok) return {false, "직립에서만 들어간다 (높이·기울기 조건)"};
       mode_ = m;
     }
     requested_ = m;
@@ -68,6 +84,24 @@ class ModeRuntime {
 
   // 안전 폴백 — 가드를 타지 않고, 조작자의 요청(requested)은 남긴다(수동 복귀 판정용).
   void force(int m) { if (mode_table::valid(m)) mode_ = m; }
+
+  // 체류(FSM 진입, p→f→m 재진입 포함)를 지금 모드로 «시작» 해도 되나. 모드는 체류를 넘어 남는다.
+  // 바닥 모드 중 스스로 일어서는 명령이 없는 것(GroundCapable ∧ !mode5_cmd_live = 클립 재생·기기)은 안 된다 —
+  // 지난 체류가 넘어짐·Passive 로 끝났으면 로봇은 바닥에 있고, 그 모드는 이탈이 거부돼(직립에서만·ground 경유)
+  // 출구가 p 뿐이다. mode5 는 된다(진입 자세 = 직립 버튼으로 시작, State_Mimic::enter). (Ruling 34, I-1)
+  static bool may_start_stay_in(const mode_table::Row& r) {
+    return !(r.safety == mode_table::Safety::GroundCapable && !r.mode5_cmd_live);
+  }
+  // 체류 시작(State_Mimic::enter, set_supported 뒤·행을 읽는 어떤 코드보다 앞). 지난 체류의 모드로 이 체류를
+  // 시작하면 안 되면 fallback 으로 내린다(force — requested 는 enter 가 뒤에서 맞춘다).
+  // 반환 = 내린 이유(로그용), 그대로 두면 nullptr.
+  const char* begin_stay(int fallback) {
+    const char* why = nullptr;
+    if (!supports(mode_))                 why = "이 슬롯이 모른다";
+    else if (!may_start_stay_in(row()))   why = "스스로 일어서는 명령이 없는 바닥 모드다(클립 재생류) — 체류는 폴백으로 시작한다";
+    if (why) force(fallback);
+    return why;
+  }
 
   // 직전 consume 때의 모드와 지금이 다르면 true — 한 틱 안에서 바뀌었다가 되돌아온 것은 전환이 아니다.
   // (조작 채널이 모드를 요청한 같은 틱에 안전 폴백이 그것을 되돌리는 경우가 그렇다. 전이마다 래치를

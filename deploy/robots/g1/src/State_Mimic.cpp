@@ -40,7 +40,7 @@ static g1::ModeRuntime g_mode;
 //    (관측 항은 항마다 따로 불리므로 거기서 계산하면 미리보기 736칸을 세 번 만든다).
 static float g_z_fk = 1e9f;                                  // 골반 높이 추정 (HeightEstimator.h)
 static g1::TiltFilter g_tilt;                                // 걸러진 기울기 [deg]
-static g1::safety::RecentHigh g_recent_high;                 // 최근 1 s 안에 «섰음»(명령 직립 ∧ z ≥ 0.65 ∧ 원시·걸러진 기울기 < 57.3°) (넘어짐 관문)
+static g1::safety::RecentHigh g_recent_high;                 // 최근 1 s 안에 «섰음»(명령 직립 ∧ z ≥ 0.65 ∧ 원시·걸러진 기울기 < 57.3°) (넘어짐 관문 — mode5 행. 클립 행은 안 묻는다)
 static g1::Mode5Driver g_m5;                                 // mode5 자세 버튼 상태
 static g1::Mode5Driver::Cmd g_m5_cmd{};                      // mode5_cmd_live 가 아니면 전부 0
 static std::vector<float> g_motion_block(g1::preview::DIM, 0.f);   // motion_preview 가 아니면 전부 0
@@ -100,22 +100,23 @@ static inline std::shared_ptr<State_Mimic::MotionLoader_> active_ref_loader() {
     return State_Mimic::motion;
 }
 static inline bool g_ref_is_clip() { return g_mode.row().ref_source == mode_table::RefSource::Clip; }
-// 넘어짐 관문(SafetyPolicy.h commanded_upright)에 «지금 명령의 높이» 를 모아 넘긴다 — 표의 성질로만(모드 번호 없음).
-//   ref_source=clip → 재생 중인 클립의 현재 프레임 골반 높이. z() 는 root_positions(모든 클립에 있다)만
-//                     읽는다 — lin()/ang() 는 부르지 않는다(속도 배열은 미리보기 슬롯의 클립에만 있다).
+// 넘어짐 관문(SafetyPolicy.h commanded_upright)에 «지금 명령의 자세» 를 모아 넘긴다 — 표의 성질로만(모드 번호 없음).
+//   ref_source=clip → 재생 중인 클립의 현재 프레임 골반 기울기(quat_tilt_deg — yaw 무관이라 init_quat 정렬 불필요).
+//                     quat() 는 root_quaternions(모든 클립에 있다)만 읽는다 — lin()/ang() 는 부르지 않는다
+//                     (속도 배열은 미리보기 슬롯의 클립에만 있다).
 //   mode5_cmd_live  → 활성 자세의 목표 높이(Mode5Presets.h).
-//   그 밖           → 명령에 높이가 없다 → «직립 아님».
+//   그 밖           → 명령에 자세가 없다 → «직립 아님».
 // 정책 스레드 전용: g_mode · g_clips · 로더 frame · g_m5 가 전부 그 스레드의 것이다.
 static bool g_commanded_upright() {
     const mode_table::Row& row = g_mode.row();
-    std::optional<float> clip_z;
+    std::optional<float> clip_tilt;
     if (row.ref_source == mode_table::RefSource::Clip)
         if (ClipSlot* c = active_clip())
-            if (c->loader && c->loader->frame >= 0 && c->loader->frame < (int)c->loader->root_positions.size())
-                clip_z = c->loader->z(c->loader->frame);
+            if (c->loader && c->loader->frame >= 0 && c->loader->frame < (int)c->loader->root_quaternions.size())
+                clip_tilt = g1::quat_tilt_deg(c->loader->quat(c->loader->frame));
     std::optional<double> m5_z;
     if (row.mode5_cmd_live && g_m5.active()) m5_z = m5::PRESETS[g_m5.preset()].z;
-    return g1::safety::commanded_upright(row, clip_z, m5_z);
+    return g1::safety::commanded_upright(row, clip_tilt, m5_z);
 }
 
 // Deploy-clean controller (1:1 with mjlab_g1_motion loco_controller.py; golden-verified).
@@ -1003,8 +1004,9 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
                 const auto & g = env->robot->data.projected_gravity_b;
                 const float tilt_deg = std::acos(std::clamp(-g[2], -1.0f, 1.0f)) * 57.29578f;
                 if (tilt_deg > mon_tilt_max_deg_) mon_tilt_max_deg_ = tilt_deg;
-                // GroundCapable 모드는 «명령=직립 ∧ 최근 1 s 에 섰음» 일 때만 판정한다(SafetyPolicy.h) —
-                // 관문은 정책 스레드가 매 틱 계산해 orient_gate_ 에 둔다. UprightOnly 는 종전 그대로(항상 판정).
+                // GroundCapable 모드는 관문이 열렸을 때만 판정한다(SafetyPolicy.h — 클립 재생 = 클립 골반 기울기 < 57.3°,
+                // mode5 = «명령 직립 ∧ 최근 1 s 에 섰음») — 관문은 정책 스레드가 매 틱 계산해 orient_gate_ 에 둔다.
+                // UprightOnly 는 종전 그대로(항상 판정).
                 // 한계는 SafetyPolicy.h 의 ORIENT_TRIP_RAD(1.0 rad) — «섰음» 기억이 같은 한계를 쓴다.
                 const bool trip = isaaclab::mdp::bad_orientation(env.get(), g1::safety::ORIENT_TRIP_RAD) && orient_gate_.load();
                 if (trip && !mon_exit_reason_) {
@@ -1260,12 +1262,20 @@ void State_Mimic::enter()
     g_build_clips();
     // 같은 이유로 «이 슬롯이 아는 모드» 도 여기서 건다 — 지금 들어가는 정책의 것이어야 한다.
     g_mode.set_supported(slot_modes_);
-    // 지난 체류의 모드가 이 슬롯엔 없을 수 있다(예: 계약 v2 에서 mode5 로 나갔다가 v1 슬롯으로 진입).
-    // 그대로 두면 ONNX 가 모르는 모드로 첫 틱이 돈다 → 표의 첫 행(안전 폴백)으로 내린다.
-    if (!g_mode.supports(g_mode.mode())) {
-        spdlog::warn("[mode] 직전 모드 {} 는 이 슬롯이 모른다 -> mode{} 로 내린다",
-                     g_mode.mode(), G1_FALLBACK_MODE);
-        g_mode.force(G1_FALLBACK_MODE);
+    // 지난 체류의 모드로 이 체류를 시작해도 되나 — 행을 읽는 어떤 코드(아래 mode5 블록 · 정책 루프)보다 먼저.
+    //   ① 이 슬롯엔 없을 수 있다(예: 계약 v2 에서 mode5 로 나갔다가 v1 슬롯으로 진입) — 그대로 두면 ONNX 가
+    //      모르는 모드로 첫 틱이 돈다.
+    //   ② 클립 재생류(GroundCapable ∧ !mode5_cmd_live)면 시작하지 않는다 — 지난 체류가 넘어짐·Passive 로
+    //      끝났다면 로봇은 바닥에 있고, 그 모드는 바닥에서 클립을 frame 0 부터 다시 틀며 이탈을 거부한다
+    //      (출구 p 뿐 · base 는 첫 틱 bad_orientation 으로 Passive 였다 — 최종 검토 I-1, Ruling 34).
+    //      Mimic_Dance1_subject2 가 Mimic_Masked 의 mode4 를 물려받는 입구(M-1)도 여기서 막힌다.
+    //   mode5 는 시작한다(아래 블록이 진입 자세 = 직립 버튼으로 누른다 — Ruling 7·8).
+    // 둘 다 표의 첫 행(안전 폴백)으로 내린다.
+    {
+        const int prev = g_mode.mode();
+        if (const char* why = g_mode.begin_stay(G1_FALLBACK_MODE))
+            spdlog::warn("[mode] 직전 모드 {} ({}) 는 {} -> mode{} 로 내린다",
+                         prev, mode_table::row(prev).name, why, G1_FALLBACK_MODE);
     }
     // 미리보기 항 선언도 «지금 들어가는 슬롯» 의 것으로 (생성자가 담아 둔 값). 클립 속도 배열 검사는
     // 생성자가 이미 했다(모터 전 — 여기서 죽이면 PD 가 걸린 채 lowcmd 가 끊긴다).
@@ -1479,12 +1489,13 @@ void State_Mimic::enter()
                 // 넘어짐 관문(SafetyPolicy.h): 명령 → «섰음» 기억(원시·걸러진 기울기 둘 다) → 관문. 정책 스레드가
                 // 여기서만 쓰고, FSM 스레드의 bad_orientation 람다는 orient_gate_ 원자값만 읽는다.
                 // 기억은 직립 모드(UprightOnly)에서도 이어 채운다 — 넘어지는 도중 4·5 로 바꿔도 판정이 걸리게.
-                // 관문 식 자체는 commanded_upright 그대로(UprightOnly 는 어차피 항상 적용).
-                const mode_table::Safety safety = g_mode.row().safety;
+                // 관문 식 자체는 commanded_upright 그대로(UprightOnly 는 어차피 항상 적용). 클립 재생 행은
+                // 기억을 묻지 않는다(클립 골반 기울기 < 57.3° 면 적용 — Ruling 34 I-2).
+                const mode_table::Row& grow = g_mode.row();
                 const bool cmd_upright = g_commanded_upright();
                 g_recent_high.update(g_z_fk, g_tilt.raw(), g_tilt.value(),
-                                     g1::safety::upright_for_memory(safety, cmd_upright));
-                orient_gate_.store(g1::safety::orientation_check_applies(safety, cmd_upright, g_recent_high.value()));
+                                     g1::safety::upright_for_memory(grow.safety, cmd_upright));
+                orient_gate_.store(g1::safety::orientation_check_applies(grow, cmd_upright, g_recent_high.value()));
             }
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (모드 키 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
