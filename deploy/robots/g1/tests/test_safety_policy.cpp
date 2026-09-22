@@ -82,40 +82,59 @@ int main() {
     const float T = s::ORIENT_TRIP_DEG;
     std::printf("     ORIENT_TRIP_RAD = %.4f rad = %.4f°\n", s::ORIENT_TRIP_RAD, T);
     s::RecentHigh rh;                                   // 기본 50틱
-    chk(!rh.update(0.30f, 0.f, true), "처음부터 낮으면 최근에 선 적 없음");
-    chk(rh.update(0.65f, 0.f, true), "경계 z 0.65 는 «섰음» (1번째 틱)");
+    chk(!rh.update(0.30f, 0.f, 0.f, true), "처음부터 낮으면 최근에 선 적 없음");
+    chk(rh.update(0.65f, 0.f, 0.f, true), "경계 z 0.65 는 «섰음» (1번째 틱)");
     bool held = true;
-    for (int t = 2; t <= 50; ++t) held = rh.update(0.30f, 0.f, true) && held;
+    for (int t = 2; t <= 50; ++t) held = rh.update(0.30f, 0.f, 0.f, true) && held;
     chk(held && rh.value(), "선 틱 포함 50틱(1 s) 동안 유지");
-    chk(!rh.update(0.30f, 0.f, true), "51번째 틱에 풀림");
-    rh.update(0.80f, 0.f, true);
+    chk(!rh.update(0.30f, 0.f, 0.f, true), "51번째 틱에 풀림");
+    rh.update(0.80f, 0.f, 0.f, true);
     rh.reset();
-    chk(!rh.value() && !rh.update(0.30f, 0.f, true), "reset() 뒤엔 이력 없음");
-    chk(!s::RecentHigh().update(0.6499f, 0.f, true), "z 0.65 아래는 «섰음» 이 아니다");
-    chk(s::RecentHigh().update(0.80f, T - 0.01f, true), "기울기 57.3° 바로 아래는 «섰음»");
-    chk(!s::RecentHigh().update(0.80f, T, true), "기울기 57.3° 부터는 «섰음» 이 아니다 (그 자체로 넘어짐 판정 대상)");
-    chk(!s::RecentHigh().update(0.80f, 0.f, false), "명령이 직립이 아니면 높아도 «섰음» 이 아니다");
-    chk(!s::RecentHigh().update(std::nanf(""), 0.f, true), "z NaN 은 «섰음» 이 아니다");
-    chk(!s::RecentHigh().update(0.80f, std::nanf(""), true), "기울기 NaN 은 «섰음» 이 아니다");
+    chk(!rh.value() && !rh.update(0.30f, 0.f, 0.f, true), "reset() 뒤엔 이력 없음");
+    chk(!s::RecentHigh().update(0.6499f, 0.f, 0.f, true), "z 0.65 아래는 «섰음» 이 아니다");
+    chk(s::RecentHigh().update(0.80f, T - 0.01f, T - 0.01f, true), "기울기 57.3° 바로 아래는 «섰음»");
+    chk(!s::RecentHigh().update(0.80f, T, T, true), "기울기 57.3° 부터는 «섰음» 이 아니다 (그 자체로 넘어짐 판정 대상)");
+    chk(!s::RecentHigh().update(0.80f, 0.f, 0.f, false), "명령이 직립이 아니면 높아도 «섰음» 이 아니다");
+    chk(!s::RecentHigh().update(std::nanf(""), 0.f, 0.f, true), "z NaN 은 «섰음» 이 아니다");
+    chk(!s::RecentHigh().update(0.80f, std::nanf(""), std::nanf(""), true), "기울기 NaN 은 «섰음» 이 아니다");
+    chk(!s::RecentHigh().update(0.80f, T + 1.f, T - 10.f, true), "원시만 57.3° 이상이어도 «섰음» 이 아니다 (숙이는 중 — 걸러진 쪽이 늦다)");
+    chk(!s::RecentHigh().update(0.80f, T - 10.f, T + 1.f, true), "걸러진 쪽만 57.3° 이상이어도 «섰음» 이 아니다 (일어나는 중)");
+    chk(!s::RecentHigh().update(0.80f, std::nanf(""), 0.f, true) && !s::RecentHigh().update(0.80f, 0.f, std::nanf(""), true),
+        "기울기 한쪽만 NaN 이어도 «섰음» 이 아니다");
     s::RecentHigh rn;
-    rn.update(0.80f, 0.f, true);
+    rn.update(0.80f, 0.f, 0.f, true);
     bool held_nan = true;
-    for (int t = 2; t <= 50; ++t) held_nan = rn.update(std::nanf(""), 0.f, true) && held_nan;
-    chk(held_nan && !rn.update(std::nanf(""), 0.f, true), "NaN 은 카운터를 다시 채우지 않는다 (51번째 틱에 풀림)");
+    for (int t = 2; t <= 50; ++t) held_nan = rn.update(std::nanf(""), 0.f, 0.f, true) && held_nan;
+    chk(held_nan && !rn.update(std::nanf(""), 0.f, 0.f, true), "NaN 은 카운터를 다시 채우지 않는다 (51번째 틱에 풀림)");
     s::RecentHigh r2;
-    r2.update(0.80f, 0.f, true);
-    for (int t = 0; t < 30; ++t) r2.update(0.30f, 0.f, true);
-    r2.update(0.70f, 5.f, true);                        // 다시 서면 카운터가 새로 찬다
+    r2.update(0.80f, 0.f, 0.f, true);
+    for (int t = 0; t < 30; ++t) r2.update(0.30f, 0.f, 0.f, true);
+    r2.update(0.70f, 5.f, 5.f, true);                        // 다시 서면 카운터가 새로 찬다
     bool held2 = true;
-    for (int t = 2; t <= 50; ++t) held2 = r2.update(0.30f, 0.f, true) && held2;
-    chk(held2 && !r2.update(0.30f, 0.f, true), "다시 선 틱부터 50틱 새로 센다");
+    for (int t = 2; t <= 50; ++t) held2 = r2.update(0.30f, 0.f, 0.f, true) && held2;
+    chk(held2 && !r2.update(0.30f, 0.f, 0.f, true), "다시 선 틱부터 50틱 새로 센다");
     // (b) 섰다 → 내려가라는 명령 한 틱 → 기억이 즉시 지워진다 (낮은 자세 누른 뒤 1 s 안에 z 로 되돌리기)
     s::RecentHigh rb;
-    rb.update(0.80f, 0.f, true);
-    chk(!rb.update(0.78f, 5.f, false) && !rb.value(), "명령이 낮아진 틱에 섰던 기억이 즉시 지워진다");
-    chk(!rb.update(0.50f, 60.f, true), "다시 직립 명령이어도 낮고 기운 자세로는 기억이 되살아나지 않는다");
+    rb.update(0.80f, 0.f, 0.f, true);
+    chk(!rb.update(0.78f, 5.f, 5.f, false) && !rb.value(), "명령이 낮아진 틱에 섰던 기억이 즉시 지워진다");
+    chk(!rb.update(0.50f, 60.f, 60.f, true), "다시 직립 명령이어도 낮고 기운 자세로는 기억이 되살아나지 않는다");
     chk(!s::orientation_check_applies(Safety::GroundCapable, true, rb.value()),
         "→ 마음 바꾸기(낮은 자세 → 곧바로 직립 버튼) 중엔 넘어짐 판정이 닫혀 있다");
+  }
+
+  std::printf("-- upright_for_memory · TiltFilter::raw --\n");
+  {
+    chk(s::upright_for_memory(Safety::UprightOnly, false) && s::upright_for_memory(Safety::UprightOnly, true),
+        "UprightOnly 모드는 명령에 높이가 없어도 기억을 채운다 (정의상 직립)");
+    chk(s::upright_for_memory(Safety::GroundCapable, true) && !s::upright_for_memory(Safety::GroundCapable, false),
+        "GroundCapable 모드는 명령 그대로");
+    g1::TiltFilter tf;
+    tf.update({0.f, 0.f, -1.f});
+    const float v = tf.update({1.f, 0.f, 0.f});        // 90° 계단
+    chk(std::fabs(tf.raw() - 90.f) < 1e-3f && v < 20.f && tf.value() == v,
+        "raw() = 직전 update 의 원시 기울기(90°), value() 는 걸러진 값(늦다)");
+    tf.reset();
+    chk(tf.raw() == 0.f && tf.value() == 0.f, "reset() 은 원시값도 0 으로");
   }
 
   std::printf("-- FK (a): 엉덩이부터 드는 기립 — 골반 60° 숙임·다리 곧음 --\n");
@@ -136,13 +155,43 @@ int main() {
     s::RecentHigh rh;                                   // 이전 «섰음» 없음 (네발 기기 자세에서 직립 버튼)
     bool closed = true;
     for (int t = 0; t < 60; ++t) {
-      const bool recent = rh.update(z_bow, tilt_bow, /*commanded_upright=*/true);
+      const bool recent = rh.update(z_bow, tilt_bow, tilt_bow, /*commanded_upright=*/true);
       closed = !s::orientation_check_applies(Safety::GroundCapable, true, recent) && closed;
     }
     chk(closed, "명령 직립 + 인사 자세 60틱: 관문은 닫혀 있다 (거짓 Passive 없음)");
     const float z_up = g1::z_fk(kDefaultPose, Eigen::Quaternionf::Identity());
-    chk(s::orientation_check_applies(Safety::GroundCapable, true, rh.update(z_up, 3.f, true)),
+    chk(s::orientation_check_applies(Safety::GroundCapable, true, rh.update(z_up, 3.f, 3.f, true)),
         "다 서면(기울기 < 57.3°) 그 틱에 관문이 열린다");
+  }
+
+  std::printf("-- FK (ii): 엉덩이부터 숙이며 내려가다(1 s 에 65°) 원시 57.3° 를 넘는 틱에 직립 버튼 --\n");
+  {
+    const int N = 50;
+    s::RecentHigh rh;
+    g1::TiltFilter tf;
+    bool found = false, closed = true;
+    float z_at = 0.f, raw_at = 0.f, filt_at = 0.f;
+    bool cmd = false;                                   // 내려가는 중 = 낮은 자세 명령
+    for (int k = -10; k <= N + 60; ++k) {
+      const float deg = k <= 0 ? 0.f : (k >= N ? 65.f : 65.f * k / N);
+      const float rr = deg * 3.14159265f / 180.f;
+      float pose[29];
+      for (int i = 0; i < 29; ++i) pose[i] = kDefaultPose[i];
+      pose[0] = pose[6] = -rr; pose[3] = pose[9] = 0.05f; pose[4] = pose[10] = 0.f;
+      const Eigen::Quaternionf q(Eigen::AngleAxisf(rr, Eigen::Vector3f::UnitY()));
+      const Eigen::Vector3f g = q.conjugate() * Eigen::Vector3f(0.f, 0.f, -1.f);
+      const float filt = tf.update({g.x(), g.y(), g.z()});
+      const float z = g1::z_fk(pose, q);
+      if (!found && tf.raw() > s::ORIENT_TRIP_DEG) {    // 이 틱에 직립 버튼
+        found = true; cmd = true; z_at = z; raw_at = tf.raw(); filt_at = filt;
+      }
+      rh.update(z, tf.raw(), filt, s::upright_for_memory(Safety::GroundCapable, cmd));
+      if (found) closed = !s::orientation_check_applies(Safety::GroundCapable, cmd, rh.value()) && closed;
+    }
+    std::printf("     직립 버튼 틱: z_fk = %.4f m, 원시 = %.2f°, 걸러진 = %.2f°\n", z_at, raw_at, filt_at);
+    chk(found && z_at >= s::UPRIGHT_MIN_Z && filt_at < s::ORIENT_TRIP_DEG,
+        "그 틱엔 z_fk ≥ 0.65 ∧ 걸러진 기울기 < 57.3° — 걸러진 쪽만 보면 여기서 기억이 찼다");
+    chk(closed, "원시·걸러진 둘 다 보므로 기억이 안 차고, 65° 로 60틱 버티는 동안 관문은 닫혀 있다");
   }
 
   std::printf("-- FK (c): 기본 자세를 통째로 58° 기울임 (서 있다 넘어짐) --\n");
@@ -172,15 +221,15 @@ int main() {
       chk(z58 < s::UPRIGHT_MIN_Z, "58° 에선 z_fk < 0.65 — 높이만으로는 «서 있음» 이 아니다");
       chk(z58 < 0.55f, "58° 에선 z_fk < 0.55 — 옛 규칙(z_fk ≥ 0.55 일 때만 판정)은 여기서 이미 꺼져 있었다");
       s::RecentHigh rh;
-      rh.update(z_up, 0.f, true);                       // 10틱 전에 (기울기 < 57.3° 로) 서 있었다
+      rh.update(z_up, 0.f, 0.f, true);                       // 10틱 전에 (기울기 < 57.3° 로) 서 있었다
       bool recent = false;
-      for (int t = 0; t < 10; ++t) recent = rh.update(z58, 58.f, true);
+      for (int t = 0; t < 10; ++t) recent = rh.update(z58, 58.f, 58.f, true);
       chk(s::orientation_check_applies(Safety::GroundCapable, /*commanded_upright=*/true, recent),
           "명령 직립 + 10틱 전 섰음 → 58° 넘어짐을 판정한다");
       s::RecentHigh rl;
-      rl.update(z_up, 0.f, true);
-      for (int t = 0; t < 9; ++t) rl.update(z58, 58.f, true);
-      const bool recent_low = rl.update(z58, 58.f, /*commanded_upright=*/false);
+      rl.update(z_up, 0.f, 0.f, true);
+      for (int t = 0; t < 9; ++t) rl.update(z58, 58.f, 58.f, true);
+      const bool recent_low = rl.update(z58, 58.f, 58.f, /*commanded_upright=*/false);
       chk(!s::orientation_check_applies(Safety::GroundCapable, /*commanded_upright=*/false, recent_low),
           "같은 자세라도 명령이 낮으면(일부러 눕기) 판정하지 않는다");
     }
@@ -196,7 +245,7 @@ int main() {
         const Eigen::Vector3f g = q.conjugate() * Eigen::Vector3f(0.f, 0.f, -1.f);
         const float filt = tf.update({g.x(), g.y(), g.z()});
         const bool gate = s::orientation_check_applies(Safety::GroundCapable, true,
-                                                       rh.update(g1::z_fk(kDefaultPose, q), filt, true));
+                                                       rh.update(g1::z_fk(kDefaultPose, q), tf.raw(), filt, true));
         if (std::acos(std::clamp(-g.z(), -1.f, 1.f)) > s::ORIENT_TRIP_RAD) { crossed = true; ok = gate && prev_gate; }
         prev_gate = gate;
       }
@@ -209,6 +258,43 @@ int main() {
                       names[a], ramp * 0.02f);
         chk(fall_caught(axes[a], ramp), what);
       }
+    // (i) 서서 걷다(UprightOnly — 명령에 높이 없음) 넘어지는 도중, z_fk < 0.65 가 된 틱에 GroundCapable 모드로
+    //     바꾼다(명령 직립 — mode5 진입 자세 · 선 클립). State_Mimic 과 같은 식으로 기억·관문을 굴린다.
+    auto fall_with_switch_caught = [&](const Eigen::Vector3f& axis, int ramp_ticks) {
+      s::RecentHigh rh;
+      g1::TiltFilter tf;
+      Safety cls = Safety::UprightOnly;
+      bool cmd = false, prev_gate = true, ok = false, crossed = false, switched = false;
+      for (int k = -10; k <= ramp_ticks && !crossed; ++k) {
+        const float ang = (k <= 0 ? 0.f : 58.f * k / ramp_ticks) * 3.14159265f / 180.f;
+        const Eigen::Quaternionf q(Eigen::AngleAxisf(ang, axis));
+        const Eigen::Vector3f g = q.conjugate() * Eigen::Vector3f(0.f, 0.f, -1.f);
+        const float filt = tf.update({g.x(), g.y(), g.z()});
+        const float z = g1::z_fk(kDefaultPose, q);
+        if (!switched && z < s::UPRIGHT_MIN_Z) { cls = Safety::GroundCapable; cmd = true; switched = true; }
+        rh.update(z, tf.raw(), filt, s::upright_for_memory(cls, cmd));
+        const bool gate = s::orientation_check_applies(cls, cmd, rh.value());
+        if (tf.raw() > s::ORIENT_TRIP_DEG) { crossed = true; ok = switched && gate && prev_gate; }
+        prev_gate = gate;
+      }
+      return crossed && ok;
+    };
+    for (int a = 0; a < 4; ++a)
+      for (int ramp : {25, 50, 100}) {
+        char what[160];
+        std::snprintf(what, sizeof what, "%s: 직립 모드에서 넘어지는 중(%.1f s 에 58°) z_fk<0.65 틱에 4·5 로 전환 → 57.3° 틱에 관문 열림",
+                      names[a], ramp * 0.02f);
+        chk(fall_with_switch_caught(axes[a], ramp), what);
+      }
+    {
+      s::RecentHigh rh;
+      rh.update(z_up, 0.f, 0.f, s::upright_for_memory(Safety::UprightOnly, false));   // mode1 에서 서 있다
+      const float z58 = g1::z_fk(kDefaultPose, Eigen::Quaternionf(Eigen::AngleAxisf(r, -Eigen::Vector3f::UnitY())));
+      bool recent = false;
+      for (int t = 0; t < 10; ++t) recent = rh.update(z58, 58.f, 58.f, s::upright_for_memory(Safety::GroundCapable, true));
+      chk(s::orientation_check_applies(Safety::GroundCapable, true, recent),
+          "직립 모드에서 섰음 → GroundCapable(명령 직립)로 바꾼 뒤 10틱 58° → 판정한다");
+    }
     for (int a = 0; a < 4; ++a) {                       // 보고용: 이 규칙이 잡는 가장 느린 등속 넘어짐
       int slowest = 0;
       for (int ramp = 5; ramp <= 400; ++ramp) if (fall_caught(axes[a], ramp)) slowest = ramp;

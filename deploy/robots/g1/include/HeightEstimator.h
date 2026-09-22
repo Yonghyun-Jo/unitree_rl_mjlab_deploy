@@ -61,17 +61,21 @@ class TiltFilter {
  public:
   explicit TiltFilter(float dt = 0.02f, float tau = 0.2f) : a_(dt / (tau + dt)) {}
   float update(const std::array<float, 3>& g_b) {
-    const float raw = std::acos(std::clamp(-g_b[2], -1.f, 1.f)) * 57.29578f;
-    y_ = init_ ? y_ + a_ * (raw - y_) : raw;
+    raw_ = std::acos(std::clamp(-g_b[2], -1.f, 1.f)) * 57.29578f;
+    y_ = init_ ? y_ + a_ * (raw_ - y_) : raw_;
     init_ = true;
     return y_;
   }
   float value() const { return y_; }
-  void reset() { init_ = false; y_ = 0.f; }
+  // 직전 update() 의 걸러지기 전 기울기 [deg]. 기울기가 오르는 중엔 value() 가 늦게 따라오므로(낮게 나온다)
+  // 안전 규칙(SafetyPolicy.h RecentHigh)은 둘 다 본다.
+  float raw() const { return raw_; }
+  void reset() { init_ = false; y_ = 0.f; raw_ = 0.f; }
 
  private:
   float a_;
   float y_ = 0.f;
+  float raw_ = 0.f;
   bool init_ = false;
 };
 

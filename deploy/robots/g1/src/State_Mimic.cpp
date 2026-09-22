@@ -39,7 +39,7 @@ static g1::ModeRuntime g_mode;
 //    (관측 항은 항마다 따로 불리므로 거기서 계산하면 미리보기 736칸을 세 번 만든다).
 static float g_z_fk = 1e9f;                                  // 골반 높이 추정 (HeightEstimator.h)
 static g1::TiltFilter g_tilt;                                // 걸러진 기울기 [deg]
-static g1::safety::RecentHigh g_recent_high;                 // 최근 1 s 안에 «섰음»(명령 직립 ∧ z ≥ 0.65 ∧ 기울기 < 57.3°) (넘어짐 관문)
+static g1::safety::RecentHigh g_recent_high;                 // 최근 1 s 안에 «섰음»(명령 직립 ∧ z ≥ 0.65 ∧ 원시·걸러진 기울기 < 57.3°) (넘어짐 관문)
 static g1::Mode5Driver g_m5;                                 // mode5 자세 버튼 상태
 static g1::Mode5Driver::Cmd g_m5_cmd{};                      // mode5_cmd_live 가 아니면 전부 0
 static std::vector<float> g_motion_block(g1::preview::DIM, 0.f);   // motion_preview 가 아니면 전부 0
@@ -1382,12 +1382,15 @@ void State_Mimic::enter()
                 const auto& rd = env->robot->data;
                 g_z_fk = g1::z_fk(rd.joint_pos.data(), rd.root_quat_w);
                 g_tilt.update({rd.projected_gravity_b[0], rd.projected_gravity_b[1], rd.projected_gravity_b[2]});
-                // 넘어짐 관문(SafetyPolicy.h): 명령 → «섰음» 기억(걸러진 기울기로) → 관문. 정책 스레드가 여기서만 쓰고,
-                // FSM 스레드의 bad_orientation 람다는 orient_gate_ 원자값만 읽는다.
+                // 넘어짐 관문(SafetyPolicy.h): 명령 → «섰음» 기억(원시·걸러진 기울기 둘 다) → 관문. 정책 스레드가
+                // 여기서만 쓰고, FSM 스레드의 bad_orientation 람다는 orient_gate_ 원자값만 읽는다.
+                // 기억은 직립 모드(UprightOnly)에서도 이어 채운다 — 넘어지는 도중 4·5 로 바꿔도 판정이 걸리게.
+                // 관문 식 자체는 commanded_upright 그대로(UprightOnly 는 어차피 항상 적용).
+                const mode_table::Safety safety = g_mode.row().safety;
                 const bool cmd_upright = g_commanded_upright();
-                g_recent_high.update(g_z_fk, g_tilt.value(), cmd_upright);
-                orient_gate_.store(g1::safety::orientation_check_applies(
-                    g_mode.row().safety, cmd_upright, g_recent_high.value()));
+                g_recent_high.update(g_z_fk, g_tilt.raw(), g_tilt.value(),
+                                     g1::safety::upright_for_memory(safety, cmd_upright));
+                orient_gate_.store(g1::safety::orientation_check_applies(safety, cmd_upright, g_recent_high.value()));
             }
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (모드 키 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
