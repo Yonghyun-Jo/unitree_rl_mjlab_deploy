@@ -87,14 +87,34 @@ def in_store(slot):
     return os.path.exists(os.path.join(STORE, slot, "exported", "policy.onnx"))
 
 
-def meta_of(slot):
-    p = os.path.join(SLOTDIR, slot, "ONNX_META.json")
+def _meta_at(slot_dir, slot):
+    """meta_of 와 같은 방식으로 읽되 임의의 slot_dir 에서 읽는다 (테스트가 진짜 SLOTDIR 을
+    건드리지 않고 임시 트리로 게이트 함수를 부를 수 있게)."""
+    p = os.path.join(slot_dir, slot, "ONNX_META.json")
     if not os.path.exists(p):
         return {}
     try:
         return json.load(open(p, encoding="utf-8"))
     except Exception:
         return {}
+
+
+def meta_of(slot):
+    return _meta_at(SLOTDIR, slot)
+
+
+def undeployable_slots(slots, slot_dir=SLOTDIR):
+    """`deployable_real` 이 명시적으로 false 인 슬롯을 [(slot, note), ...] 로 돌려준다.
+
+    controller Ruling 31: 개발용 슬롯(ONNX_META.json 의 deployable_real: false)이 실기로
+    나가면 안 된다. 이 필드가 아예 없는 슬롯(지금까지의 모든 실기 슬롯)은 그대로 통과 —
+    `False is False` 가 아니라 `is False` 로 명시적 거짓만 잡는다."""
+    out = []
+    for s in slots:
+        m = _meta_at(slot_dir, s)
+        if m.get("deployable_real") is False:
+            out.append((s, m.get("note", "")))
+    return out
 
 
 def du_mb(path):
@@ -227,6 +247,12 @@ def cmd_activate(args):
             print("🔴 그런 슬롯이 없다: %s" % v); return 1
         if not has_weights(v):
             print("⚠  %s 는 가중치가 없다 — 먼저 restore 하라" % v)
+        bad = undeployable_slots([v])
+        if bad:
+            note = bad[0][1]
+            print("⚠  %s 는 ONNX_META.json 의 deployable_real: false (개발용) — "
+                  "activate/sim2sim 은 되지만 `push` 로 로봇에 보내는 것은 막힌다%s"
+                  % (v, ("  (%s)" % note if note else "")))
         pairs.append((k.strip(), v.strip()))
     lines = [
         "# 오늘 무엇을 v1/v2/... 로 부를지. 런처가 `--policy v1` 을 여기로 푼다.",
@@ -254,6 +280,17 @@ def cmd_push(args):
     slots = args.slots or sorted(set(read_active().values()))
     if not slots:
         print("🔴 보낼 슬롯이 없다 (ACTIVE.yaml 이 비었고 인자도 없다)"); return 1
+    # controller Ruling 31 — 개발용(deployable_real: false) 슬롯이 섞여 있으면 «아무것도» 안 보낸다.
+    # 전부 먼저 검사하고 나서 rsync 를 시작한다 (부분 push 금지). 우회 플래그는 없다 —
+    # 실기로 보내려면 그 슬롯의 ONNX_META.json 을 직접 고쳐야 하고, 그 수정 자체가 기록이 된다.
+    bad = undeployable_slots(slots)
+    if bad:
+        for s, note in bad:
+            print("🔴 %s 는 ONNX_META.json 의 deployable_real: false — 로봇 push 금지%s"
+                  % (s, ("  (%s)" % note if note else "")))
+        print("🔴 push 를 막았다 — 아무것도 보내지 않았다. "
+              "실기로 보내려면 해당 슬롯의 ONNX_META.json 에서 deployable_real 을 고쳐라.")
+        return 1
     rc = 0
     for s in slots:
         root = os.path.join(SLOTDIR, s)
