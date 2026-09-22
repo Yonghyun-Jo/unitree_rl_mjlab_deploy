@@ -148,6 +148,76 @@ int main() {
     std::printf("  RT 구간 write syscall: %ld 회 (줄 %d)\n", sysw_rt, kRows);
     chk(sysw_rt >= 0 && sysw_rt < kRows / 2, "RT 구간에서 syscall 이 너무 많다 = 파일을 만지고 있다");
 
+    // ⑤ Mimic 재진입 회귀: State_Mimic::enter() 는 stay 마다 open_from_env() 를 다시 부른다.
+    //    닫지 않고 다시 열면 join 가능한 std::thread 에 새 std::thread 를 move-assign 해
+    //    std::terminate 가 난다(원래 버그 — 이 테스트가 없으면 g1_ctrl 프로세스 자체가 죽어야
+    //    재현된다). ⑤-a 는 "정상 경로"(close 뒤 재오픈, State_Mimic 수정으로 맞는 경로) —
+    //    같은 파일에 헤더 없이 이어써야 한다. ⑤-b 는 "방어 경로"(close 없이 재오픈) — open_from_env
+    //    안의 방어 코드가 먼저 close() 해서 죽지 않아야 한다(진짜 버그 재현).
+    {
+        const char* rpath = "/tmp/_tsdw_reentry.csv";
+        std::remove(rpath);
+        setenv("G1_STATE_CSV", rpath, 1);
+        FakeLowState st; FakeLowCmd cmd; GaitAux aux;
+
+        // close on a never-opened dump — safe, no crash, stays off.
+        {
+            g1::StateDump never;
+            chk(!never.on(), "never-opened dump 는 off");
+            never.close();
+            never.close();                        // 두 번 호출도 안전해야 한다
+            chk(!never.on(), "never-opened dump 는 close 뒤에도 off");
+        }
+
+        g1::StateDump d;
+
+        // ⑤-a stay1: open → 3줄 → close (State_Mimic 이 stay 끝에서 부르는 정상 경로)
+        d.open_from_env("G1_STATE_CSV", GaitAux::header());
+        chk(d.on(), "⑤-a stay1 이 열리지 않았다");
+        for (int t = 0; t < 20 * 3; ++t) d.tick(st, cmd, aux);
+        d.close();
+        chk(!d.on(), "⑤-a close 뒤 off 여야 한다");
+        d.close();                                 // 두 번 close — 안전해야 한다(재진입 방어 요구사항)
+
+        // ⑤-a stay2: 같은 경로로 재오픈 → 2줄 더 → close. 헤더 재발급 없이 이어써야 한다.
+        d.open_from_env("G1_STATE_CSV", GaitAux::header());
+        chk(d.on(), "⑤-a stay2 가 열리지 않았다");
+        for (int t = 0; t < 20 * 2; ++t) d.tick(st, cmd, aux);
+        d.close();
+
+        {
+            auto RL = lines_of(rpath);
+            int header_lines = 0;
+            for (auto& s : RL) if (s.rfind("time,wall_time,", 0) == 0) ++header_lines;
+            chk(header_lines == 1, "재진입 뒤 헤더가 한 번만 있어야 한다(truncate 되면 안 된다)");
+            chk((int)RL.size() == 1 + 3 + 2, "재진입 뒤 두 stay 의 줄이 모두 남아 있어야 한다");
+            if (header_lines != 1 || (int)RL.size() != 6)
+                std::printf("     header_lines=%d lines=%zu\n", header_lines, RL.size());
+        }
+
+        // ⑤-b 방어: close() 를 «부르지 않고» 아직 열려 있는(th_ joinable) 객체에 다시
+        //     open_from_env() — 이게 원래 버그의 정확한 트리거(State_Mimic 이 stay 끝에서
+        //     close() 를 안 부르던 옛 경로 그 자체). open_from_env 안의 방어 코드(이미
+        //     열려 있으면 먼저 close())가 없으면 여기서 std::terminate 로 테스트 프로세스가
+        //     통째로 죽는다 — 그래서 아래 줄들이 «찍히는 것 자체» 가 증거다.
+        {
+            const char* bpath = "/tmp/_tsdw_reentry_noclose.csv";
+            std::remove(bpath);
+            setenv("G1_STATE_CSV", bpath, 1);
+            g1::StateDump d2;
+            d2.open_from_env("G1_STATE_CSV", GaitAux::header());
+            chk(d2.on(), "⑤-b 첫 open 이 열리지 않았다");
+            for (int t = 0; t < 20; ++t) d2.tick(st, cmd, aux);
+            // 🔴 close() 없이 재오픈 — 이 시점에 th_ 는 아직 joinable, f_ 도 아직 non-null.
+            d2.open_from_env("G1_STATE_CSV", GaitAux::header());
+            chk(d2.on(), "⑤-b 방어 재오픈이 열리지 않았다");
+            for (int t = 0; t < 20; ++t) d2.tick(st, cmd, aux);
+            d2.close();
+            std::printf("  ⑤-b close 없는 재오픈: crash 없이 통과\n");
+        }
+        std::printf("  ⑤ 재진입 회귀: crash 없이 통과\n");
+    }
+
     std::printf(fail ? "test_state_dump_writer: %d FAIL\n" : "test_state_dump_writer: OK\n", fail);
     return fail ? 1 : 0;
 }

@@ -1686,6 +1686,8 @@ void State_Mimic::enter()
         if (load_th.joinable()) load_th.join();
         if (d_csv) std::fclose(d_csv);
         safety_log_.close();
+        state_dump_.close();   // 🔴 안 닫으면 다음 enter() 의 open_from_env() 가 join 가능한
+                                //    std::thread 에 새 std::thread 를 대입해 std::terminate(재진입 크래시)
     });
 }
 

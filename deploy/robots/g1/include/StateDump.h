@@ -26,6 +26,7 @@
 #include <thread>
 #include <memory>
 #include <initializer_list>
+#include <string>
 
 namespace g1 {
 
@@ -33,27 +34,41 @@ class StateDump {
 public:
     // extra_header = 뒤에 붙일 열 이름(선행 콤마 포함). 소유 모듈의 `Aux::header()` 를 그대로
     // 넘긴다 — StateDump 는 그 열이 무엇인지 «모른다». 그래서 필드가 늘어도 여기는 안 바뀐다.
+    //
+    // 🔴 재진입(같은 State_Mimic 객체가 stay 를 여러 번 도는 것): 이 객체는 State_Mimic 의
+    //    멤버라 stay 마다 enter() 가 다시 open_from_env 를 부른다(close() 는 stay 끝에서만).
+    //    ① 이미 열려 있으면(전 stay 를 안 닫고 다시 열리는 비정상 경로 방어) 먼저 닫는다 —
+    //       안 그러면 join 가능한 std::thread 에 새 std::thread 를 대입해 std::terminate.
+    //    ② 같은 경로로 두 번째 이상 열리면(정상적인 재진입) "w"(truncate) 대신 "a"(이어쓰기)
+    //       로 열고 헤더를 다시 안 쓴다 — 실기 분석이 이 파일 하나를 본다. 첫 stay 를
+    //       truncate 하면 그 데이터가 사라진다. opened_path_ 로 "이 경로는 헤더를 이미
+    //       썼다" 를 기억한다(경로가 바뀌면 다시 "w" + 새 헤더).
     void open_from_env(const char* env_name = "G1_STATE_CSV", const char* extra_header = nullptr) {
         const char* path = std::getenv(env_name);
         if (!path || !*path) return;
-        f_ = std::fopen(path, "w");
+        if (f_ || th_.joinable()) close();          // ① 방어: 이미 열려 있으면 먼저 닫는다
+        const bool append = (opened_path_ == path);  // ② 같은 경로 재진입 = 이어쓰기(헤더 재발급 안 함)
+        f_ = std::fopen(path, append ? "a" : "w");
         if (!f_) return;
         // 🔴 stdio 가 «한 줄 도중에» 자동 flush 하면, 프로세스가 갑자기 죽었을 때 파일 끝이
         //    반쪽 줄로 남는다(실측: Ctrl-C 로 261열 중 108열짜리 꼬리). 분석기가 거기서 깨진다.
         //    버퍼를 크게 잡고 drain() 이 «줄 경계에서만» flush 하게 해서 그 창을 없앤다.
         std::setvbuf(f_, nullptr, _IOFBF, kFlushRows * kRowBytes);
         t0_ = now();
-        // 온보드 로거(piene_g1_logger) 의 341열 중 분석에 쓰는 열만, «이름을 그대로» 쓴다.
-        std::fprintf(f_, "time,wall_time,quat_w,quat_x,quat_y,quat_z,"
-                         "ang_vel_x,ang_vel_y,ang_vel_z,lin_acc_x,lin_acc_y,lin_acc_z,"
-                         "rpy_r,rpy_p,rpy_y");
-        for (const char* k : {"q","dq","tau_est","q_des","dq_des","kp","kd","tau_ff"})
-            for (int i = 0; i < 29; ++i) std::fprintf(f_, ",%s_%d", k, i);
-        // ▼ 온보드 로거에는 «없는» 열. 뒤에 붙인다 → 앞 341열의 위치가 안 바뀌어
-        //   실기 로그 분석 스크립트가 그대로 돈다.
-        if (extra_header) std::fputs(extra_header, f_);
-        std::fprintf(f_, "\n");
-        std::fflush(f_);
+        if (!append) {
+            // 온보드 로거(piene_g1_logger) 의 341열 중 분석에 쓰는 열만, «이름을 그대로» 쓴다.
+            std::fprintf(f_, "time,wall_time,quat_w,quat_x,quat_y,quat_z,"
+                             "ang_vel_x,ang_vel_y,ang_vel_z,lin_acc_x,lin_acc_y,lin_acc_z,"
+                             "rpy_r,rpy_p,rpy_y");
+            for (const char* k : {"q","dq","tau_est","q_des","dq_des","kp","kd","tau_ff"})
+                for (int i = 0; i < 29; ++i) std::fprintf(f_, ",%s_%d", k, i);
+            // ▼ 온보드 로거에는 «없는» 열. 뒤에 붙인다 → 앞 341열의 위치가 안 바뀌어
+            //   실기 로그 분석 스크립트가 그대로 돈다.
+            if (extra_header) std::fputs(extra_header, f_);
+            std::fprintf(f_, "\n");
+            std::fflush(f_);
+            opened_path_ = path;
+        }
 
         // 링과 «한 줄 짜리 메모리 FILE» 을 미리 잡는다 — RT 경로에서 할당이 없게.
         ring_.reset(new char[size_t(kRows) * kRowBytes]);
@@ -163,6 +178,8 @@ private:
     std::thread th_;
     double t0_ = 0.0;
     unsigned n_ = 0;
+    // close() 로 안 지운다 — 다음 open_from_env() 가 "같은 경로로 재진입했나" 를 판단하는 데 쓴다.
+    std::string opened_path_;
 };
 
 }  // namespace g1

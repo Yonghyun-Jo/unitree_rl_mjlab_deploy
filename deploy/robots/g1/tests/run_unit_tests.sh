@@ -14,6 +14,12 @@ for t in test_gait_lut test_gait_lut_v2 test_gait_min_swing test_joint_safety te
          test_masked_loco_controller test_settle_stop test_deploy_features; do
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -I../include $t.cpp
 done
+# StateDump 는 쓰기 스레드(std::thread)가 있어 링크에 -pthread 가 필요하다 — 위 루프와 갈라 둔다.
+# Mimic 재진입(stay 를 여러 번 도는 것)에서 close() 없이 다시 열면 std::terminate 가 나던
+# 회귀(2026-09-22)를 여기서 잡는다.
+for t in test_state_dump_writer; do
+  [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -I../include -pthread $t.cpp
+done
 for t in test_estop_channel test_loop_diag; do
   [ -f $t.cpp ] && run $t -std=c++17 -O2 -I../../../include $t.cpp
 done
