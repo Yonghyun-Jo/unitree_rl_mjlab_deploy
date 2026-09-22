@@ -51,6 +51,7 @@ inline const std::vector<std::string>& known()
         "obs_contract_v2",
         // mode5 자세 버튼(Mode5Driver) + 골반 높이 추정(z_fk) + 이탈 조건에 실측 자세. 2026-09-22.
         "mode5_driver",
+        "ground_safety",  // 넘어짐·qd_warn 을 표의 안전 등급 + z_fk 로 가른다(SafetyPolicy.h). 2026-09-22.
     };
     return k;
 }

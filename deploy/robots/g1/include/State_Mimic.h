@@ -74,6 +74,10 @@ private:
     int   js_warn_run_ = 0, js_crit_run_ = 0;
     bool  js_qd_warn_latched_ = false;      // policy_thread 내부 전용
     std::atomic<bool> js_qd_crit_latched_{false};  // policy_thread set, registered_check(1kHz) read
+    // 바닥 자세(GroundCapable 모드의 낮은 높이)에서 qd_warn → Passive 래치 (SafetyPolicy.h). enter() 에서 내린다.
+    std::atomic<bool> js_lowpose_passive_{false};
+    // 넘어짐 판정을 이 틱에 적용하나 (정책 스레드가 쓰고 FSM 스레드의 registered_check 가 읽는다).
+    std::atomic<bool> orient_gate_{true};
 
     // ── 안전층 모니터링 (읽기 전용 관측 — 제어 경로에 영향 없음) ──
     // 원칙: 1kHz run()/검사 람다에서는 "세기만" 하고 I/O 를 하지 않는다. 출력은 드문 이벤트

@@ -8,6 +8,7 @@
 #include "HeightEstimator.h"
 #include "Mode5Driver.h"
 #include "MotionPreview.h"
+#include "SafetyPolicy.h"           // 넘어짐·qd_warn 을 표의 안전 등급 + z_fk 로 가른다
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include <atomic>
@@ -904,7 +905,8 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
                 const auto & g = env->robot->data.projected_gravity_b;
                 const float tilt_deg = std::acos(std::clamp(-g[2], -1.0f, 1.0f)) * 57.29578f;
                 if (tilt_deg > mon_tilt_max_deg_) mon_tilt_max_deg_ = tilt_deg;
-                const bool trip = isaaclab::mdp::bad_orientation(env.get(), 1.0);
+                // 바닥이 목적인 모드의 낮은 자세에선 판정하지 않는다(SafetyPolicy.h). 1·2·3 은 종전 그대로.
+                const bool trip = isaaclab::mdp::bad_orientation(env.get(), 1.0) && orient_gate_.load();
                 if (trip && !mon_exit_reason_) {
                     mon_exit_reason_ = "bad_orientation";
                     spdlog::warn("[safety] bad_orientation TRIPPED  tilt={:.1f}deg (limit 57.3) -> Passive", tilt_deg);
@@ -920,6 +922,16 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
             [this]()->bool{ // qd crit -> Passive
                 const bool trip = js_enable_qd_guard_ && js_qd_crit_latched_.load();
                 if (trip && !mon_exit_reason_) mon_exit_reason_ = "qd_crit";
+                return trip;
+            },
+            FSMStringMap.right.at("Passive")
+        )
+    );
+    this->registered_checks.emplace_back(
+        std::make_pair(
+            [this]()->bool{ // 바닥 자세 qd_warn -> Passive
+                const bool trip = js_lowpose_passive_.load();
+                if (trip && !mon_exit_reason_) mon_exit_reason_ = "qd_warn_lowpose";   // 체류 요약이 «operator» 로 적지 않게
                 return trip;
             },
             FSMStringMap.right.at("Passive")
@@ -1215,6 +1227,11 @@ void State_Mimic::enter()
     js_qd_crit_latched_ = false;
     js_qd_warn_latched_ = false;
     js_warn_run_ = js_crit_run_ = 0;
+    // 안전 규칙(SafetyPolicy.h) 상태도 체류 단위로 — 정책 스레드가 뜨기 전이라 경합 없음.
+    // 기울기 필터는 첫 update() 가 원시값으로 시작하게(지난 체류의 걸러진 값이 남지 않게).
+    js_lowpose_passive_.store(false);
+    orient_gate_.store(true);
+    g_tilt.reset();
     mon_reset();               // 모니터링 카운터도 체류 단위로 리셋 (요약이 이번 체류만 담게)
     // 진입 시 «조작자가 요청한 모드» 를 현재 모드와 일치시켜 시작(불일치 방지). 같은 모드 요청은
     // 이탈 조건을 안 타므로 requested 만 맞춰진다.
@@ -1339,6 +1356,7 @@ void State_Mimic::enter()
                 const auto& rd = env->robot->data;
                 g_z_fk = g1::z_fk(rd.joint_pos.data(), rd.root_quat_w);
                 g_tilt.update({rd.projected_gravity_b[0], rd.projected_gravity_b[1], rd.projected_gravity_b[2]});
+                orient_gate_.store(g1::safety::orientation_check_applies(g_mode.row().safety, g_z_fk));
             }
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (모드 키 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
@@ -1375,8 +1393,20 @@ void State_Mimic::enter()
                                  qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
                 if (!warn_before && js_qd_warn_latched_)
                     safety_log_.event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 폴백 모드 강제");
-                // g_poll_vr 뒤에 덮어써 폴백 모드 유지(soft). B3(SafetyPolicy)가 저자세에선 Passive 로 바꾼다.
-                if (js_qd_warn_latched_) g_mode.force(G1_FALLBACK_MODE);
+                // g_poll_vr 뒤에 덮어써 폴백 모드 유지(soft).
+                if (js_qd_warn_latched_) {
+                    // 직립 모드면 종전 그대로 폴백 모드. 바닥이 목적인 모드의 낮은 자세면 Passive(SafetyPolicy.h).
+                    if (g1::safety::qd_warn_action(g_mode.row().safety, g_z_fk, g_tilt.value())
+                            == g1::safety::QdWarnAction::Passive) {
+                        if (!js_lowpose_passive_.exchange(true)) {
+                            spdlog::error("[safety] qd_warn 바닥 자세 (mode{} z_fk={:.2f} 기울기={:.0f}°) -> Passive",
+                                          g_mode.row().id, g_z_fk, g_tilt.value());
+                            safety_log_.event("qd_warn_lowpose", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive");
+                        }
+                    } else {
+                        g_mode.force(G1_FALLBACK_MODE);
+                    }
+                }
                 // crit은 아래 registered_check가 Passive로 전이시킴(여기선 latch만).
             }
             const auto d_t_safe = clock::now();
