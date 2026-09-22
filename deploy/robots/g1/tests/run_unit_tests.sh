@@ -23,7 +23,7 @@ for t in test_mode_table test_mode_runtime test_mode5_driver; do          # 이 
   # CMake 빌드는 이 경고를 켜지 않으므로 이 테스트가 유일한 기계 검증이다.
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -Werror=switch -I../include $t.cpp
 done
-for t in test_height_estimator; do            # Eigen 이 필요한 순수 헤더 테스트
+for t in test_height_estimator test_motion_preview; do            # Eigen 이 필요한 순수 헤더 테스트
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -Werror=switch -I../include -I/usr/include/eigen3 $t.cpp
 done
 [ -f test_no_mode_ordinals.sh ] && { bash test_no_mode_ordinals.sh && echo "ok   no_mode_ordinals" || { echo "FAIL no_mode_ordinals"; fail=1; }; }
@@ -52,6 +52,11 @@ if [ -x "$HOME/.local/bin/uv" ] && [ -f "$MJLAB/src/mjlab_g1_motion/mode5_preset
     if "${UVPY[@]}" ../../../scripts/$g.py --check >"$OUT/$g.out" 2>&1; then echo "ok   $g"
     else echo "FAIL $g"; tail -5 "$OUT/$g.out"; fail=1; fi
   done
+  # gen_preview_golden 은 배포 슬롯 npz(git 밖)가 있어야 --check 가 된다. 없는 머신(로봇·깨끗한
+  # clone)에서는 생성기 스스로가 "클립이 없다" 로 끝내므로 그 경우만 skip 으로 통과시킨다.
+  if "${UVPY[@]}" ../../../scripts/gen_preview_golden.py --check >"$OUT/pv.out" 2>&1; then echo "ok   gen_preview_golden"
+  elif grep -q "클립이 없다" "$OUT/pv.out"; then echo "skip gen_preview_golden (클립 npz 없음)"
+  else echo "FAIL gen_preview_golden"; tail -5 "$OUT/pv.out"; fail=1; fi
 else
   echo "skip uv 생성기 검사 (mjlab uv 환경 없음)"
 fi

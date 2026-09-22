@@ -135,6 +135,8 @@ public:
         dof_positions.clear();
         dof_velocities.clear();
         foot_z_frames.clear();
+        root_lin_vel.clear();
+        root_ang_vel.clear();
 
         const size_t num_frames_npz = body_pos_w.shape[0];
         // 레퍼런스 발 world-z ([z_L, z_R]) — mode>=3 의 foot_z obs 원천. 학습에서 이 모드는
@@ -145,6 +147,19 @@ public:
         if (!has_foot_z) {
             spdlog::warn("motion npz body_pos_w 가 예상({} bodies) 과 다르다 -> ref_foot_height "
                          "는 stance 로 폴백한다 (mode>=3 학습과 불일치)", NPZ_NUM_BODIES);
+        }
+
+        // mode4 미리보기(MotionPreview.h)용 골반(body 0) 선·각속도. 없으면 has_preview=false —
+        // 미리보기가 필요한 슬롯이면 State_Mimic 이 기동을 거부한다(0 을 «해당 없음» 으로 보내면 안 된다).
+        const bool has_v = npz_data.count("body_lin_vel_w") && npz_data.count("body_ang_vel_w");
+        cnpy::NpyArray* lv = has_v ? &npz_data["body_lin_vel_w"] : nullptr;
+        cnpy::NpyArray* av = has_v ? &npz_data["body_ang_vel_w"] : nullptr;
+        has_preview = has_v && lv->shape.size() == 3 && lv->shape[0] == num_frames_npz && lv->shape[2] == 3 &&
+                      av->shape.size() == 3 && av->shape[0] == num_frames_npz && av->shape[2] == 3 &&
+                      lv->word_size == sizeof(float) && av->word_size == sizeof(float);
+        if (has_v && !has_preview) {
+            spdlog::warn("motion npz body_lin_vel_w/body_ang_vel_w 가 예상과 다르다 -> mode4 미리보기 "
+                         "는 없음으로 취급한다");
         }
 
         for (size_t i = 0; i < num_frames_npz; i++)
@@ -181,6 +196,12 @@ public:
 
             dof_positions.push_back(joint_position);
             dof_velocities.push_back(joint_velocity);
+
+            if (has_preview) {
+                const size_t sl = lv->shape[1] * 3, sa = av->shape[1] * 3;
+                root_lin_vel.push_back(Eigen::Vector3f::Map(lv->data<float>() + i * sl));
+                root_ang_vel.push_back(Eigen::Vector3f::Map(av->data<float>() + i * sa));
+            }
         }
     }
 
@@ -269,6 +290,14 @@ public:
     Eigen::VectorXf joint_pos_vr() { return vr_dof_pos; }
     Eigen::VectorXf joint_vel_vr() { return vr_dof_vel; }
 
+    // MotionPreview.h 의 Clip 접근자 (클립 프레임 i — VR 과 무관).
+    int n() const { return num_frames; }
+    Eigen::Quaternionf quat(int i) const { return root_quaternions[i]; }
+    Eigen::Vector3f lin(int i) const { return root_lin_vel[i]; }
+    Eigen::Vector3f ang(int i) const { return root_ang_vel[i]; }
+    float z(int i) const { return root_positions[i][2]; }
+    const float* dof(int i) const { return dof_positions[i].data(); }
+
     bool vr_override = false;
     bool vr_has_foot_z = false;
     std::array<float, 2> vr_foot_z = {0.f, 0.f};
@@ -286,6 +315,8 @@ public:
     std::vector<Eigen::VectorXf> dof_velocities;
     std::vector<std::array<float, 2>> foot_z_frames;   // [z_L, z_R] per frame (클립 레퍼런스)
     bool has_foot_z = false;
+    std::vector<Eigen::Vector3f> root_lin_vel, root_ang_vel;   // MotionPreview.h 용 골반 선·각속도
+    bool has_preview = false;
     Eigen::Matrix3f world_to_init_;
 };
 
