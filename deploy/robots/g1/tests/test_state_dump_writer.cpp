@@ -8,6 +8,10 @@
 // 여기서 재는 것:
 //   ① 줄 수와 열 수가 맞는가            ② 값이 그대로 나르는가
 //   ③ 평시에 버리는 줄이 없는가          ④ 🔴 RT 경로가 syscall 을 0 번 하는가 (/proc/self/syscr)
+//   ⑤ Mimic 재진입(닫지 않고 open_from_env() 재호출) 이 std::terminate 없이 멱등으로 no-op 되는가
+//   ⑥ g1::StateDump::shared() — 서로 다른 State_Mimic "인스턴스" 가 같은 파일을 truncate 없이
+//     이어쓰는가(2026-09-22 리뷰가 재현한 버그: Masked -> Dance1 전환이 truncate 했다)
+//   ⑦ close() 가 소멸자에서(스코프 종료) 실제로 flush 하는가
 //
 //   g++ -std=gnu++17 -O3 -DNDEBUG -I../include -pthread test_state_dump_writer.cpp -o /tmp/t && /tmp/t
 #include "StateDump.h"
@@ -148,12 +152,13 @@ int main() {
     std::printf("  RT 구간 write syscall: %ld 회 (줄 %d)\n", sysw_rt, kRows);
     chk(sysw_rt >= 0 && sysw_rt < kRows / 2, "RT 구간에서 syscall 이 너무 많다 = 파일을 만지고 있다");
 
-    // ⑤ Mimic 재진입 회귀: State_Mimic::enter() 는 stay 마다 open_from_env() 를 다시 부른다.
-    //    닫지 않고 다시 열면 join 가능한 std::thread 에 새 std::thread 를 move-assign 해
-    //    std::terminate 가 난다(원래 버그 — 이 테스트가 없으면 g1_ctrl 프로세스 자체가 죽어야
-    //    재현된다). ⑤-a 는 "정상 경로"(close 뒤 재오픈, State_Mimic 수정으로 맞는 경로) —
-    //    같은 파일에 헤더 없이 이어써야 한다. ⑤-b 는 "방어 경로"(close 없이 재오픈) — open_from_env
-    //    안의 방어 코드가 먼저 close() 해서 죽지 않아야 한다(진짜 버그 재현).
+    // ⑤ Mimic 재진입 회귀(직접 객체, shared() 와 무관 — 옛 헤더에도 컴파일된다): 옛 설계는
+    //    State_Mimic::enter() 가 stay 마다 open_from_env() 를 다시 불렀는데 닫는 코드가 없어서,
+    //    두 번째 open_from_env() 가 join 가능한 std::thread 에 새 std::thread 를 move-assign 해
+    //    std::terminate 가 났다(원래 버그 — 회귀하면 이 프로세스 자체가 죽는다). Ruling 27 이후
+    //    설계는 그 open_from_env() 를 **멱등**으로 만들어 이 상황(닫지 않고 또 여는 것) 자체를
+    //    "정상"으로 바꿨다 — 그래서 이 블록은 옛 버그의 재현이면서 동시에 새 설계의 핵심 계약
+    //    (헤더 1회 · 줄 유실 없음 · 재오픈은 no-op) 검증이다.
     {
         const char* rpath = "/tmp/_tsdw_reentry.csv";
         std::remove(rpath);
@@ -170,52 +175,101 @@ int main() {
         }
 
         g1::StateDump d;
+        d.open_from_env("G1_STATE_CSV", GaitAux::header());   // "instance A" enter()
+        chk(d.on(), "첫 open 이 열리지 않았다");
+        for (int t = 0; t < 20 * 3; ++t) d.tick(st, cmd, aux);   // 3 rows
 
-        // ⑤-a stay1: open → 3줄 → close (State_Mimic 이 stay 끝에서 부르는 정상 경로)
-        d.open_from_env("G1_STATE_CSV", GaitAux::header());
-        chk(d.on(), "⑤-a stay1 이 열리지 않았다");
-        for (int t = 0; t < 20 * 3; ++t) d.tick(st, cmd, aux);
+        // 🔴 close() 를 «부르지 않고» 아직 열려 있는(th_ joinable, f_ non-null) 객체에 다시
+        //    open_from_env() — 옛 버그의 정확한 트리거 그 자체("instance B" 로 전환, exit() 가
+        //    close() 를 안 부르는 지금 설계에서 실제로 매번 벌어지는 일). 옛 헤더로 빌드하면
+        //    여기서 std::terminate 로 테스트 프로세스가 통째로 죽는다(별도로 재확인함 — 리포트
+        //    참고) — 그래서 아래 줄들이 «찍히는 것 자체» 가 증거다. 지금 설계에서는 멱등이라
+        //    no-op: 새 스레드도, 새 헤더도, truncate 도 없어야 한다.
+        d.open_from_env("G1_STATE_CSV", GaitAux::header());   // "instance B" enter() — no-op 이어야 함
+        chk(d.on(), "재오픈 뒤에도 열려 있어야 한다(여기서 크래시하면 이 줄 자체가 안 찍힌다)");
+        for (int t = 0; t < 20 * 2; ++t) d.tick(st, cmd, aux);   // 2 more rows — 같은 파일에 이어져야 함
+
         d.close();
-        chk(!d.on(), "⑤-a close 뒤 off 여야 한다");
-        d.close();                                 // 두 번 close — 안전해야 한다(재진입 방어 요구사항)
+        chk(!d.on(), "close 뒤 off 여야 한다");
+        d.close();                                 // 두 번째 close — 안전해야 한다
 
-        // ⑤-a stay2: 같은 경로로 재오픈 → 2줄 더 → close. 헤더 재발급 없이 이어써야 한다.
-        d.open_from_env("G1_STATE_CSV", GaitAux::header());
-        chk(d.on(), "⑤-a stay2 가 열리지 않았다");
-        for (int t = 0; t < 20 * 2; ++t) d.tick(st, cmd, aux);
-        d.close();
+        auto RL = lines_of(rpath);
+        int header_lines = 0;
+        for (auto& s : RL) if (s.rfind("time,wall_time,", 0) == 0) ++header_lines;
+        chk(header_lines == 1, "재오픈 뒤 헤더가 한 번만 있어야 한다(멱등 — 두 번째 open 은 no-op)");
+        chk((int)RL.size() == 1 + 3 + 2, "재오픈 뒤 두 'instance' 의 줄이 모두 남아 있어야 한다(유실 없음)");
+        if (header_lines != 1 || (int)RL.size() != 6)
+            std::printf("     header_lines=%d lines=%zu\n", header_lines, RL.size());
+        std::printf("  ⑤ 재진입(멱등) 회귀: crash 없이, 헤더 1회, 줄 보존 확인\n");
+    }
 
+    // ⑥ g1::StateDump::shared() — 실제 프로덕션 호출 경로. Mimic_Masked 와 Mimic_Dance1_subject2
+    //    처럼 서로 다른 State_Mimic "인스턴스" 가 같은 G1_STATE_CSV 를 보면서 전환돼도(리뷰에서
+    //    재현된 버그: 전환이 truncate 했다) 한 파일에 헤더 1회로 이어써야 한다. shared() 는
+    //    프로세스에 하나뿐이라 이 블록이 테스트 안에서 이걸 쓰는 처음이자 유일한 자리여야 한다
+    //    (다른 곳에서 또 열면 "다른 경로" 경고 분기를 타게 된다).
+    {
+        chk(&g1::StateDump::shared() == &g1::StateDump::shared(),
+            "shared() 는 항상 같은 인스턴스를 돌려줘야 한다");
+
+        const char* spath = "/tmp/_tsdw_shared.csv";
+        std::remove(spath);
+        setenv("G1_STATE_CSV", spath, 1);
+        FakeLowState st; FakeLowCmd cmd; GaitAux aux;
+
+        // "Mimic_Masked::enter()"
+        g1::StateDump::shared().open_from_env("G1_STATE_CSV", GaitAux::header());
+        chk(g1::StateDump::shared().on(), "shared() 첫 open 이 안 열렸다");
+        for (int t = 0; t < 20 * 4; ++t) g1::StateDump::shared().tick(st, cmd, aux);   // 4 rows
+
+        // "Mimic_Masked -> Mimic_Dance1_subject2 전환": exit() 는 close() 를 안 부른다(Ruling 27)
+        // -> 다음 enter() 가 또 open_from_env() 를 부른다. 같은 경로면 no-op(헤더 재발급 없음).
+        g1::StateDump::shared().open_from_env("G1_STATE_CSV", GaitAux::header());
+        chk(g1::StateDump::shared().on(), "shared() 재오픈 뒤에도 열려 있어야 한다");
+        for (int t = 0; t < 20 * 3; ++t) g1::StateDump::shared().tick(st, cmd, aux);   // 3 more rows
+
+        // 다른 경로가 요청되면(설정 실수 등) 무시하고 원래 파일을 계속 쓴다 — 새 파일을 만들면 안 된다.
+        const char* other = "/tmp/_tsdw_shared_other.csv";
+        std::remove(other);
+        setenv("G1_STATE_CSV", other, 1);
+        g1::StateDump::shared().open_from_env("G1_STATE_CSV", GaitAux::header());
         {
-            auto RL = lines_of(rpath);
-            int header_lines = 0;
-            for (auto& s : RL) if (s.rfind("time,wall_time,", 0) == 0) ++header_lines;
-            chk(header_lines == 1, "재진입 뒤 헤더가 한 번만 있어야 한다(truncate 되면 안 된다)");
-            chk((int)RL.size() == 1 + 3 + 2, "재진입 뒤 두 stay 의 줄이 모두 남아 있어야 한다");
-            if (header_lines != 1 || (int)RL.size() != 6)
-                std::printf("     header_lines=%d lines=%zu\n", header_lines, RL.size());
+            std::FILE* f = std::fopen(other, "r");
+            chk(f == nullptr, "다른 경로 요청이 새 파일을 만들면 안 된다(무시해야 한다)");
+            if (f) std::fclose(f);
         }
+        setenv("G1_STATE_CSV", spath, 1);   // 원상복구(무해 — tick() 은 env 를 안 본다)
+        for (int t = 0; t < 20; ++t) g1::StateDump::shared().tick(st, cmd, aux);   // 1 more row
 
-        // ⑤-b 방어: close() 를 «부르지 않고» 아직 열려 있는(th_ joinable) 객체에 다시
-        //     open_from_env() — 이게 원래 버그의 정확한 트리거(State_Mimic 이 stay 끝에서
-        //     close() 를 안 부르던 옛 경로 그 자체). open_from_env 안의 방어 코드(이미
-        //     열려 있으면 먼저 close())가 없으면 여기서 std::terminate 로 테스트 프로세스가
-        //     통째로 죽는다 — 그래서 아래 줄들이 «찍히는 것 자체» 가 증거다.
+        // "프로세스 종료" 를 흉내낸다 — 실서비스에서는 shared() 의 소멸자 하나가 이걸 부른다.
+        g1::StateDump::shared().close();
+
+        auto SL = lines_of(spath);
+        int sh = 0; for (auto& s : SL) if (s.rfind("time,wall_time,", 0) == 0) ++sh;
+        chk(sh == 1, "shared() 헤더가 한 번만 있어야 한다");
+        chk((int)SL.size() == 1 + 4 + 3 + 1, "shared() 두 '진입' 의 줄이 모두 남아 있어야 한다(유실 없음)");
+        if (sh != 1 || (int)SL.size() != 9)
+            std::printf("     shared header_lines=%d lines=%zu\n", sh, SL.size());
+        std::printf("  ⑥ shared() 싱글턴: 두 '진입' 이 한 파일에 헤더 1회로 보존됨\n");
+    }
+
+    // ⑦ close() 는 소멸자에서(스코프 종료) 일어나야 한다 — RAII 로 확인. shared() 와 별개의
+    //    지역 객체를 써서, "소멸 == flush+close" 를 shared() 의 실제 소멸(프로세스 종료) 을
+    //    기다리지 않고도 증명한다.
+    {
+        const char* dpath = "/tmp/_tsdw_dtor.csv";
+        std::remove(dpath);
+        setenv("G1_STATE_CSV", dpath, 1);
+        FakeLowState st; FakeLowCmd cmd; GaitAux aux;
         {
-            const char* bpath = "/tmp/_tsdw_reentry_noclose.csv";
-            std::remove(bpath);
-            setenv("G1_STATE_CSV", bpath, 1);
-            g1::StateDump d2;
-            d2.open_from_env("G1_STATE_CSV", GaitAux::header());
-            chk(d2.on(), "⑤-b 첫 open 이 열리지 않았다");
-            for (int t = 0; t < 20; ++t) d2.tick(st, cmd, aux);
-            // 🔴 close() 없이 재오픈 — 이 시점에 th_ 는 아직 joinable, f_ 도 아직 non-null.
-            d2.open_from_env("G1_STATE_CSV", GaitAux::header());
-            chk(d2.on(), "⑤-b 방어 재오픈이 열리지 않았다");
-            for (int t = 0; t < 20; ++t) d2.tick(st, cmd, aux);
-            d2.close();
-            std::printf("  ⑤-b close 없는 재오픈: crash 없이 통과\n");
-        }
-        std::printf("  ⑤ 재진입 회귀: crash 없이 통과\n");
+            g1::StateDump tmp;
+            tmp.open_from_env("G1_STATE_CSV", GaitAux::header());
+            chk(tmp.on(), "dtor 테스트: open 이 안 됐다");
+            for (int t = 0; t < 20 * 2; ++t) tmp.tick(st, cmd, aux);
+        }   // tmp 소멸 -> ~StateDump() -> close() (드레인 스레드 join, 링 마저 비움, 파일 flush+close)
+        auto DL = lines_of(dpath);
+        chk((int)DL.size() == 1 + 2, "소멸자가 닫지 않았다(줄이 파일에 안 남았다)");
+        std::printf("  ⑦ 소멸자 close(): 스코프 종료로 파일이 flush 됐다\n");
     }
 
     std::printf(fail ? "test_state_dump_writer: %d FAIL\n" : "test_state_dump_writer: OK\n", fail);

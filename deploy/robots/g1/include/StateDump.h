@@ -18,6 +18,20 @@
 //    ⇒ 실기에서 켜도 된다. 상시 로깅은 여전히 온보드 piene_g1_logger 의 역할이다.
 //
 //    ⚠ SIGKILL 로 죽이면 링에 남은 최대 100 ms 가 사라진다(정상 종료·Ctrl-C 는 close() 가 비운다).
+//
+// 🔴 프로세스에 하나뿐인 공유 인스턴스 — `StateDump::shared()` 로만 쓴다. State_Mimic 은
+//    Mimic_Masked / Mimic_Dance1_subject2 처럼 **FSM 상태마다 하나씩** 만들어지는데,
+//    각자 멤버로 들고 있으면 같은 G1_STATE_CSV 를 바라볼 때 "Masked → Dance1 전환"이
+//    조용히 첫 stay 를 truncate 하는 사고가 난다(2026-09-22 리뷰에서 재현됨). 그래서
+//    ① State_Mimic 은 이 객체를 소유하지 않고 `shared()` 를 통해서만 만진다.
+//    ② open_from_env() 는 **멱등**이다 — 이미 열려 있으면(경로가 같든 다르든) 아무것도
+//       안 한다. 다른 경로가 요청되면 한 번만 경고하고 원래 파일을 계속 쓴다.
+//    ③ stay 끝에서 close() 하지 않는다 — 닫는 것은 **프로세스 종료 시 소멸자 하나뿐**
+//       (`shared()` 의 함수-지역 static 이 프로그램 종료 시 소멸된다). `die_startup` 의
+//       `_Exit()` 경로는 그대로 소멸자를 안 태운다(전과 동일 — `shared()` 를 한 번도 안
+//       부르면 static 이 만들어지지도 않는다).
+//    ④ tick() 은 그 순간 활성 상태의 정책 스레드만 부른다 — FSM 은 한 번에 하나만 활성이라
+//       생산자는 여전히 하나뿐이다(RT 경로 제약은 안 바뀐다).
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -32,43 +46,54 @@ namespace g1 {
 
 class StateDump {
 public:
+    // 프로세스에 하나뿐인 인스턴스. Mimic_Masked / Mimic_Dance1_subject2 등 State_Mimic
+    // 인스턴스가 몇 개든 전부 이 하나를 본다. 함수-지역 static 이라 첫 호출에서 생성되고
+    // (C++11 매직 스태틱 — 스레드-세이프), 프로세스가 정상 종료할 때(스택 언와인딩 없이도
+    // static duration 객체는 exit() 경로에서 소멸된다) `~StateDump()` 가 한 번 불려 닫는다.
+    static StateDump& shared() {
+        static StateDump inst;
+        return inst;
+    }
+
     // extra_header = 뒤에 붙일 열 이름(선행 콤마 포함). 소유 모듈의 `Aux::header()` 를 그대로
     // 넘긴다 — StateDump 는 그 열이 무엇인지 «모른다». 그래서 필드가 늘어도 여기는 안 바뀐다.
     //
-    // 🔴 재진입(같은 State_Mimic 객체가 stay 를 여러 번 도는 것): 이 객체는 State_Mimic 의
-    //    멤버라 stay 마다 enter() 가 다시 open_from_env 를 부른다(close() 는 stay 끝에서만).
-    //    ① 이미 열려 있으면(전 stay 를 안 닫고 다시 열리는 비정상 경로 방어) 먼저 닫는다 —
-    //       안 그러면 join 가능한 std::thread 에 새 std::thread 를 대입해 std::terminate.
-    //    ② 같은 경로로 두 번째 이상 열리면(정상적인 재진입) "w"(truncate) 대신 "a"(이어쓰기)
-    //       로 열고 헤더를 다시 안 쓴다 — 실기 분석이 이 파일 하나를 본다. 첫 stay 를
-    //       truncate 하면 그 데이터가 사라진다. opened_path_ 로 "이 경로는 헤더를 이미
-    //       썼다" 를 기억한다(경로가 바뀌면 다시 "w" + 새 헤더).
+    // 🔴 멱등: 이미 열려 있으면(f_ != nullptr) 아무것도 안 한다 — 같은 경로든 다른 경로든.
+    //    여러 State_Mimic 인스턴스가 각자 enter() 에서 이걸 부르지만(FSM 전환마다), 두 번째
+    //    부터는 전부 no-op 이어야 한다: 새 std::thread 를 만들지도, 파일을 다시 열지도(그러면
+    //    "w" 가 truncate 해 앞선 stay 데이터가 사라진다) 않는다. 다른 경로가 요청되면(설정
+    //    실수 등) 한 번만 stderr 로 경고하고 원래 파일을 계속 쓴다 — 조용히 무시하지 않는다.
     void open_from_env(const char* env_name = "G1_STATE_CSV", const char* extra_header = nullptr) {
         const char* path = std::getenv(env_name);
         if (!path || !*path) return;
-        if (f_ || th_.joinable()) close();          // ① 방어: 이미 열려 있으면 먼저 닫는다
-        const bool append = (opened_path_ == path);  // ② 같은 경로 재진입 = 이어쓰기(헤더 재발급 안 함)
-        f_ = std::fopen(path, append ? "a" : "w");
+        if (f_) {                                   // 이미 열려 있다 — 프로세스당 하나뿐
+            if (opened_path_ != path && !warned_diff_path_) {
+                std::fprintf(stderr,
+                    "[state_dump] ⚠ 이미 %s 로 열려 있다 — %s 요청은 무시한다"
+                    "(프로세스당 상태 덤프 하나)\n", opened_path_.c_str(), path);
+                warned_diff_path_ = true;
+            }
+            return;
+        }
+        f_ = std::fopen(path, "w");
         if (!f_) return;
         // 🔴 stdio 가 «한 줄 도중에» 자동 flush 하면, 프로세스가 갑자기 죽었을 때 파일 끝이
         //    반쪽 줄로 남는다(실측: Ctrl-C 로 261열 중 108열짜리 꼬리). 분석기가 거기서 깨진다.
         //    버퍼를 크게 잡고 drain() 이 «줄 경계에서만» flush 하게 해서 그 창을 없앤다.
         std::setvbuf(f_, nullptr, _IOFBF, kFlushRows * kRowBytes);
-        t0_ = now();
-        if (!append) {
-            // 온보드 로거(piene_g1_logger) 의 341열 중 분석에 쓰는 열만, «이름을 그대로» 쓴다.
-            std::fprintf(f_, "time,wall_time,quat_w,quat_x,quat_y,quat_z,"
-                             "ang_vel_x,ang_vel_y,ang_vel_z,lin_acc_x,lin_acc_y,lin_acc_z,"
-                             "rpy_r,rpy_p,rpy_y");
-            for (const char* k : {"q","dq","tau_est","q_des","dq_des","kp","kd","tau_ff"})
-                for (int i = 0; i < 29; ++i) std::fprintf(f_, ",%s_%d", k, i);
-            // ▼ 온보드 로거에는 «없는» 열. 뒤에 붙인다 → 앞 341열의 위치가 안 바뀌어
-            //   실기 로그 분석 스크립트가 그대로 돈다.
-            if (extra_header) std::fputs(extra_header, f_);
-            std::fprintf(f_, "\n");
-            std::fflush(f_);
-            opened_path_ = path;
-        }
+        t0_ = now();                    // 프로세스 수명 동안 딱 한 번 — 이제 "time" 열이 연속이다
+        // 온보드 로거(piene_g1_logger) 의 341열 중 분석에 쓰는 열만, «이름을 그대로» 쓴다.
+        std::fprintf(f_, "time,wall_time,quat_w,quat_x,quat_y,quat_z,"
+                         "ang_vel_x,ang_vel_y,ang_vel_z,lin_acc_x,lin_acc_y,lin_acc_z,"
+                         "rpy_r,rpy_p,rpy_y");
+        for (const char* k : {"q","dq","tau_est","q_des","dq_des","kp","kd","tau_ff"})
+            for (int i = 0; i < 29; ++i) std::fprintf(f_, ",%s_%d", k, i);
+        // ▼ 온보드 로거에는 «없는» 열. 뒤에 붙인다 → 앞 341열의 위치가 안 바뀌어
+        //   실기 로그 분석 스크립트가 그대로 돈다.
+        if (extra_header) std::fputs(extra_header, f_);
+        std::fprintf(f_, "\n");
+        std::fflush(f_);
+        opened_path_ = path;
 
         // 링과 «한 줄 짜리 메모리 FILE» 을 미리 잡는다 — RT 경로에서 할당이 없게.
         ring_.reset(new char[size_t(kRows) * kRowBytes]);
@@ -79,6 +104,12 @@ public:
         th_ = std::thread([this] { drain_loop(); });
     }
 
+    // 🔴 프로덕션에서는 ~StateDump() 를 통해 «프로세스 종료 시 한 번» 만 불린다(shared() 의
+    //    static 소멸자). open_from_env() 는 멱등이라 stay/FSM 전환마다 다시 열 필요가 없고,
+    //    그래서 stay 끝에서 이걸 부르지 않는다 — 예전엔 여기서 불렀는데, 그러면 다음 enter()
+    //    가 (당시 설계상) 다시 열어야 했고 그 열기 경로가 이번 사고(재진입 크래시/truncate)의
+    //    근원이었다. 이제는 열지도 닫지도 stay 마다 하지 않는다. close() 자체는 여러 번 불러도
+    //    안전(멱등)하고, 한 번도 안 열렸어도 안전하다 — 아래 두 조건이 전부 no-op 을 보장한다.
     void close() {
         if (run_.exchange(false, std::memory_order_acq_rel) && th_.joinable()) th_.join();
         if (mem_) { std::fclose(mem_); mem_ = nullptr; }
@@ -178,8 +209,9 @@ private:
     std::thread th_;
     double t0_ = 0.0;
     unsigned n_ = 0;
-    // close() 로 안 지운다 — 다음 open_from_env() 가 "같은 경로로 재진입했나" 를 판단하는 데 쓴다.
+    // 지금 열려 있는(또는 마지막으로 열렸던) 경로. "다른 경로가 요청됐다" 경고 메시지에 쓴다.
     std::string opened_path_;
+    bool warned_diff_path_ = false;   // 다른-경로 요청 경고는 프로세스 수명 동안 한 번만
 };
 
 }  // namespace g1

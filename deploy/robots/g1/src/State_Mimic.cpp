@@ -1309,7 +1309,9 @@ void State_Mimic::enter()
             spdlog::error("[imu_cal] 🔴 G1Articulation 이 아니다 — 보정이 걸리지 않는다");
     }
     safety_log_.open_from_env();   // G1_SAFETY_CSV 가 있을 때만 켜진다(기본 꺼짐)
-    state_dump_.open_from_env("G1_STATE_CSV", GaitAux::header());   // G1_STATE_CSV 가 있을 때만 (sim2sim ↔ 실기 대조 계측)
+    // G1_STATE_CSV 가 있을 때만 (sim2sim ↔ 실기 대조 계측). 프로세스 공유 인스턴스 — 멱등이라
+    // Mimic_Masked/Mimic_Dance1_subject2 전환마다 다시 불러도 두 번째부터는 no-op.
+    g1::StateDump::shared().open_from_env("G1_STATE_CSV", GaitAux::header());
     std::remove("/dev/shm/g1_vr_ref");   // clear any stale VR ref so it can't hijack on entry
                                          // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
     g_gui_rebase = true;                 // GUI 파일은 지우지 않는다(GUI 가 다시 안 쓸 수 있다) — 이 체류의 첫 poll 이
@@ -1686,8 +1688,10 @@ void State_Mimic::enter()
         if (load_th.joinable()) load_th.join();
         if (d_csv) std::fclose(d_csv);
         safety_log_.close();
-        state_dump_.close();   // 🔴 안 닫으면 다음 enter() 의 open_from_env() 가 join 가능한
-                                //    std::thread 에 새 std::thread 를 대입해 std::terminate(재진입 크래시)
+        // 🔴 state_dump_ 는 여기서 안 닫는다 — g1::StateDump::shared() 는 프로세스 공유 인스턴스라
+        //    stay 끝마다 닫으면 다음 FSM 전환의 open_from_env() 가 다시 처음부터 열어야 하고,
+        //    그게 이 재진입 사고(std::thread 덮어쓰기/파일 truncate)의 근원이었다(Ruling 27).
+        //    닫는 것은 shared() 의 소멸자(프로세스 종료) 하나뿐.
     });
 }
 
@@ -1741,11 +1745,13 @@ void State_Mimic::run()
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
     }
     // 계측(기본 꺼짐). 명령을 다 실은 «뒤» 라 이 줄의 q_des 는 실제로 나가는 값과 같다.
-    if (state_dump_.on()) {
+    // g1::StateDump::shared() — 프로세스 공유 인스턴스. tick() 은 그 순간 활성인 이 State_Mimic
+    // 의 run() 만 부르므로(FSM 은 한 번에 하나만 활성) 생산자는 여전히 하나뿐이다.
+    if (g1::StateDump::shared().on()) {
         GaitAux aux = g_loco.probe(g_mode.mode());
         // 보정 «후» 중력 — 정책이 실제로 읽는 그 값. 재계산 아님, 그대로 나른다.
         const auto& pg = env->robot->data.projected_gravity_b;
         aux.pg_x = pg[0]; aux.pg_y = pg[1]; aux.pg_z = pg[2];
-        state_dump_.tick(FSMState::lowstate->msg_, lowcmd->msg_, aux);
+        g1::StateDump::shared().tick(FSMState::lowstate->msg_, lowcmd->msg_, aux);
     }
 }

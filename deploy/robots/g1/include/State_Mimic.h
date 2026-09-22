@@ -95,8 +95,10 @@ private:
     float mon_tilt_max_deg_ = 0.f;
     // 안전층 사건을 «파일로» 남긴다. 세는 일은 위 mon_* 가 이미 한다 — 여기선 기록만.
     g1::SafetyLog safety_log_;
-    // 계측용 상태 덤프 (env G1_STATE_CSV 가 있을 때만. 기본 꺼짐 → 거동 변화 0)
-    g1::StateDump state_dump_;
+    // 계측용 상태 덤프 (env G1_STATE_CSV 가 있을 때만. 기본 꺼짐 → 거동 변화 0).
+    // 🔴 멤버로 안 둔다 — State_Mimic 은 FSM 상태마다 하나씩(Mimic_Masked/Mimic_Dance1_subject2)
+    //    만들어지므로, 여기 뒀다간 전환마다 다른 인스턴스가 같은 G1_STATE_CSV 를 truncate 한다.
+    //    g1::StateDump::shared() (프로세스에 하나) 를 쓴다 — StateDump.h 상단 주석 참고.
     // IMU 장착 편향 보정 (config.yaml: imu_cal). 기본 0 = 꺼짐 = 종전 거동 비트 동일.
     g1::ImuCal imu_cal_;
     const char* mon_exit_reason_ = nullptr;   // null = 조작자 전이(p/v) 또는 정상 종료
