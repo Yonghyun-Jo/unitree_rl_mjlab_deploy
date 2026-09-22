@@ -18,7 +18,9 @@ MAGIC = 0x6704          # v2 (2026-09-22). v1 = 0x6701 — C++ 가 거부한다(
 # <  little-endian, packed.
 #   magic seq mode_req vx vy wz period_steps height_scale turn_k m5_preset m5_press_seq clip_req
 #   mode_req  = 0 이면 «모드 요청 없음». 1회성 — 보낸 뒤 0 으로 되돌린다(속도만 바꿨는데 모드가 다시 요청되지 않게).
-#   m5_preset = 0 없음, 1..N = mode5_presets_gen.PRESETS[index] + 1.  m5_press_seq = 누를 때마다 +1.
+#   m5_preset = 0 없음, 1..N = mode5_presets_gen.PRESETS[index] + 1.  1회성 — 누른 프레임에만 싣고 보낸 뒤 0
+#               (다음 쓰기가 자세를 다시 싣지 않는다 → 유실된 누름이 나중 쓰기에 «늦게» 발동하지 않는다).
+#   m5_press_seq = 누를 때마다 +1 (32 bit 에서 감는다). 같은 자세 재입력 = 새 목표.
 #   clip_req  = −1 그대로, 0.. 고를 클립 (재생 중이면 C++ 가 거부). 1회성.
 FMT = "<iIifffiffiIi"
 
@@ -37,14 +39,17 @@ def clamp(x: float, lo: float, hi: float) -> float:
 
 def write(state: dict) -> None:
     """Atomically publish the control struct. 필수 키: seq, vx, vy, wz, period_steps, height_scale, turn_k.
-    선택 키: mode_req(0), m5_preset(0), m5_press_seq(0), clip_req(−1). Increments state['seq']."""
-    state["seq"] += 1
+    선택 키: mode_req(0), m5_preset(0), m5_press_seq(0), clip_req(−1). Increments state['seq'].
+    1회성 칸(mode_req · m5_preset · clip_req)은 보낸 뒤 «요청 없음» 으로 되돌린다. seq·m5_press_seq 는
+    구조체 칸이 uint32 라 32 bit 에서 감는다(struct 'I' 는 넘치면 예외를 던진다)."""
+    state["seq"] = (int(state["seq"]) + 1) & 0xFFFFFFFF
     buf = struct.pack(FMT, MAGIC, state["seq"], int(state.get("mode_req", 0)),
                       state["vx"], state["vy"], state["wz"],
                       state["period_steps"], state["height_scale"], state["turn_k"],
-                      int(state.get("m5_preset", 0)), int(state.get("m5_press_seq", 0)),
+                      int(state.get("m5_preset", 0)), int(state.get("m5_press_seq", 0)) & 0xFFFFFFFF,
                       int(state.get("clip_req", -1)))
     state["mode_req"] = 0
+    state["m5_preset"] = 0
     state["clip_req"] = -1
     tmp = SHM_PATH + ".tmp"
     with open(tmp, "wb") as f:

@@ -106,6 +106,10 @@ python3 deploy/scripts/check_band_released.py <gait_*.csv>
 # 시뮬+제어기 띄우고 f → m → 1 → 8,8 → 9(밴드 해제) 뒤, 다른 터미널에서
 python3 deploy/robots/g1/tools/replay_cmd.py <실기 gait_*.csv> [--from 40 --to 70]
 ```
+**모드도 재생한다.** GUI 채널 v2 에서 모드는 1회성 `mode_req` 로만 가므로, `replay_cmd.py` 는 CSV 의
+`cmd_mode` 를 첫 표본과 바뀔 때(그 뒤 0.2 s 재전송) `mode_req` 로 싣고, 시작 전에 중립 쓰기 1회(요청 없음 ·
+base_vel 0)를 한다 — 제어기가 Mimic 진입 때 잡는 기준선이 첫 표본을 삼키지 않게. 재생 중엔 키보드·GUI·PICO 로
+모드·속도를 건드리지 않는다(같은 파일을 덮는다). 슬롯이 모르는 모드가 CSV 에 있으면 `[cmd_mode] gui -> N 거부` 줄이 남는다.
 ⚠ CSV 의 `bv_x` 는 «스플라인 후» 값이라 재생본이 원본보다 약간 더 부드럽다. 지형·접촉·외란은
 재현되지 않는다.
 

@@ -57,7 +57,7 @@ C++ 제어기 **`g1_ctrl`가 "뇌"**이고, PICO VR 입력은 그 뇌에 **`/dev
   | 4 | `playback` | **고른** 클립 재생 | 클립 | 클립 | VR 무시 |
 
   로그 라벨(`[cmd_mode] -> N (이름)`)은 이 표 이름이다. 표엔 `5`(`ground`)·`6`(`crawl`) 행도 있지만 **지금 슬롯의 ONNX가 모르므로** 요청하면 거부 한 줄만 찍힌다(`이 슬롯(ONNX)이 모르는 모드`).
-- shm 폴링: `g_poll_gui()`(`State_Mimic.cpp:65`), `g_poll_vr()`(`:109`) — 매 제어 스텝.
+- shm 폴링: `State_Mimic.cpp` 의 `g_poll_gui()`·`g_poll_vr()` — 매 제어 스텝(정책 스레드, `g_poll_inputs` 에서). 줄 번호는 자주 바뀌니 함수 이름으로 찾을 것.
 - 시뮬/로봇 연결: `./g1_ctrl --network=<iface>` (`main.cpp:37` ChannelFactory Init).
   - **sim2sim = `lo`**, **실로봇 = 실제 iface(예: enp5s0)**.
 - 키보드 백업(터미널 포커스): `1/2/3/4`=mode(표의 `key` 열), `[`/`]`=재생할 클립 고르기(**클립 재생 모드가 아닐 때만** — 재생 중엔 거부 한 줄), `5`/`6`=표엔 있으나 지금 슬롯이 모르는 모드 → 거부 로그, `config/mode5_keys.yaml` 의 키(지금 `z x c b n h`)=mode5 자세(직립·네발·포복·앉기·눕기·크랩, **mode5 에서만** — 다른 모드에선 한 줄 안내만), `WASD/QE`=속도, `p`=정지, `v`=Velocity, `m`=Mimic_Masked.
@@ -67,13 +67,14 @@ C++ 제어기 **`g1_ctrl`가 "뇌"**이고, PICO VR 입력은 그 뇌에 **`/dev
 ### 2.2 IPC 채널 (파일 계약 — Python↔C++ 레이아웃 동기 필수)
 | 파일 | magic | 내용 | 쓰는 쪽 | 읽는 쪽 |
 |---|---|---|---|---|
-| `/dev/shm/g1_masked_gui` | 0x6704 (v2, 48 B) | 1회성 `mode_req` + base_vel + gait params + mode5 자세(`m5_preset`·`m5_press_seq`) + 1회성 `clip_req` | `tools/gui_shm.py`(masked_gui / pico_control_bridge) | `g_poll_gui()` |
+| `/dev/shm/g1_masked_gui` | 0x6704 (v2, 48 B) | 1회성 `mode_req` + base_vel + gait params + 1회성 mode5 자세(`m5_preset`, `m5_press_seq`) + 1회성 `clip_req` | `tools/gui_shm.py`(masked_gui / pico_control_bridge / replay_cmd) | `g_poll_gui()` |
 | `/dev/shm/g1_vr_ref` | 0x6702 | base_vel, root_quat, dof_pos[29], dof_vel[29] | `teleop/vr_shm.py`(vr_teleop_bridge / vr_replay) | `g_poll_vr()` |
 
 - 계약 정의: `deploy/robots/g1/tools/gui_shm.py`, `deploy/robots/g1/teleop/vr_shm.py`
 - **GUI 채널 v2 (2026-09-22)** — 바이트 배치는 `tools/gui_shm.py` `FMT` ↔ `State_Mimic.cpp` `struct GuiCtrl` 을 `tests/test_gui_shm_layout.py` 가 대조한다(실행기에 포함).
-  - `mode_req` = **1회성** 모드 요청(0 = 요청 없음). 쓰는 쪽이 한 번 보내고 0 으로 되돌린다 → 속도 슬라이더·자세 버튼만 움직여서는 모드가 다시 요청되지 않는다(v1 은 매 쓰기마다 `cmd_mode` 를 다시 보내, 키보드로 바꾼 모드가 GUI 쪽 모드로 되돌아갔다). 제어기의 **첫 읽기**는 파일에 남은 지난 요청(모드·클립)을 재생하지 않는다(한 줄 알림).
-  - `m5_preset` = 0 없음, 1.. = `Mode5Presets.h` 표 index + 1 · `m5_press_seq` = 누를 때마다 +1(같은 자세 재입력 = 새 목표). **mode5 에서만** 먹는다. 브라우저 GUI 는 **키가 있는 자세만**(`config/mode5_keys.yaml`, 지금 6개) 버튼으로 낸다 — 표의 나머지 자세(키 없음)는 검증 뒤에 연다.
+  - `mode_req` = **1회성** 모드 요청(0 = 요청 없음). 쓰는 쪽이 한 번 보내고 0 으로 되돌린다 → 속도 슬라이더·자세 버튼만 움직여서는 모드가 다시 요청되지 않는다(v1 은 매 쓰기마다 `cmd_mode` 를 다시 보내, 키보드로 바꾼 모드가 GUI 쪽 모드로 되돌아갔다). 같은 모드 재요청은 제어기가 조용히 수락한다 — 못 받았으면 다시 누르면 된다.
+  - **Mimic 진입마다 기준선**: `enter()` 뒤 첫 `g_poll_gui` 는 파일이 있으면 `seq`(와 자세가 실린 프레임이면 `m5_press_seq`)를 기준으로만 잡고 **아무것도 적용하지 않는다** — 모드·자세·클립 요청도, 속도·foot-gen 도(한 줄 `[gui] 진입 기준선 …`). 그래서 Passive·FixStand·지난 세션에서 누른 것이 `m` 직후 발동하지 않고, 키보드로 멈춘 뒤 `p→f→m` 해도 GUI 에 남은 옛 속도로 걷지 않는다. 파일이 없으면 기준선 없이 첫 실제 쓰기가 그대로 먹는다. `m` 뒤에 GUI 로 누른 것부터 먹는다.
+  - `m5_preset` = 0 없음, 1.. = `Mode5Presets.h` 표 index + 1, **1회성**(누른 프레임에만 — 유실된 누름이 나중 쓰기에 늦게 발동하지 않게) · `m5_press_seq` = 누를 때마다 +1(같은 자세 재입력 = 새 목표. GUI 는 시각(ms)으로 시작해 재시작해도 번호가 안 겹친다). 제어기는 **자세가 실린 프레임(`m5_preset ≠ 0`)만** 누름·기준으로 본다 — 자세 칸이 0 인 PICO·replay 프레임이 기준을 옮겨 GUI 의 마지막 자세를 «다시 누르는» 일이 없다. **mode5 에서만** 먹는다. 브라우저 GUI 는 **키가 있는 자세만**(`config/mode5_keys.yaml`, 지금 6개) 버튼으로 낸다 — 표의 나머지 자세(키 없음)는 검증 뒤에 연다.
   - `clip_req` = −1 그대로, 0.. = 고를 클립 칸(`g_build_clips` 순서 primary·light·demo6 중 실린 것). **1회성**, 클립 재생 모드에 있는 동안은 거부(키보드 `[`/`]` 와 같은 문 `g_select_clip`).
   - **요청할 수 있는 모드가 채널마다 다르다**: GUI = 표의 모든 모드(슬롯 지원·이탈 조건은 `ModeRuntime` 이 본다) · VR(`g1_vr_ref`) = 직립 모드(`safety: upright_only`)만.
   - magic 은 채널마다 다르다(0x6701 = GUI v1 · 0x6702 = VR · 0x6703 = E-stop `g1_estop` · 0x6704 = GUI v2). 옛 GUI(0x6701)가 쓰면 제어기는 무시하고 `[gui] 옛 형식(0x6701) — 무시` 를 한 번 찍는다 → GUI·PICO 브리지를 이 브랜치의 `gui_shm.py` 로 다시 띄울 것.
@@ -83,7 +84,7 @@ C++ 제어기 **`g1_ctrl`가 "뇌"**이고, PICO VR 입력은 그 뇌에 **`/dev
 **[A] `tools/pico_control_bridge.py`** — 가벼운 컨트롤러 경로
 - `xrobotoolkit_sdk`로 PICO **컨트롤러(썸스틱/버튼)를 로컬에서 직접** 읽음.
 - 썸스틱→base_vel, X/Y/A→mode1/2/3, B→정지 → `/dev/shm/g1_masked_gui`.
-- 모드는 **브리지 자신이 아는 모드가 바뀔 때만** 요청한다(1회성 `mode_req`, v1 과 같은 조건). 그래서 키보드·GUI 로 모드를 바꾼 뒤 브리지가 이미 그 모드라고 알고 있는 버튼(예: 브리지 기억 = 1 인데 X)을 누르면 아무 요청도 안 나간다 — 다른 버튼을 한 번 눌렀다 돌아올 것. 스틱을 움직여도 모드는 다시 요청되지 않는다(v1 은 되돌렸다).
+- 모드는 **X/Y/A 를 누를 때마다** 1회성 `mode_req` 로 요청한다 — 브리지가 이미 그 모드라고 알고 있어도 보낸다(같은 모드면 제어기가 조용히 수락). 1회성 요청은 유실될 수 있으므로(Mimic 진입 기준선 · 50 Hz 쓰기가 한 틱 안에 덮음) **안 먹었으면 같은 버튼을 다시 누르면 된다.** 스틱을 움직여도 모드는 다시 요청되지 않는다(v1 은 매 쓰기마다 되돌렸다).
 - **body 트래킹·GMR 없음.** g1_ctrl과 **같은 PC**에서 돌아야 함(공유 /dev/shm, 로컬 PC-Service).
 
 **[B] `teleop/vr_teleop_bridge.py`** — 풀바디 텔레옵 (mode2/3의 핵심)

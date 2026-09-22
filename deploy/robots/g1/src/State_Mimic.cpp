@@ -189,8 +189,12 @@ static_assert(sizeof(GuiCtrl) == 12 * 4, "GuiCtrl = gui_shm.FMT 12칸 48 바이�
 static constexpr int32_t GUI_CTRL_MAGIC = 0x6704;      // 0x6701 gui v1 · 0x6702 vr · 0x6703 estop 과 겹치지 않게
 static constexpr int32_t GUI_CTRL_MAGIC_V1 = 0x6701;   // 옛 형식 — 읽지 않는다(한 번 알린다)
 static uint32_t g_gui_last_seq = 0;
-static uint32_t g_gui_last_m5_seq = 0;
-static bool g_gui_seen = false;                          // 첫 읽기는 기준선만 잡는다(지난 세션의 버튼을 재생하지 않는다)
+static uint32_t g_gui_last_m5_seq = 0;                   // 자세가 실린 프레임만 옮긴다(PICO·replay 는 자세 칸이 0)
+// 체류(Mimic 진입)마다 한 번 «기준선 다시 잡기». enter() 가 세우고, 그 체류의 첫 g_poll_gui 가 내린다.
+//   파일이 있으면(유효한 v2) seq·자세 seq 를 기준으로만 잡고 **아무것도 적용하지 않는다** — Mimic 밖
+//   (Passive·FixStand·지난 세션)에서 눌린 모드·자세·클립·속도가 p→f→m 뒤 첫 틱에 발동하지 않게.
+//   파일이 없으면 플래그만 내린다 → 그 체류의 첫 실제 쓰기는 그대로 먹는다.
+static bool g_gui_rebase = true;
 
 // 조작자의 모드 요청이 들어오는 유일한 문. 거부되면 이유를 한 줄 남긴다(같은 모드 재요청은 조용히 통과).
 // ⚠ GUI·VR 은 50 Hz 로 들어온다 — 같은 거부를 매 틱 찍으면 정책 스레드에서 초당 50번 I/O 다.
@@ -244,6 +248,7 @@ static void g_select_clip(int id, const char* src) {
         return;
     }
     const int n = (int)g_clips.size();
+    if (n == 0) { printf("\r\n[clip] %s: 이 슬롯엔 클립이 없다\r\n", src); fflush(stdout); return; }
     if (!g_mode.select_clip(id, n)) { printf("\r\n[clip] %s: 없는 칸 %d (0..%d)\r\n", src, id, n - 1); fflush(stdout); return; }
     printf("\r\n[clip] %d/%d «%s»\r\n", id, n, g_clips[id].name); fflush(stdout);
 }
@@ -251,7 +256,7 @@ static void g_select_clip(int id, const char* src) {
 static void g_poll_gui()
 {
     FILE* f = std::fopen("/dev/shm/g1_masked_gui", "rb");
-    if (!f) return;
+    if (!f) { g_gui_rebase = false; return; }                         // 기준선 없음 → 첫 실제 쓰기가 먹는다
     GuiCtrl g{};
     const size_t n = std::fread(&g, 1, sizeof(g), f);
     std::fclose(f);
@@ -260,24 +265,28 @@ static void g_poll_gui()
         if (!warned) { warned = true; spdlog::warn("[gui] 옛 형식(0x6701) — 무시한다. tools/gui_shm.py 를 이 브랜치 것으로 (GUI·PICO 브리지 재시작)"); }
         return;
     }
-    if (n != sizeof(g) || g.magic != GUI_CTRL_MAGIC || g.seq == g_gui_last_seq) return;
-    g_gui_last_seq = g.seq;
-    if (!g_gui_seen) {                                                // 기준선: 지난 버튼을 재생하지 않는다
-        g_gui_seen = true; g_gui_last_m5_seq = g.m5_press_seq;
-        // 1회성 요청도 파일에는 «마지막 쓰기» 로 남아 있다 — 제어기를 다시 띄우면 지난 세션에 누른
-        // 모드 5 버튼이 기동 직후 재생된다(서 있던 로봇이 드러눕는다). 첫 읽기의 모드·클립 요청은 버린다.
-        if (g.mode_req != 0 || g.clip_req >= 0) {
-            printf("\r\n[gui] 첫 읽기 — 지난 요청(mode_req=%d clip_req=%d)은 재생하지 않는다. 필요하면 다시 누를 것\r\n",
-                   g.mode_req, g.clip_req);
-            fflush(stdout);
-        }
-        g.mode_req = 0; g.clip_req = -1;
+    if (n != sizeof(g) || g.magic != GUI_CTRL_MAGIC) return;         // (기준선은 유효한 v2 프레임을 볼 때까지 미룬다)
+    if (g_gui_rebase) {
+        // 1회성 요청도 파일에는 «마지막 쓰기» 로 남는다 — 그대로 먹으면 Mimic 밖에서 누른 «5» 가 m 직후
+        // 재생된다(서 있던 로봇이 드러눕는다). 속도·foot-gen 도 적용하지 않는다: 체류마다 다시 잡으므로
+        // 적용하면 키보드로 멈춘(space) 뒤 p→f→m 할 때 GUI 에 남은 옛 속도로 걷기 시작한다.
+        g_gui_rebase = false;
+        g_gui_last_seq = g.seq;
+        if (g.m5_preset != 0) g_gui_last_m5_seq = g.m5_press_seq;    // 자세 없는 프레임(PICO·replay)은 기준을 안 옮긴다
+        printf("\r\n[gui] 진입 기준선 seq=%u — 파일에 남은 요청(mode_req=%d 자세=%d clip_req=%d)·속도는 적용하지 않는다. 다음 쓰기부터 먹는다\r\n",
+               g.seq, g.mode_req, g.m5_preset, g.clip_req);
+        fflush(stdout);
+        return;
     }
+    if (g.seq == g_gui_last_seq) return;
+    g_gui_last_seq = g.seq;
     if (g.mode_req != 0) {
         g_reject_last = G1_REJECT_NONE;   // v2 의 mode_req 는 사람이 누른 1회성 입력 → 거부도 매번 한 줄 (키보드와 같다)
         g_request_mode_from_channel(g.mode_req, Channel::Gui, "gui");
     }
-    if (g.m5_press_seq != g_gui_last_m5_seq) {
+    // 자세가 실린 프레임만 누름으로 본다 — 자세 칸이 0 인 쓰는 쪽(PICO 브리지·replay_cmd)의 프레임이
+    // 기준을 0 으로 옮기면, 다음 GUI 프레임이 GUI 의 마지막 자세(예: 드러누움)를 «다시 누름» 으로 만든다.
+    if (g.m5_preset != 0 && g.m5_press_seq != g_gui_last_m5_seq) {
         g_gui_last_m5_seq = g.m5_press_seq;
         const int p = g.m5_preset - 1;
         if (p < 0 || p >= m5::N_PRESETS) {
@@ -1288,6 +1297,8 @@ void State_Mimic::enter()
     state_dump_.open_from_env("G1_STATE_CSV", GaitAux::header());   // G1_STATE_CSV 가 있을 때만 (sim2sim ↔ 실기 대조 계측)
     std::remove("/dev/shm/g1_vr_ref");   // clear any stale VR ref so it can't hijack on entry
                                          // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
+    g_gui_rebase = true;                 // GUI 파일은 지우지 않는다(GUI 가 다시 안 쓸 수 있다) — 이 체류의 첫 poll 이
+                                         // 기준선만 잡는다(g_poll_gui). 정책 스레드가 뜨기 전이라 경합 없음.
     { // mode2/3 hold this neutral pose (robot default) until VR provides a reference — never the clip
         const auto& dj = env->robot->data.default_joint_pos;
         Eigen::VectorXf dpos((int)dj.size());

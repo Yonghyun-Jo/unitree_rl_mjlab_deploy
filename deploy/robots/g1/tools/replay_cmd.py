@@ -12,8 +12,15 @@
 # 쓰는 법 (sim2sim)
   ① 시뮬 + 제어기를 띄우고  f → m → 1
   ② 🔴 시뮬 창에서 8,8 → 9 로 **밴드를 푼다** (안 풀면 데이터가 아니다)
-  ③ 이 스크립트를 다른 터미널에서 실행. 키보드는 건드리지 않는다.
+  ③ 이 스크립트를 다른 터미널에서 실행. 키보드·GUI·PICO 는 건드리지 않는다(같은 파일을 덮는다).
   ④ 끝나면 gait 덤프를 실기 것과 나란히 비교.
+
+# 모드도 재생한다 (gui_shm v2, 2026-09-22)
+  v2 채널에서 모드는 1회성 `mode_req` 로만 제어기에 간다(`cmd_mode` 칸은 없다). 그래서 CSV 의 cmd_mode 를
+  첫 표본과 모드가 바뀔 때 mode_req 로 싣고, 바뀐 뒤 MODE_REQ_HOLD_S 안의 쓰기에도 다시 싣는다(한 틱 안에
+  다음 쓰기가 덮어 제어기가 못 읽는 일을 막는다 — 같은 모드 재요청은 제어기가 조용히 수락한다).
+  시작 전 3 초 대기 «전에» 중립 쓰기 1회(요청 없음 · base_vel 0)를 한다 — 제어기는 Mimic 진입마다 파일을
+  기준선으로만 읽으므로(g_poll_gui), 그 기준선이 첫 실제 표본을 삼키지 않게.
 
 # 🔴 한계 두 가지 — 읽고 시작할 것
 1. CSV 의 bv_x 는 «스플라인 **후**» 값이다(GaitAux 주석). 그걸 다시 입력으로 넣으면
@@ -52,6 +59,27 @@ def load(path, t0, t1):
     return out
 
 
+# 모드가 바뀐 뒤 이 시간(CSV 시각 [s]) 안에 나가는 쓰기에도 mode_req 를 다시 싣는다.
+#   1회성 요청은 파일에 «마지막 쓰기» 로만 남는다 — 50 Hz 재생이 20 ms 뒤 다음 명령으로 덮으면 50 Hz 로 읽는
+#   제어기가 한 번도 못 볼 수 있다. 창 안의 마지막 mode_req 프레임은 창 뒤 첫 쓰기까지(≥ 이 시간) 남는다.
+MODE_REQ_HOLD_S = 0.2
+
+
+def plan_write(lv, t, mode, x, y, w, dead_band, t_mode):
+    """표본 하나를 보낼지와 보낼 필드 (순수 함수 — tests/test_gui_shm_layout.py 가 부른다).
+    lv = 마지막으로 보낸 (mode, x, y, w) — 처음엔 None.  t_mode = 마지막 모드 변경의 CSV 시각 — 처음엔 None.
+    돌려준다: (st 에 얹을 dict 또는 None(안 보냄), 새 lv, 새 t_mode)."""
+    mode_changed = lv is None or mode != lv[0]
+    if mode_changed:
+        t_mode = t
+    elif max(abs(x - lv[1]), abs(y - lv[2]), abs(w - lv[3])) < dead_band:
+        return None, lv, t_mode
+    upd = dict(cmd_mode=mode, vx=x, vy=y, wz=w)
+    if t - t_mode <= MODE_REQ_HOLD_S:
+        upd["mode_req"] = mode      # v2: 모드는 이것으로만 간다(보낸 뒤 gui_shm.write 가 0 으로)
+    return upd, (mode, x, y, w), t_mode
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("csv")
@@ -79,22 +107,26 @@ def main():
     if not os.path.isdir("/dev/shm"):
         print("🔴 /dev/shm 이 없다"); return 1
 
+    # 중립 쓰기 1회(요청 없음 · base_vel 0). 제어기는 Mimic 진입마다 파일을 기준선으로만 읽는다 —
+    # 이 쓰기가 그 기준선이 되어 첫 실제 표본(첫 mode_req)이 기준선으로 삼켜지지 않게 한다.
+    gui_shm.write(st)
     print("🔴 밴드를 풀었는지 확인했나? (시뮬 창 8,8 → 9)   3 초 뒤 시작한다")
     time.sleep(3)
     t_start = time.time()
     base = rows[0][0]
     sent = last = 0
-    lv = (None, None, None, None)
+    lv = t_mode = None
     try:
         for t, mode, x, y, w in rows:
             due = t - base
             slp = due - (time.time() - t_start)
             if slp > 0:
                 time.sleep(slp)
-            if lv[0] is None or mode != lv[0] or max(abs(x - lv[1]), abs(y - lv[2]), abs(w - lv[3])) >= a.dead_band:
-                st.update(cmd_mode=mode, vx=x, vy=y, wz=w)
+            upd, lv, t_mode = plan_write(lv, t, mode, x, y, w, a.dead_band, t_mode)
+            if upd:
+                st.update(upd)
                 gui_shm.write(st)
-                lv = (mode, x, y, w); sent += 1
+                sent += 1
             if due - last >= 10:
                 last = due
                 print("   %5.0f s / %.0f s · 보낸 명령 %d" % (due, span, sent))

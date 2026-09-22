@@ -63,20 +63,24 @@ def main() -> None:
         # buttons -> mode (edge-triggered: switch once per press)
         X, Y, A, B = xrt.get_X_button(), xrt.get_Y_button(), xrt.get_A_button(), xrt.get_B_button()
         mode = state["cmd_mode"]
-        if X and not prev["X"]: mode = 1
-        if Y and not prev["Y"]: mode = 2
-        if A and not prev["A"]: mode = 3
+        pressed = False   # 모드 버튼 누름 에지 — 캐시 모드와 같아도 다시 요청한다(아래)
+        if X and not prev["X"]: mode = 1; pressed = True
+        if Y and not prev["Y"]: mode = 2; pressed = True
+        if A and not prev["A"]: mode = 3; pressed = True
         stop = bool(B and not prev["B"])
         prev.update(X=X, Y=Y, A=A, B=B)
         if stop:
             vx = vy = wz = 0.0
         # publish only on a meaningful change (avoid spamming the channel when idle)
-        changed = (mode != state["cmd_mode"] or stop
+        changed = (pressed or mode != state["cmd_mode"] or stop
                    or abs(vx - state["vx"]) > 1e-3
                    or abs(vy - state["vy"]) > 1e-3
                    or abs(wz - state["wz"]) > 1e-3)
-        if mode != state["cmd_mode"]:
-            state["mode_req"] = mode   # gui_shm v2: 1회성 모드 요청 — 바뀔 때만 (보낸 뒤 write 가 0 으로)
+        if pressed:
+            # gui_shm v2: 누를 때마다 1회성 모드 요청 (보낸 뒤 write 가 0 으로). 캐시 모드와 같아도 보낸다 —
+            # 1회성 요청은 유실될 수 있다(제어기의 진입 기준선 · 50 Hz 쓰기가 한 틱 안에 덮음). 같은 모드
+            # 재요청은 제어기가 조용히 수락하므로, 다시 누르면 곧 재시도다.
+            state["mode_req"] = mode
         state["cmd_mode"] = mode       # 브리지 자기 표시용 (C++ 로는 mode_req 만 간다)
         state["vx"], state["vy"], state["wz"] = vx, vy, wz
         if changed:

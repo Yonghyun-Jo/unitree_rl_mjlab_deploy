@@ -12,7 +12,7 @@ import os
 import struct
 
 SHM_PATH = "/dev/shm/g1_estop"
-MAGIC = 0x6703             # 0x6701 gui, 0x6702 vr, 0x6703 estop
+MAGIC = 0x6703             # 0x6701 gui v1, 0x6702 vr, 0x6703 estop, 0x6704 gui v2 (겹치지 않게)
 FMT = "<iIi"              # magic seq flag = 12 bytes
 
 

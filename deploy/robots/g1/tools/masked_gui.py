@@ -34,7 +34,10 @@ VYCAP, WCAP = gui_shm.VYCAP, gui_shm.WCAP
 
 state = dict(seq=0, cmd_mode=1, vx=0.0, vy=0.0, wz=0.0,
              period_steps=43, height_scale=1.0, turn_k=0.3,
-             mode_req=0, m5_preset=0, m5_press_seq=0, clip_req=-1)   # 1회성 요청은 gui_shm.write 가 되돌린다
+             mode_req=0, m5_preset=0, clip_req=-1,   # 1회성 요청은 gui_shm.write 가 되돌린다
+             # 자세 누름 번호는 시각으로 시작한다 — GUI 를 다시 띄워도 제어기가 마지막으로 본 번호와 겹쳐
+             # 첫 누름이 무시되지 않게(0 부터면 겹칠 수 있다). 구조체 칸이 uint32 라 32 bit 로 자른다.
+             m5_press_seq=int(time.time() * 1000) & 0xFFFFFFFF)
 
 # 클립 칸 = State_Mimic.cpp g_build_clips 의 이름·순서(primary · light · demo6). 제어기는 «실은 로더만» 칸으로
 # 만들므로 light 가 없는 슬롯이면 demo6 이 1 번이 된다 — 제어기가 고른 칸 이름을 로그로 답한다(«[clip] i/n «이름»»).
@@ -81,7 +84,7 @@ def main() -> None:
         @preset_btns.on_click
         def _(ev) -> None:
             state["m5_preset"] = preset_label[ev.target.value] + 1   # shm: 0 = 없음, 1.. = PRESETS[index] + 1
-            state["m5_press_seq"] = state.get("m5_press_seq", 0) + 1  # 같은 자세 재입력 = 새 목표
+            state["m5_press_seq"] = (state.get("m5_press_seq", 0) + 1) & 0xFFFFFFFF  # 같은 자세 재입력 = 새 목표
             _write(); refresh()
 
     with g.add_folder("Clip (mode4 playback)"):
