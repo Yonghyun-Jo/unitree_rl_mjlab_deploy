@@ -17,7 +17,7 @@ done
 for t in test_estop_channel test_loop_diag; do
   [ -f $t.cpp ] && run $t -std=c++17 -O2 -I../../../include $t.cpp
 done
-for t in test_mode_table test_mode_runtime; do          # 이 계획이 더하는 것 (없으면 건너뜀)
+for t in test_mode_table test_mode_runtime test_mode5_driver; do          # 이 계획이 더하는 것 (없으면 건너뜀)
   # -Werror=switch: Exit(등 enum class) 에 새 값이 생겼는데 ModeRuntime::request 의 switch 에
   # case 를 안 넣으면 여기서 빌드가 죽는다 (rules/ADDING_A_MODE.md 함정 (e)). 컨트롤러 본체
   # CMake 빌드는 이 경고를 켜지 않으므로 이 테스트가 유일한 기계 검증이다.
@@ -39,5 +39,17 @@ if [ -f "$MJLAB/src/mjlab_g1_motion/mode_spec.py" ] \
   fi
 else
   echo "skip mode_table_generated (mode_spec.py 없음)"
+fi
+
+# torch·mujoco 가 필요한 생성기(mode5 프리셋·기구학·미리보기 골든)의 --check. mjlab 의 uv 환경이 있을 때만.
+# 🔴 conda 가 켜진 셸에서는 LD_LIBRARY_PATH 때문에 uv 의 torch 가 깨진다 → 그 변수들을 뺀 환경으로 돈다.
+UVPY=(env -u LD_LIBRARY_PATH -u CONDA_PREFIX -u CONDA_DEFAULT_ENV "$HOME/.local/bin/uv" run --project "$MJLAB" --no-sync python)
+if [ -x "$HOME/.local/bin/uv" ] && [ -f "$MJLAB/src/mjlab_g1_motion/mode5_presets.py" ]; then
+  for g in gen_mode5_presets_header; do
+    if "${UVPY[@]}" ../../../scripts/$g.py --check >"$OUT/$g.out" 2>&1; then echo "ok   $g"
+    else echo "FAIL $g"; tail -5 "$OUT/$g.out"; fail=1; fi
+  done
+else
+  echo "skip uv 생성기 검사 (mjlab uv 환경 없음)"
 fi
 exit $fail
