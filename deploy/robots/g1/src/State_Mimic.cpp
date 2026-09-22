@@ -39,7 +39,7 @@ static g1::ModeRuntime g_mode;
 //    (관측 항은 항마다 따로 불리므로 거기서 계산하면 미리보기 736칸을 세 번 만든다).
 static float g_z_fk = 1e9f;                                  // 골반 높이 추정 (HeightEstimator.h)
 static g1::TiltFilter g_tilt;                                // 걸러진 기울기 [deg]
-static g1::safety::RecentHigh g_recent_high;                 // 최근 1 s 안에 z_fk ≥ 0.65 였나 (넘어짐 관문)
+static g1::safety::RecentHigh g_recent_high;                 // 최근 1 s 안에 «섰음»(명령 직립 ∧ z ≥ 0.65 ∧ 기울기 < 57.3°) (넘어짐 관문)
 static g1::Mode5Driver g_m5;                                 // mode5 자세 버튼 상태
 static g1::Mode5Driver::Cmd g_m5_cmd{};                      // mode5_cmd_live 가 아니면 전부 0
 static std::vector<float> g_motion_block(g1::preview::DIM, 0.f);   // motion_preview 가 아니면 전부 0
@@ -930,7 +930,8 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
                 if (tilt_deg > mon_tilt_max_deg_) mon_tilt_max_deg_ = tilt_deg;
                 // GroundCapable 모드는 «명령=직립 ∧ 최근 1 s 에 섰음» 일 때만 판정한다(SafetyPolicy.h) —
                 // 관문은 정책 스레드가 매 틱 계산해 orient_gate_ 에 둔다. UprightOnly 는 종전 그대로(항상 판정).
-                const bool trip = isaaclab::mdp::bad_orientation(env.get(), 1.0) && orient_gate_.load();
+                // 한계는 SafetyPolicy.h 의 ORIENT_TRIP_RAD(1.0 rad) — «섰음» 기억이 같은 한계를 쓴다.
+                const bool trip = isaaclab::mdp::bad_orientation(env.get(), g1::safety::ORIENT_TRIP_RAD) && orient_gate_.load();
                 if (trip && !mon_exit_reason_) {
                     mon_exit_reason_ = "bad_orientation";
                     spdlog::warn("[safety] bad_orientation TRIPPED  tilt={:.1f}deg (limit 57.3) -> Passive", tilt_deg);
@@ -1256,7 +1257,7 @@ void State_Mimic::enter()
     js_lowpose_passive_.store(false);
     orient_gate_.store(true);
     g_tilt.reset();
-    g_recent_high.reset();     // 지난 체류의 «섰음» 이 남지 않게 — 첫 틱의 z_fk 부터 다시 센다
+    g_recent_high.reset();     // 지난 체류의 «섰음» 이 남지 않게 — 첫 틱부터 다시 센다
     mon_reset();               // 모니터링 카운터도 체류 단위로 리셋 (요약이 이번 체류만 담게)
     // 진입 시 «조작자가 요청한 모드» 를 현재 모드와 일치시켜 시작(불일치 방지). 같은 모드 요청은
     // 이탈 조건을 안 타므로 requested 만 맞춰진다.
@@ -1381,10 +1382,12 @@ void State_Mimic::enter()
                 const auto& rd = env->robot->data;
                 g_z_fk = g1::z_fk(rd.joint_pos.data(), rd.root_quat_w);
                 g_tilt.update({rd.projected_gravity_b[0], rd.projected_gravity_b[1], rd.projected_gravity_b[2]});
-                g_recent_high.update(g_z_fk);
-                // 넘어짐 관문: 정책 스레드가 여기서만 쓰고, FSM 스레드의 bad_orientation 람다는 이 원자값만 읽는다.
+                // 넘어짐 관문(SafetyPolicy.h): 명령 → «섰음» 기억(걸러진 기울기로) → 관문. 정책 스레드가 여기서만 쓰고,
+                // FSM 스레드의 bad_orientation 람다는 orient_gate_ 원자값만 읽는다.
+                const bool cmd_upright = g_commanded_upright();
+                g_recent_high.update(g_z_fk, g_tilt.value(), cmd_upright);
                 orient_gate_.store(g1::safety::orientation_check_applies(
-                    g_mode.row().safety, g_commanded_upright(), g_recent_high.value()));
+                    g_mode.row().safety, cmd_upright, g_recent_high.value()));
             }
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (모드 키 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)

@@ -6,8 +6,11 @@
 //       높이 하나로는 «일부러 눕기» 와 «넘어짐» 을 못 가른다 — 서 있던 G1 이 기본 자세 그대로 58° 기울면
 //       z_fk 는 이미 0.45~0.53 m 다(tests/test_safety_policy.cpp 가 FK 로 잰다). 의도는 명령만 안다:
 //         서 있다 넘어짐       = 명령 직립 ∧ 최근에 섰음  → 적용(잡는다)
-//         일부러 내려가기     = 명령이 낮음              → 끔
+//         일부러 내려가기     = 명령이 낮음              → 끔 (섰던 기억도 지운다)
 //         누운 데서 일어나기  = 최근에 선 적 없음         → 끔 (다 서면 켜진다)
+//       «섰음» = 명령이 직립인 동안 z_fk ≥ 0.65 ∧ 걸러진 기울기 < 57.3° — 그 자체로 넘어짐 판정에 안 걸리는
+//       상태다. 높이만 보면 엉덩이부터 드는 기립(골반 60° 숙임·다리 곧음, z_fk ≈ 0.75)에서 기억이 차고
+//       관문이 열려 거짓 Passive 가 난다(Ruling 13 — 네발 기기 자세의 기울기 64.5° 에서 직립 버튼).
 //       «명령이 직립인가» 는 표의 성질로 가른다(commanded_upright — 클립 골반 높이 · mode5 자세의 z).
 //       명령에 높이가 없는 GroundCapable 모드(기기)는 넘어짐 판정을 하지 않는다.
 //     qd_warn → 직립(z_fk ≥ 0.65 ∧ 기울기 < 30°)이면 폴백 모드, 아니면 Passive — 이미 바닥에 있는 로봇을
@@ -23,14 +26,22 @@ namespace g1::safety {
 inline constexpr float UPRIGHT_MIN_Z = 0.65f;
 inline constexpr float QD_FALLBACK_MAX_TILT = 30.f;
 inline constexpr int RECENT_HIGH_TICKS = 50;     // 1 s @ 50 Hz (정책 틱)
+// 넘어짐 판정 한계 = isaaclab::mdp::bad_orientation(env, limit_angle) 의 limit_angle [rad].
+// State_Mimic.cpp 의 판정 호출이 «이 상수» 를 넘긴다 — 한계가 두 곳에 따로 적히지 않는다.
+inline constexpr float ORIENT_TRIP_RAD = 1.0f;
+inline constexpr float ORIENT_TRIP_DEG = ORIENT_TRIP_RAD * 57.29578f;   // TiltFilter 와 같은 환산 (57.2958°)
 
-// 최근 hold_ticks 틱 안에 z_fk ≥ UPRIGHT_MIN_Z 였던 적이 있나. 선 틱을 포함해 hold_ticks 틱 동안 true,
-// 그다음 틱에 풀린다(선 틱 = 1번째 → 50번째까지 true, 51번째 false). 정책 스레드가 매 틱 update 한다.
+// 최근 hold_ticks 틱 안에 «섰음» 이 있었나. 정책 스레드가 매 틱 update 한다.
+//   섰음 = commanded_upright ∧ z_fk ≥ UPRIGHT_MIN_Z ∧ tilt_deg(걸러진 기울기) < ORIENT_TRIP_DEG.
+//   선 틱을 포함해 hold_ticks 틱 동안 true, 그다음 틱에 풀린다(선 틱 = 1번째 → 50번째 true, 51번째 false).
+//   commanded_upright 가 false 인 틱엔 기억을 지운다 — 내려가라 했으면 섰던 기억으로 관문을 열지 않는다.
+//   NaN(z·기울기)은 «섰음» 이 아니다(비교가 false).
 class RecentHigh {
  public:
   explicit RecentHigh(int hold_ticks = RECENT_HIGH_TICKS) : hold_(hold_ticks) {}
-  bool update(float z_fk) {
-    if (z_fk >= UPRIGHT_MIN_Z) n_ = hold_;          // NaN 은 «섰다» 가 아니다(비교가 false)
+  bool update(float z_fk, float tilt_deg, bool commanded_upright) {
+    if (!commanded_upright) n_ = 0;
+    else if (z_fk >= UPRIGHT_MIN_Z && tilt_deg < ORIENT_TRIP_DEG) n_ = hold_;
     else if (n_ > 0) --n_;
     return n_ > 0;
   }
