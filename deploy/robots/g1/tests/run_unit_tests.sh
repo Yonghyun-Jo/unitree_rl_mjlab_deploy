@@ -23,6 +23,9 @@ for t in test_mode_table test_mode_runtime test_mode5_driver; do          # 이 
   # CMake 빌드는 이 경고를 켜지 않으므로 이 테스트가 유일한 기계 검증이다.
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -Werror=switch -I../include $t.cpp
 done
+for t in test_height_estimator; do            # Eigen 이 필요한 순수 헤더 테스트
+  [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -Werror=switch -I../include -I/usr/include/eigen3 $t.cpp
+done
 [ -f test_no_mode_ordinals.sh ] && { bash test_no_mode_ordinals.sh && echo "ok   no_mode_ordinals" || { echo "FAIL no_mode_ordinals"; fail=1; }; }
 
 # 생성된 ModeTable.h 가 원장(mode_spec.py + config/modes.yaml)과 같은가 — 손으로 고친 헤더·한쪽만
@@ -45,7 +48,7 @@ fi
 # 🔴 conda 가 켜진 셸에서는 LD_LIBRARY_PATH 때문에 uv 의 torch 가 깨진다 → 그 변수들을 뺀 환경으로 돈다.
 UVPY=(env -u LD_LIBRARY_PATH -u CONDA_PREFIX -u CONDA_DEFAULT_ENV "$HOME/.local/bin/uv" run --project "$MJLAB" --no-sync python)
 if [ -x "$HOME/.local/bin/uv" ] && [ -f "$MJLAB/src/mjlab_g1_motion/mode5_presets.py" ]; then
-  for g in gen_mode5_presets_header; do
+  for g in gen_mode5_presets_header gen_g1_kinematics_header; do
     if "${UVPY[@]}" ../../../scripts/$g.py --check >"$OUT/$g.out" 2>&1; then echo "ok   $g"
     else echo "FAIL $g"; tail -5 "$OUT/$g.out"; fail=1; fi
   done
