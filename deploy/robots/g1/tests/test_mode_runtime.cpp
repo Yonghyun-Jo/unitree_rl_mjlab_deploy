@@ -32,7 +32,15 @@ int main() {
     CHK(rt.request(5).accepted);
     ExitContext moving; moving.m5_standing_hold = false;
     CHK(!rt.request(1, moving).accepted && rt.mode() == 5);
-    CHK(rt.request(6, moving).accepted && rt.mode() == 6);      // 5 -> 6 은 이탈 조건 밖(짝 spec: 네발 hold 가드는 B2)
+    // 5 -> 4: mode4 는 ground_capable 이지만 via_ground 는 아니다 — 네발 hold 에선 거부,
+    // 직립 hold 에서만 허용 (Ruling 33, 옛 GroundCapable 바이패스 버그 회귀 방지)
+    ExitContext crawl_hold; crawl_hold.m5_standing_hold = false; crawl_hold.z_fk = 0.42f; crawl_hold.tilt_deg = 64.f;
+    ModeResult r54 = rt.request(4, crawl_hold);
+    CHK(!r54.accepted && std::strstr(r54.reason, "직립 버튼") && rt.mode() == 5);
+    ExitContext upright_hold; upright_hold.m5_standing_hold = true; upright_hold.z_fk = 0.76f; upright_hold.tilt_deg = 3.f;
+    CHK(rt.request(4, upright_hold).accepted && rt.mode() == 4);
+    CHK(rt.request(5, ExitContext{}).accepted && rt.mode() == 5);  // mode4 는 exit=upright — 직립이면 5 로 복귀
+    CHK(rt.request(6, moving).accepted && rt.mode() == 6);      // 5 -> 6 은 via_ground 라 hold 없이도 허용(불변)
     CHK(!rt.request(1).accepted && rt.mode() == 6);             // 6 은 5 로만 나간다
     CHK(rt.request(5).accepted && rt.request(1).accepted);
     // 안전 폴백: 가드 무시, 조작자 요청은 그대로 남는다

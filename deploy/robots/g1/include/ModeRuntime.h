@@ -49,8 +49,10 @@ class ModeRuntime {
           ok = upright; why = "먼저 직립 (높이·기울기 조건)";
           break;
         case Exit::StandingHold:
-          // 저자세끼리(→ 다른 ground_capable 모드)는 여기서 막지 않는다 — 그 가드는 들어가는 쪽 모드의 몫(B2).
-          ok = mode_table::row(m).safety == mode_table::Safety::GroundCapable || (ctx.m5_standing_hold && upright);
+          // 직립 유지 없이 나갈 수 있는 곳은 «땅을 거쳐 들어가는» 모드(row(m).exit==ViaGround, 지금은
+          // 예약된 mode6)뿐이다 — 그 모드 자체가 네발 진입을 전제하기 때문. 나머지(1·2·3·4, mode4 의
+          // ground_capable 포함)는 전부 직립 버튼 유지(m5_standing_hold) ∧ upright 를 요구한다 (Ruling 33).
+          ok = mode_table::row(m).exit == Exit::ViaGround || (ctx.m5_standing_hold && upright);
           why = "먼저 직립 버튼 (직립 유지 상태에서만 나간다)";
           break;
         case Exit::ViaGround:
