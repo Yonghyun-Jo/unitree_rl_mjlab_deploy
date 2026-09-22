@@ -24,7 +24,7 @@ bash deploy/robots/g1/tests/run_unit_tests.sh
 
 | 새 모드의 명령 | 필요한 코드 |
 |---|---|
-| 속도 · 관절 참조(VR/클립) · 미리보기 · 자세 버튼의 조합(기존 4종 안) | **없음.** 표 두 줄 + 재생성으로 끝 |
+| 속도 · 관절 참조(VR/클립) · 미리보기(**구현됨** — `include/MotionPreview.h`) · 자세 버튼(**구현됨** — `include/Mode5Driver.h`)의 조합(기존 4종 안) | **없음.** 표 두 줄 + 재생성으로 끝 |
 | 새 «종류» 의 명령 (기존 4종 밖) | 지금은 `CommandSources.h` 가 **없다.** 명령 값은 오늘은 `State_Mimic.cpp` 관측 항 함수들이 `g_mode.row()`(모드 성질 분기)와 `active_ref_loader()`(VR vs 클립 로더 선택)로 직접 읽는다 — 새 종류를 더하려면 여기에 관측 항을 손으로 추가하고 `modes.yaml` 에 그 종류를 고르는 열을 하나 더한다. **B2 계획이 이 직접-분기들을 `CommandSources.h` 클래스로 모을 예정**(이 문서 밖의 다음 단계) — 그 전까지는 클래스가 아니라 함수 분기다 |
 | 새 이탈 조건 | `ModeTable` 의 `Exit` enum 값 하나(`gen_mode_table_header.py` `ENUMS["exit"]`) + `modes.yaml` `exit` 열 + `ModeRuntime::request` 의 `switch (row().exit)` 에 `case` 하나 + 테스트. 빠뜨리면 그 모드에서 **못 나간다**(기본이 거부 — 아래 함정 (e)) |
 

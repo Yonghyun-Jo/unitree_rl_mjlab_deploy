@@ -43,6 +43,9 @@ private:
     // ModeRuntime 에 건다. 🔴 전역에 바로 걸면 안 된다 — State_Mimic 은 FSM 상태마다 하나씩
     // 만들어지므로(Mimic_Dance1_subject2 / Mimic_Masked) 나중 생성자가 남의 집합을 덮어쓴다.
     std::vector<int> slot_modes_ = {1, 2, 3, 4};   // 계약 v1
+    // 이 슬롯의 deploy.yaml 이 클립 미리보기 항(motion_preview_on/_k1/motion_preview)을 선언했나.
+    // 같은 이유로 생성자가 담고 enter() 가 건다. false(계약 v1)면 미리보기를 계산·요구하지 않는다.
+    bool obs_has_preview_ = false;
 
     std::thread policy_thread;
     bool policy_thread_running = false;

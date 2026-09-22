@@ -5,6 +5,9 @@
 #include "MaskedLocoController.h"   // deploy-clean foot_z gen + base_vel spline + arm-blend
 #include "ModeRuntime.h"            // «지금 어느 모드인가» + 요청의 허용/거부 (ModeTable 의 성질)
 #include "DeployFeatures.h"         // 슬롯이 요구하는 C++ 기능 ↔ 이 바이너리가 아는 기능
+#include "HeightEstimator.h"
+#include "Mode5Driver.h"
+#include "MotionPreview.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include <atomic>
@@ -30,6 +33,20 @@ std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion_demo6 = nullptr;
 // 모드의 성질은 ModeTable.h(생성: mode_spec.py + config/modes.yaml)가 갖는다. 이 파일은 번호를 비교하지 않고
 // g_mode.row() 의 성질을 묻는다 — 모드를 더하는 절차는 rules/ADDING_A_MODE.md.
 static g1::ModeRuntime g_mode;
+// ── 계약 v2 의 «이 틱의 값». 정책 루프가 env->step() 직전에 한 번 채우고, 관측 항은 읽기만 한다
+//    (관측 항은 항마다 따로 불리므로 거기서 계산하면 미리보기 736칸을 세 번 만든다).
+static float g_z_fk = 1e9f;                                  // 골반 높이 추정 (HeightEstimator.h)
+static g1::TiltFilter g_tilt;                                // 걸러진 기울기 [deg]
+static g1::Mode5Driver g_m5;                                 // mode5 자세 버튼 상태
+static g1::Mode5Driver::Cmd g_m5_cmd{};                      // mode5_cmd_live 가 아니면 전부 0
+static std::vector<float> g_motion_block(g1::preview::DIM, 0.f);   // motion_preview 가 아니면 전부 0
+// 지금 들어간 슬롯이 미리보기 관측 항(motion_preview_on/_k1/motion_preview)을 «선언» 했나.
+// 생성자가 State_Mimic::obs_has_preview_ 에 담고 enter() 가 건다(slot_modes_ 와 같은 이유 — 인스턴스가 둘).
+// 🔴 false(계약 v1 슬롯)면 미리보기를 계산하지 않고 클립 속도 배열도 요구하지 않는다: v1 슬롯도
+//    mode4 를 알지만 그 ONNX 는 미리보기 입력이 없다 — 계산하면 없는 배열을 읽고, 요구하면 기동이 막힌다.
+static bool g_obs_has_preview = false;
+// 모드 이탈 조건이 보는 로봇 상태 (ModeRuntime::request). B1 에선 기본값(«직립으로 친다») 이었다.
+static g1::ExitContext g_exit_ctx() { return g1::ExitContext{g_z_fk, g_tilt.value(), g_m5.standing_hold()}; }
 static constexpr int G1_N_LOWER = 12;
 // 안전 폴백이 돌아갈 모드 = 표의 첫 행(명령만으로 서서 걷는 모드, 하드웨어에서 완전 관측 가능).
 // ModeTable 의 «범위 밖 요청 -> 첫 행» 과 같은 약속이다 — 번호를 여기 한 곳에서만 이름으로 받는다.
@@ -140,7 +157,7 @@ static uint32_t g_gui_last_seq = 0;
 static constexpr int G1_REJECT_NONE = -1;
 static int g_reject_last = G1_REJECT_NONE;
 static void g_request_mode(int m, const char* src) {
-    const g1::ModeResult r = g_mode.request(m);          // B2: ExitContext 에 높이 추정·자세 버튼 상태를 넣는다
+    const g1::ModeResult r = g_mode.request(m, g_exit_ctx());
     if (r.accepted) { g_reject_last = G1_REJECT_NONE; return; }
     if (m == g_reject_last) return;
     g_reject_last = m;
@@ -292,6 +309,17 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
                 printf("\r\n[clip] %d/%d «%s»\r\n", next, n, g_clips[next].name); fflush(stdout);
             }
         }
+    }
+    else if (k.size() == 1 && m5::preset_by_key(k[0]) >= 0) {   // mode5 자세 버튼 (config/mode5_keys.yaml)
+        const int p = m5::preset_by_key(k[0]);
+        if (!g_mode.row().mode5_cmd_live) {
+            printf("\r\n[m5] «%s» — mode5 에서만 (지금 mode%d %s)\r\n", m5::PRESETS[p].name,
+                   g_mode.row().id, g_mode.row().name);
+        } else {
+            g_m5.press(p);
+            printf("\r\n[m5] → «%s» (목표 높이 %.2f m)\r\n", m5::PRESETS[p].name, m5::PRESETS[p].z);
+        }
+        fflush(stdout);
     }
     else {
         for (int m = 1; m <= mode_table::N_MODES; ++m) {
@@ -460,6 +488,32 @@ REGISTER_OBSERVATION(command_mask)
 {
     const auto& b = g_mode.row().bits;
     return std::vector<float>{ b[0], b[1] };
+}
+
+// ── 계약 v2 관측 항 (spec §4.2). 계약 v1 슬롯은 이 항들을 선언하지 않으므로 거동이 안 바뀐다.
+// 모드 마스크 8칸 = 표의 비트 전부 (학습 `mask`, mode_spec.MASK_DIM). v1 은 위 command_mask(앞 2칸).
+REGISTER_OBSERVATION(mode_mask)
+{
+    const auto& b = g_mode.row().bits;
+    return std::vector<float>(b.begin(), b.end());
+}
+// mode5 명령 53칸 (학습 `mode5_cmd`). mode5_cmd_live 가 아닌 모드 = 정확히 0 (정책 루프가 채운다).
+REGISTER_OBSERVATION(mode5_command)
+{
+    return std::vector<float>(g_m5_cmd.begin(), g_m5_cmd.end());
+}
+// 클립 미래 미리보기 (학습 `motion` 그룹: preview_on 1 · preview_k1 35 · preview 700). history 1.
+REGISTER_OBSERVATION(motion_preview_on)
+{
+    return std::vector<float>{g_motion_block[0]};
+}
+REGISTER_OBSERVATION(motion_preview_k1)
+{
+    return std::vector<float>(g_motion_block.begin() + 1, g_motion_block.begin() + 1 + g1::preview::STEP);
+}
+REGISTER_OBSERVATION(motion_preview)
+{
+    return std::vector<float>(g_motion_block.begin() + 1 + g1::preview::STEP, g_motion_block.end());
 }
 
 // yaw-local base velocity command [vx, vy, wz]. The controller (g_loco, updated once per
@@ -790,6 +844,13 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
         spdlog::critical("  계약: {}", (policy_dir / "params" / "deploy.yaml").string());
         die_startup();
     }
+    // 이 슬롯이 계약 v2 미리보기 항을 선언했나. 담기만 하고 거는 것은 enter() (slot_modes_ 와 같은 이유).
+    for (const auto& t : env->observation_manager->group_terms("obs"))
+        if (t.name == "motion_preview_on" || t.name == "motion_preview_k1" || t.name == "motion_preview")
+            obs_has_preview_ = true;
+    spdlog::info("[obs contract] {} (슬롯 '{}') 클립 미리보기 항: {}", state_string, slot_name,
+                 obs_has_preview_ ? "있음 (계약 v2 — 미리보기 모드의 클립은 골반 선·각속도가 필요)"
+                                  : "없음 (미리보기를 계산하지 않는다)");
     load_safety_cfg(dcfg["safety"]);   // fail-safe: 없거나/이상하면 전부 비활성 (아래 정의)
     load_gait_cfg(dcfg["gait"]);       // fail-safe: 없으면 종전 quintic 기본값 유지 (아래 정의)
     g_load_footz_src();                // 🔬 진단 A/B (env G1_FOOTZ_SRC): ref | gen | ramp
@@ -1063,6 +1124,28 @@ void State_Mimic::enter()
                      g_mode.mode(), G1_FALLBACK_MODE);
         g_mode.force(G1_FALLBACK_MODE);
     }
+    // 미리보기 항 선언도 «지금 들어가는 슬롯» 의 것으로 (생성자가 담아 둔 값).
+    g_obs_has_preview = obs_has_preview_;
+    // 미리보기를 쓰는 모드를 이 슬롯이 알면, 모든 클립이 골반 선·각속도를 가져야 한다.
+    // 없으면 mode4 에서 미리보기가 0(=«해당 없음»)으로 나가 학습과 다른 입력이 된다 — 여기서 죽인다.
+    // 미리보기 항을 선언하지 않은 슬롯(계약 v1)은 검사하지 않는다 — 그 ONNX 는 미리보기를 안 읽는다.
+    if (g_obs_has_preview) {
+        for (int m = 1; m <= mode_table::N_MODES; ++m) {
+            if (!g_mode.supports(m) || !mode_table::row(m).motion_preview) continue;
+            for (const ClipSlot& c : g_clips) {
+                if (!c.loader->has_preview) {
+                    spdlog::critical("[mode] mode{}({}) 는 클립 미리보기가 필요한데 클립 «{}» 에 body_lin_vel_w/"
+                                     "body_ang_vel_w 가 없다", m, mode_table::row(m).name, c.name);
+                    die_startup();
+                }
+            }
+        }
+    }
+    // mode5 로 들어오는 또 하나의 길 = FSM 재진입. 모드는 체류를 넘어 남으므로(mode5 에서 p·안전 전이로
+    // 나갔다가 다시 m) 정책 루프의 전환 에지가 안 생겨 진입 처리가 안 돈다 → 여기서 같은 규칙을 건다.
+    // 안 걸면 지난 체류의 자세(예: 드러누움 hold)가 서 있는 로봇에 그대로 명령된다.
+    if (g_mode.row().mode5_cmd_live) g_m5.press(m5::ENTER_PRESET);
+    else                             g_m5.reset();
     // IMU 편향 보정. config.yaml 의 imu_cal 이 원장이고, 환경변수는 «실험용» override 다
     // (sim 에 일부러 편향을 만들어 증상을 재현할 때 쓴다 — G1_IMU_CAL_DEG="4.2,0").
     {
@@ -1224,6 +1307,12 @@ void State_Mimic::enter()
         {
             const auto d_t0 = clock::now();
             env->robot->update();   // 보정은 G1Articulation::update() 안에서 이미 걸린다
+            // 자세 추정(엔코더 + IMU 만): 이탈 조건·mode5 도착·안전 규칙이 같은 값을 본다.
+            {
+                const auto& rd = env->robot->data;
+                g_z_fk = g1::z_fk(rd.joint_pos.data(), rd.root_quat_w);
+                g_tilt.update({rd.projected_gravity_b[0], rd.projected_gravity_b[1], rd.projected_gravity_b[2]});
+            }
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (모드 키 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
             const auto d_t_poll = clock::now();
@@ -1271,6 +1360,15 @@ void State_Mimic::enter()
             if (g_mode.consume_switch()) {
                 const mode_table::Row& M = g_mode.row();
                 g_loco.notify_mode_switch(M.id);
+                // mode5 에 들어오면 진입 자세(직립)로 시작한다(spec §4.4) — 사람이 버튼을 누르기 전에도
+                // 학습 문법 그대로의 명령이 나간다. 나가면 상태를 비운다(다음 진입은 새로 시작).
+                if (M.mode5_cmd_live) {
+                    g_m5.press(m5::ENTER_PRESET);
+                    printf("\r\n[m5] 진입 → «%s» (자세 키: z x c b n h)\r\n", m5::PRESETS[m5::ENTER_PRESET].name);
+                    fflush(stdout);
+                } else {
+                    g_m5.reset();
+                }
                 // 되감는 클립: «들어올 때마다» frame 0 으로. 아래 재앵커가 active_ref_loader()
                 // 의 «현재 프레임» 자세를 기준으로 init_quat 을 잡으므로, 되감기는 반드시
                 // 그보다 먼저다 — 순서가 바뀌면 중간 프레임 heading 에 정렬된 채로 첫
@@ -1329,6 +1427,27 @@ void State_Mimic::enter()
                     ClipSlot& c = g_clips[i];
                     c.loader->update(i == 0 ? t_ep + time_range_[0] : t_ep - c.t0);
                 }
+            }
+            // 계약 v2: 관측 항이 읽을 이 틱의 mode5 명령·미리보기 (클립 시계가 이 틱으로 옮겨진 뒤).
+            {
+                static bool m5_hold_prev = false;
+                if (g_mode.row().mode5_cmd_live && g_m5.active()) {
+                    const auto& gb = env->robot->data.projected_gravity_b;
+                    g_m5_cmd = g_m5.tick(g_z_fk, {gb[0], gb[1], gb[2]});
+                    if (g_m5.holding() && !m5_hold_prev)
+                        spdlog::info("[m5] 도착 «{}»  z_fk={:.2f}  기울기={:.0f}°",
+                                     m5::PRESETS[g_m5.preset()].name, g_z_fk, g_tilt.value());
+                } else {
+                    g_m5_cmd.fill(0.f);
+                }
+                m5_hold_prev = g_m5.holding();
+                // 미리보기는 슬롯이 그 항을 선언했을 때만 (g_obs_has_preview — 계약 v1 슬롯은 계산조차 안 한다).
+                // has_preview 는 enter() 가 이미 요구했다 — 여기서 다시 보는 것은 lin()/ang() 의 빈 배열 인덱싱을 막는 보루.
+                ClipSlot* c = g_ref_is_clip() ? active_clip() : nullptr;
+                if (g_obs_has_preview && g_mode.row().motion_preview && c && c->loader->has_preview)
+                    g1::preview::block(*c->loader, c->loader->frame, true, g_motion_block);
+                else
+                    std::fill(g_motion_block.begin(), g_motion_block.end(), 0.f);
             }
             const auto d_t_ctrl = clock::now();
             env->step();

@@ -47,6 +47,10 @@ inline const std::vector<std::string>& known()
         //   를 선언할 수 있고, 모르는 모드 요청은 거부된다. 옛 바이너리는 modes: 를 «조용히 무시» 하고
         //   1~4 를 전부 받아 준다 -> 저자세/기기 모드를 아는 슬롯은 이 기능을 요구해야 한다.
         "mode_table",
+        // 관측 계약 v2 항: mode_mask(8) · mode5_command(53) · motion_preview_on/k1/preview(1/35/700). 2026-09-22.
+        "obs_contract_v2",
+        // mode5 자세 버튼(Mode5Driver) + 골반 높이 추정(z_fk) + 이탈 조건에 실측 자세. 2026-09-22.
+        "mode5_driver",
     };
     return k;
 }
