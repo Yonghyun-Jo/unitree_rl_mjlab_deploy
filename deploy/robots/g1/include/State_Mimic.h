@@ -94,7 +94,10 @@ private:
     float mon_qd_max_    = 0.f;  int mon_qd_joint_    = -1;
     float mon_tilt_max_deg_ = 0.f;
     // 안전층 사건을 «파일로» 남긴다. 세는 일은 위 mon_* 가 이미 한다 — 여기선 기록만.
-    g1::SafetyLog safety_log_;
+    // 🔴 멤버로 안 둔다 — State_Mimic 은 FSM 상태마다 하나씩(Mimic_Masked/Mimic_Dance1_subject2)
+    //    만들어지므로, 여기 뒀다간 재진입/전환마다 다른 인스턴스가 같은 G1_SAFETY_CSV 를
+    //    truncate 한다(state_dump_ 와 같은 사고 패턴, 2026-09-22 — Ruling 30). g1::SafetyLog::shared()
+    //    (프로세스에 하나) 를 쓴다 — SafetyLog.h 상단 주석 참고.
     // 계측용 상태 덤프 (env G1_STATE_CSV 가 있을 때만. 기본 꺼짐 → 거동 변화 0).
     // 🔴 멤버로 안 둔다 — State_Mimic 은 FSM 상태마다 하나씩(Mimic_Masked/Mimic_Dance1_subject2)
     //    만들어지므로, 여기 뒀다간 전환마다 다른 인스턴스가 같은 G1_STATE_CSV 를 truncate 한다.

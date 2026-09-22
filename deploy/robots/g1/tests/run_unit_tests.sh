@@ -20,6 +20,11 @@ done
 for t in test_state_dump_writer; do
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -I../include -pthread $t.cpp
 done
+# SafetyLog 도 같은 프로세스-공유 싱글턴 계약(멱등 open, 닫기는 소멸자에서만)을 잠근다 — 2026-09-22
+# Ruling 30. 스레드가 없어 -pthread 는 불필요.
+for t in test_safety_log_shared; do
+  [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -I../include $t.cpp
+done
 for t in test_estop_channel test_loop_diag; do
   [ -f $t.cpp ] && run $t -std=c++17 -O2 -I../../../include $t.cpp
 done

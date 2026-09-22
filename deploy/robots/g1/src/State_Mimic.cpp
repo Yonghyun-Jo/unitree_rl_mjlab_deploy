@@ -1010,7 +1010,7 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
                 if (trip && !mon_exit_reason_) {
                     mon_exit_reason_ = "bad_orientation";
                     spdlog::warn("[safety] bad_orientation TRIPPED  tilt={:.1f}deg (limit 57.3) -> Passive", tilt_deg);
-                    safety_log_.event("bad_orientation", -1, "", tilt_deg, 57.3f, "-> Passive");
+                    g1::SafetyLog::shared().event("bad_orientation", -1, "", tilt_deg, 57.3f, "-> Passive");
                 }
                 return trip;
             },
@@ -1308,7 +1308,12 @@ void State_Mimic::enter()
         else
             spdlog::error("[imu_cal] 🔴 G1Articulation 이 아니다 — 보정이 걸리지 않는다");
     }
-    safety_log_.open_from_env();   // G1_SAFETY_CSV 가 있을 때만 켜진다(기본 꺼짐)
+    // G1_SAFETY_CSV 가 있을 때만 켜진다(기본 꺼짐). 프로세스 공유 인스턴스 — 멱등이라
+    // Mimic_Masked/Mimic_Dance1_subject2 전환·재진입마다 다시 불러도 두 번째부터는 no-op.
+    g1::SafetyLog::shared().open_from_env();
+    // stay 경계를 안전 로그에도 남긴다(분석용, 기존 열 포맷 그대로 — kind=edge, event=stay_enter,
+    // detail 에 FSM 상태 이름). enabled() 가 아니면(=CSV 꺼짐) event() 내부에서 그냥 no-op.
+    g1::SafetyLog::shared().event("stay_enter", -1, "", 0.f, 0.f, getStateString().c_str());
     // G1_STATE_CSV 가 있을 때만 (sim2sim ↔ 실기 대조 계측). 프로세스 공유 인스턴스 — 멱등이라
     // Mimic_Masked/Mimic_Dance1_subject2 전환마다 다시 불러도 두 번째부터는 no-op.
     g1::StateDump::shared().open_from_env("G1_STATE_CSV", GaitAux::header());
@@ -1507,7 +1512,7 @@ void State_Mimic::enter()
                     spdlog::error("[safety] qd_crit LATCHED  |qd|={:.2f} rad/s @ {} {} (crit {:.1f} 을 {}틱 연속 초과) -> Passive",
                                   qd_now, qd_j, jname(qd_j), (qd_j>=0&&qd_j<29)?js_qd_crit_v_[qd_j]:js_qd_crit_, js_over_ticks_);
                 if (!crit_before && crit_l)
-                    safety_log_.event("qd_crit", qd_j, jname(qd_j), qd_now, (qd_j>=0&&qd_j<29)?js_qd_crit_v_[qd_j]:js_qd_crit_, "-> Passive");
+                    g1::SafetyLog::shared().event("qd_crit", qd_j, jname(qd_j), qd_now, (qd_j>=0&&qd_j<29)?js_qd_crit_v_[qd_j]:js_qd_crit_, "-> Passive");
                 // warn 수동복귀: 조작자가 폴백 모드(X/'1')를 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
                 if (js_qd_warn_latched_ && reqd == G1_FALLBACK_MODE) js_qd_warn_latched_ = false;
                 // g_poll_vr 뒤에 덮어써 폴백 모드 유지(soft).
@@ -1526,11 +1531,11 @@ void State_Mimic::enter()
                                           "  mode{} z_fk={:.2f} 기울기={:.0f}° -> Passive. 복귀=p→f→m",
                                           qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_,
                                           g_mode.row().id, g_z_fk, g_tilt.value());
-                            safety_log_.event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
+                            g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
                         } else {
                             spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> 폴백 모드 강제. 복귀=키 '1'",
                                          qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
-                            safety_log_.event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 폴백 모드 강제");
+                            g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 폴백 모드 강제");
                         }
                     }
                     if (to_passive) {
@@ -1538,7 +1543,7 @@ void State_Mimic::enter()
                         if (!js_lowpose_passive_.exchange(true) && warn_before) {
                             spdlog::error("[safety] qd_warn 래치 중 (mode{} z_fk={:.2f} 기울기={:.0f}°) -> Passive. 복귀=p→f→m",
                                           g_mode.row().id, g_z_fk, g_tilt.value());
-                            safety_log_.event("qd_warn_lowpose", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
+                            g1::SafetyLog::shared().event("qd_warn_lowpose", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
                         }
                     } else {
                         g_mode.force(G1_FALLBACK_MODE);
@@ -1667,7 +1672,7 @@ void State_Mimic::enter()
                     else                    spdlog::info("[diag:policy] {}", d_buf + 7);
                     // 안전층 누적값을 1 Hz 로 시간축에 편다. I/O 는 «여기(50Hz)» 에서만 —
                     // 1 kHz 안전 루프는 이 파일을 건드리지 않는다.
-                    safety_log_.sample(mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_,
+                    g1::SafetyLog::shared().sample(mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_,
                                        mon_rate_ticks_, mon_rate_max_, mon_rate_joint_,
                                        mon_tilt_max_deg_, &jname);
                     if (d_csv) {
@@ -1687,11 +1692,12 @@ void State_Mimic::enter()
         load_run = false;
         if (load_th.joinable()) load_th.join();
         if (d_csv) std::fclose(d_csv);
-        safety_log_.close();
-        // 🔴 state_dump_ 는 여기서 안 닫는다 — g1::StateDump::shared() 는 프로세스 공유 인스턴스라
-        //    stay 끝마다 닫으면 다음 FSM 전환의 open_from_env() 가 다시 처음부터 열어야 하고,
-        //    그게 이 재진입 사고(std::thread 덮어쓰기/파일 truncate)의 근원이었다(Ruling 27).
-        //    닫는 것은 shared() 의 소멸자(프로세스 종료) 하나뿐.
+        // 🔴 safety_log_ / state_dump_ 는 여기서 안 닫는다 — g1::SafetyLog::shared() /
+        //    g1::StateDump::shared() 는 프로세스 공유 인스턴스라 stay 끝마다 닫으면 다음 FSM
+        //    전환의 open_from_env() 가 다시 처음부터 열어야 하고, 그게 이 재진입 사고
+        //    (std::thread 덮어쓰기/파일 truncate)의 근원이었다(state_dump_=Ruling 27,
+        //    safety_log_=이번 Ruling 30 — 같은 패턴). 닫는 것은 shared() 의 소멸자(프로세스
+        //    종료) 하나뿐.
     });
 }
 
