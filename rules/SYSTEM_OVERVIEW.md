@@ -274,7 +274,8 @@ motor에 쓰는 q_target의 **per-tick 변화량**을 `vel_max · dt`로 캡한�
 연속 초과** 시:
 - **warn**(`max|qd| > qd_warn`) → **폴백 모드(표의 첫 행 = mode1) 강제(래치)** — 단 GroundCapable 모드(지금 4·5,
   6 은 예약)의 낮거나 기운 자세면 Passive(§2.1 끝, `SafetyPolicy.h`). 처분은 그 틱의 모드로 정한다 — 래치 중(폴백
-  모드) 4·5 를 누른 그 틱에 낮거나 기운 자세면 Passive. 래치 중엔 매 틱
+  모드) 5 를 누른 그 틱에 낮거나 기운 자세면 Passive(4 는 진입 조건이 «직립에서만» 이라 그 상태에선 요청 자체가
+  거부된다 — `ModeRuntime` Exit::Upright 진입 가드). 래치 중엔 매 틱
   `g_mode.force(G1_FALLBACK_MODE)`로 덮어써 유지(soft — `force()`는 이탈 조건·슬롯 지원을 안 본다).
   **수동 복귀**: 조작자가 폴백 모드를 **명시적으로 요청**(X버튼 또는 키보드 `'1'`)해서
   `g_mode.requested() == G1_FALLBACK_MODE`가 되어야 래치 해제 — qd가 아직 높으면 다음 sustained

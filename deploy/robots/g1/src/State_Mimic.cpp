@@ -1550,6 +1550,7 @@ void State_Mimic::enter()
                     // 먼저 구한다. ⚠ 래치 중 조작자가 GroundCapable 모드를 누른 그 틱이면 그 모드의 행으로
                     // 판정된다(z_fk < 0.65 ∨ 기울기 ≥ 30° 면 Passive, 아니면 같은 틱에 폴백 모드로 되돌린다) —
                     // spec §4.7 대로 «그 순간의 모드» 기준. 래치 중엔 폴백 모드로 서 있으므로 드물다.
+                    // (클립 재생 모드는 «직립에서만 들어간다» 진입 가드가 낮거나 기운 상태의 요청을 먼저 거부 — 사실상 mode5 만.)
                     const bool to_passive = g1::safety::qd_warn_action(g_mode.row().safety, g_z_fk, g_tilt.value())
                                             == g1::safety::QdWarnAction::Passive;
                     // 래치 에지에서 로그 1줄 + CSV 1건. 해제 뒤라 폴백 모드에서는 같은 틱에 풀려(=no-op) 스팸이 안 난다.
