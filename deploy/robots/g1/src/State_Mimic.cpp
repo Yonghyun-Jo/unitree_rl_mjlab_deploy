@@ -262,12 +262,31 @@ static void g_poll_gui()
     GuiCtrl g{};
     const size_t n = std::fread(&g, 1, sizeof(g), f);
     std::fclose(f);
+    // 쓰는 쪽(gui_shm.write)은 os.replace 로 파일을 통째로 바꾼다 — 찢긴 읽기가 없으니, v2 모양이 아닌 파일은
+    // «남의 파일(옛 GUI 등)» 이다. 그때 이 체류의 기준선은 «없음» 으로 끝낸다 → 이 체류의 첫 v2 쓰기는 그대로 먹는다.
+    // (기준선을 계속 미루면 옛 0x6701 파일이 남은 채 새 v2 PICO 브리지를 띄웠을 때 그 첫 누름이 기준선으로 삼켜졌다
+    //  — 최종 검토 M-14.)
     if (n >= sizeof(int32_t) && g.magic == GUI_CTRL_MAGIC_V1) {
         static bool warned = false;
         if (!warned) { warned = true; spdlog::warn("[gui] 옛 형식(0x6701) — 무시한다. tools/gui_shm.py 를 이 브랜치 것으로 (GUI·PICO 브리지 재시작)"); }
+        g_gui_rebase = false;
         return;
     }
-    if (n != sizeof(g) || g.magic != GUI_CTRL_MAGIC) return;         // (기준선은 유효한 v2 프레임을 볼 때까지 미룬다)
+    if (n != sizeof(g) || g.magic != GUI_CTRL_MAGIC) { g_gui_rebase = false; return; }
+    if (g_gui_rebase) {
+        // 1회성 요청도 파일에는 «마지막 쓰기» 로 남는다 — 그대로 먹으면 Mimic 밖에서 누른 «5» 가 m 직후
+        // 재생된다(서 있던 로봇이 드러눕는다). 속도·foot-gen 도 적용하지 않는다: 체류마다 다시 잡으므로
+        // 적용하면 키보드로 멈춘(space) 뒤 p→f→m 할 때 GUI 에 남은 옛 속도로 걷기 시작한다.
+        // 비유한 값이 든 프레임이어도 똑같이 기준으로만 삼킨다(아무것도 적용하지 않으니 값은 상관없다) — 전엔
+        // 비유한 거부 쪽이 먼저 돌아 자세 seq 기준을 안 잡은 채 기준선 단계를 끝냈다(최종 검토 M-14).
+        g_gui_rebase = false;
+        g_gui_last_seq = g.seq;
+        if (g.m5_preset != 0) g_gui_last_m5_seq = g.m5_press_seq;    // 자세 없는 프레임(PICO·replay)은 기준을 안 옮긴다
+        printf("\r\n[gui] 진입 기준선 seq=%u — 파일에 남은 요청(mode_req=%d 자세=%d clip_req=%d)·속도는 적용하지 않는다. 다음 쓰기부터 먹는다\r\n",
+               g.seq, g.mode_req, g.m5_preset, g.clip_req);
+        fflush(stdout);
+        return;
+    }
     // 비유한(NaN·inf) 실수 칸이 하나라도 있으면 프레임을 통째로 버린다 — std::clamp 는 NaN 을 그대로 통과시켜
     // 속도 명령·발 생성기에 NaN 이 들어간다. seq 는 기준으로 삼아 같은 프레임을 매 틱 다시 읽지 않는다
     // (알림은 나쁜 프레임마다 한 번). 다음 정상 프레임은 그대로 먹는다.
@@ -275,23 +294,10 @@ static void g_poll_gui()
         !std::isfinite(g.turn_k) || !std::isfinite(g.height_scale)) {
         if (g.seq != g_gui_last_seq) {
             g_gui_last_seq = g.seq;
-            g_gui_rebase = false;                                     // 이 체류의 기준선도 이것으로 끝
             printf("\r\n[gui seq=%u] 거부: 비유한 값(vx=%g vy=%g wz=%g turn_k=%g height_scale=%g) — 프레임 통째로 무시\r\n",
                    g.seq, g.vx, g.vy, g.wz, g.turn_k, g.height_scale);
             fflush(stdout);
         }
-        return;
-    }
-    if (g_gui_rebase) {
-        // 1회성 요청도 파일에는 «마지막 쓰기» 로 남는다 — 그대로 먹으면 Mimic 밖에서 누른 «5» 가 m 직후
-        // 재생된다(서 있던 로봇이 드러눕는다). 속도·foot-gen 도 적용하지 않는다: 체류마다 다시 잡으므로
-        // 적용하면 키보드로 멈춘(space) 뒤 p→f→m 할 때 GUI 에 남은 옛 속도로 걷기 시작한다.
-        g_gui_rebase = false;
-        g_gui_last_seq = g.seq;
-        if (g.m5_preset != 0) g_gui_last_m5_seq = g.m5_press_seq;    // 자세 없는 프레임(PICO·replay)은 기준을 안 옮긴다
-        printf("\r\n[gui] 진입 기준선 seq=%u — 파일에 남은 요청(mode_req=%d 자세=%d clip_req=%d)·속도는 적용하지 않는다. 다음 쓰기부터 먹는다\r\n",
-               g.seq, g.mode_req, g.m5_preset, g.clip_req);
-        fflush(stdout);
         return;
     }
     if (g.seq == g_gui_last_seq) return;
@@ -304,9 +310,14 @@ static void g_poll_gui()
     // 기준을 0 으로 옮기면, 다음 GUI 프레임이 GUI 의 마지막 자세(예: 드러누움)를 «다시 누름» 으로 만든다.
     if (g.m5_preset != 0 && g.m5_press_seq != g_gui_last_m5_seq) {
         g_gui_last_m5_seq = g.m5_press_seq;
-        const int p = g.m5_preset - 1;
-        if (p < 0 || p >= m5::N_PRESETS) {
+        // 범위는 뺄셈 «전» 에 본다 — m5_preset 은 남의 프로그램이 쓴 바이트라 INT_MIN 이면 −1 이 부호 넘침(UB)이다.
+        const int p = (g.m5_preset >= 1 && g.m5_preset <= m5::N_PRESETS) ? g.m5_preset - 1 : -1;
+        if (p < 0) {
             printf("\r\n[m5] gui: 없는 자세 %d\r\n", g.m5_preset);
+        } else if (m5::PRESETS[p].key == '\0') {
+            // 키 없는 표 자세(베어 크롤·한쪽 낮춘 지지 L/R)는 운용자에게 아직 안 연다(Ruling 17 — 검증 뒤, B3).
+            // GUI 는 그 버튼을 안 내지만 shm 은 남의 프로그램도 쓴다 — 제어기가 한 번 더 막는다(최종 검토 M-3).
+            printf("\r\n[m5] gui «%s» — 키 없는 자세는 아직 안 연다 (config/mode5_keys.yaml 에 키를 준 자세만)\r\n", m5::PRESETS[p].name);
         } else if (!g_mode.row().mode5_cmd_live) {
             printf("\r\n[m5] gui «%s» — mode5 에서만 (지금 mode%d %s)\r\n", m5::PRESETS[p].name, g_mode.row().id, g_mode.row().name);
         } else {
@@ -969,7 +980,9 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     // 🔴 미리보기 항을 선언한 슬롯이면 이 인스턴스의 모든 클립이 골반 선·각속도를 가져야 한다. 없으면
     //    mode4 미리보기가 0(=«해당 없음»)으로 나가 학습과 다른 입력이 된다. 여기서 죽인다 — 생성자는
     //    모터가 PD 에 물리기 «전» 이다. enter() 는 이미 gain 을 건 뒤라 거기서 _Exit 하면 lowcmd 가 끊긴다.
-    //    (enter() 가 짓는 클립 칸 g_clips 는 이 세 로더다 — 다른 인스턴스는 선택 클립을 안 싣는다.)
+    //    (Mimic_Masked 인스턴스에선 enter() 가 짓는 클립 칸 g_clips 가 이 세 로더다. 선택 클립을 안 싣는 인스턴스
+    //     (Mimic_Dance1_subject2)의 enter() 는 주 클립만 자기 것이고 나머지 칸은 정적 motion_light/motion_demo6 —
+    //     마지막으로 그것을 실은 인스턴스의 로더 — 가 채운다. 그 칸의 미리보기는 정책 루프의 has_preview 가드가 0 으로 막는다.)
     if (obs_has_preview_) {
         auto need_preview = [&](const std::shared_ptr<MotionLoader_>& l, const char* name, const std::string& path) {
             if (!l || l->has_preview) return;
@@ -1323,7 +1336,8 @@ void State_Mimic::enter()
     g1::SafetyLog::shared().open_from_env();
     // stay 경계를 안전 로그에도 남긴다(분석용, 기존 열 포맷 그대로 — kind=edge, event=stay_enter,
     // detail 에 FSM 상태 이름). enabled() 가 아니면(=CSV 꺼짐) event() 내부에서 그냥 no-op.
-    g1::SafetyLog::shared().event("stay_enter", -1, "", 0.f, 0.f, getStateString().c_str());
+    // 1 Hz 표본의 기준(누적값의 직전 값)도 여기서 0 으로 — 아래 mon_reset() 이 누적값을 0 으로 되돌리므로.
+    g1::SafetyLog::shared().stay_enter(getStateString().c_str());
     // G1_STATE_CSV 가 있을 때만 (sim2sim ↔ 실기 대조 계측). 프로세스 공유 인스턴스 — 멱등이라
     // Mimic_Masked/Mimic_Dance1_subject2 전환마다 다시 불러도 두 번째부터는 no-op.
     g1::StateDump::shared().open_from_env("G1_STATE_CSV", GaitAux::header());
@@ -1379,6 +1393,9 @@ void State_Mimic::enter()
         // base_vel 저역통과 상태 — 이 스레드(= 이 체류)의 지역 변수라 체류마다 0 에서 시작한다
         // (전엔 루프 안의 함수 static 이라 지난 체류의 값에서 이어졌다).
         std::array<float, 3> bv_s = {0.f, 0.f, 0.f};
+        // mode5 «도착» 로그의 에지 기억도 같은 이유로 이 스레드(= 이 체류)의 지역 변수다(전엔 함수 static 이라
+        // 지난 체류의 hold 가 남아 재진입 첫 도착 줄이 빠질 수 있었다 — 로그만).
+        bool m5_hold_prev = false;
 
         motion->reset(env->robot->data, time_range_[0]);   // 0번 칸 = 주 클립(구간 오프셋을 쓴다)
         for (size_t i = 1; i < g_clips.size(); ++i) {      // 나머지 칸: clip anchor = enter heading
@@ -1639,7 +1656,6 @@ void State_Mimic::enter()
             }
             // 계약 v2: 관측 항이 읽을 이 틱의 mode5 명령·미리보기 (클립 시계가 이 틱으로 옮겨진 뒤).
             {
-                static bool m5_hold_prev = false;
                 if (g_mode.row().mode5_cmd_live && g_m5.active()) {
                     const auto& gb = env->robot->data.projected_gravity_b;
                     g_m5_cmd = g_m5.tick(g_z_fk, {gb[0], gb[1], gb[2]});

@@ -20,6 +20,8 @@ If the GUI is not running, keyboard (terminal) + joystick still drive the robot.
 """
 from __future__ import annotations
 
+import os
+import re
 import time
 
 import viser
@@ -39,9 +41,37 @@ state = dict(seq=0, cmd_mode=1, vx=0.0, vy=0.0, wz=0.0,
              # 첫 누름이 무시되지 않게(0 부터면 겹칠 수 있다). 구조체 칸이 uint32 라 32 bit 로 자른다.
              m5_press_seq=int(time.time() * 1000) & 0xFFFFFFFF)
 
-# 클립 칸 = State_Mimic.cpp g_build_clips 의 이름·순서(primary · light · demo6). 제어기는 «실은 로더만» 칸으로
-# 만들므로 light 가 없는 슬롯이면 demo6 이 1 번이 된다 — 제어기가 고른 칸 이름을 로그로 답한다(«[clip] i/n «이름»»).
-CLIPS = ("0 primary", "1 light", "2 demo6")
+# 클립 칸 = State_Mimic.cpp g_build_clips 의 이름·순서(primary · light · demo6 중 «설정에 실린 것만»).
+# 원천 = config/config.yaml 의 Mimic_Masked 블록 motion_file · motion_file_light · motion_file_demo6
+# (G1_POLICY_SLOT 은 policy_dir 만 바꾸고 클립 줄은 그대로 읽는다 — 제어기와 같은 원천이다).
+# light 가 없는 설정이면 demo6 이 1 번이 된다. 읽지 못하면 옛 고정 표로 — 제어기가 고른 칸 이름을 로그로 답한다
+# («[clip] i/n «이름»»).
+_CLIP_KEYS = (("motion_file", "primary"), ("motion_file_light", "light"), ("motion_file_demo6", "demo6"))
+_CLIPS_FALLBACK = ("0 primary", "1 light", "2 demo6")
+
+
+def _clip_labels(config_yaml: str) -> tuple:
+    """config.yaml 의 Mimic_Masked 상태 블록(들여쓰기 2)에서 클립 줄을 찾아 "i 이름 (파일)" 라벨을 만든다.
+    PyYAML 없이 줄 단위로 읽는다(이 GUI 는 viser 만 얹은 uv 환경에서 돈다)."""
+    try:
+        lines = open(config_yaml, encoding="utf-8").read().splitlines()
+    except OSError:
+        return _CLIPS_FALLBACK
+    found, inside = {}, False
+    for ln in lines:
+        if re.match(r"^  Mimic_Masked:", ln):
+            inside = True
+            continue
+        if inside and ln.strip() and not ln.startswith("   "):     # 다음 상태 블록(들여쓰기 ≤ 2)
+            break
+        m = re.match(r"^    (motion_file(?:_light|_demo6)?):\s*(\S+)", ln) if inside else None
+        if m:
+            found[m.group(1)] = os.path.splitext(os.path.basename(m.group(2)))[0]
+    labels = [f"{i} {name} ({found[k]})" for i, (k, name) in enumerate((k, n) for k, n in _CLIP_KEYS if k in found)]
+    return tuple(labels) if labels else _CLIPS_FALLBACK
+
+
+CLIPS = _clip_labels(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "config.yaml"))
 
 
 def _clamp(x, lo, hi):
@@ -139,7 +169,7 @@ def main() -> None:
 
     g.add_markdown(
         "**Keyboard (focus the browser):** W/S = vx±, A/D = vy±, Q/E = wz±, "
-        "Space = stop · 1/2/3 = mode")
+        "Space = stop · " + "/".join(key for _i, _n, key, _s in MODES) + " = mode (표의 키)")
 
     # ---- shared setters (sliders + hotkeys both call these) ----
     def set_vel(nx, ny, nw) -> None:
@@ -167,9 +197,8 @@ def main() -> None:
     cmd("yaw CCW (wz+)",  "Q", lambda: set_vel(state["vx"], state["vy"], state["wz"] + KB_STEP))
     cmd("yaw CW (wz-)",   "E", lambda: set_vel(state["vx"], state["vy"], state["wz"] - KB_STEP))
     cmd("stop",           "space", lambda: set_vel(0.0, 0.0, 0.0))
-    cmd("mode 1",         "1", lambda: set_mode(1))
-    cmd("mode 2",         "2", lambda: set_mode(2))
-    cmd("mode 3",         "3", lambda: set_mode(3))
+    for i, name, key, _s in MODES:                 # 모드 단축키 = 표의 key 열 (번호를 여기 박지 않는다)
+        cmd(f"mode {i} ({name})", key, lambda i=i: set_mode(i))
 
     _write(); refresh()
     print(f"[masked_gui] writing {gui_shm.SHM_PATH}; open the viser URL above. Ctrl-C to quit.")

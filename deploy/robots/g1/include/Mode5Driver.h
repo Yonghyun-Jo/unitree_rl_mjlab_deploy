@@ -8,9 +8,21 @@
 // 🔴 수치 규약까지 같게 한다: 시간·도착 누적·높이 차는 double(파이썬 float), g 내적은 float(torch float32).
 //    이 규약이 어긋나면 도착 틱이 하나 밀려 hold 전환 시각이 달라진다 — 골든이 그것을 잡는다.
 #include "Mode5Presets.h"
+#include "ModeTable.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
+
+// 두 생성 헤더가 같은 53칸 계약을 말하는지 컴파일 때 묶는다. Mode5Presets.h(mode5_presets.py + mode_spec.py 에서)와
+// ModeTable.h(mode_spec.py + modes.yaml 에서)는 생성기가 따로라 각자의 --check 만으로는 한쪽만 재생성된 채
+// 둘 다 통과할 수 있다 — 그러면 드라이버가 채우는 z_mask·t_goal 칸이 관측 계약의 칸과 어긋난다(최종 검토 M-15).
+static_assert(m5::CMD_DIM == mode_table::MODE5_CMD_DIM, "Mode5Presets.h CMD_DIM != ModeTable.h MODE5_CMD_DIM");
+static_assert(m5::SLOT_Z_MASK == mode_table::M5_Z_MASK.lo && mode_table::M5_Z_MASK.hi == m5::SLOT_Z_MASK + 1,
+              "Mode5Presets.h SLOT_Z_MASK != ModeTable.h M5_Z_MASK");
+static_assert(m5::SLOT_T_GOAL == mode_table::M5_T_GOAL.lo && mode_table::M5_T_GOAL.hi == m5::SLOT_T_GOAL + 1,
+              "Mode5Presets.h SLOT_T_GOAL != ModeTable.h M5_T_GOAL");
+static_assert(m5::T_GOAL_MAX == static_cast<double>(mode_table::M5_T_GOAL_MAX),
+              "Mode5Presets.h T_GOAL_MAX != ModeTable.h M5_T_GOAL_MAX");
 
 namespace g1 {
 

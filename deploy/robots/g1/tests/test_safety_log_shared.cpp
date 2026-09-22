@@ -164,6 +164,37 @@ int main() {
             "D: 소멸자가 스코프 종료로 안전하게 닫혔는지(파일 내용 보존) 확인");
     }
 
+    // ── E) 체류 경계의 1 Hz 표본 기준 (최종 검토 M-7) ─────────────────────
+    // State_Mimic::mon_reset() 이 체류마다 누적값(mon_clamp_ticks_ 등)을 0 으로 되돌린다. 표본의 기준(prev_*)을
+    // 안 되돌리면 재진입 첫 표본이 «5 − 100» = uint32 ~4.29e9 로 찍혔다. stay_enter() 가 기준·표본 시계를 새로 잡는다.
+    {
+        const char* epath = "/tmp/_tsl_stay.csv";
+        std::remove(epath);
+        setenv("G1_SAFETY_CSV", epath, 1);
+        g1::SafetyLog log;
+        log.open_from_env();
+        log.stay_enter("Mimic_Masked");
+        log.sample(100, 0.02f, 3, 0, 0.f, -1, 5.f, nullptr);   // 첫 체류: 누적 100
+        log.stay_enter("Mimic_Dance1_subject2");                // 재진입·전환 — 누적은 0 부터 다시
+        log.sample(5, 0.01f, 3, 0, 0.f, -1, 5.f, nullptr);     // 둘째 체류: 누적 5 (1 s 를 안 기다리고 첫 표본)
+        log.close();
+        std::vector<std::string> vals;
+        int n_stay = 0;
+        for (auto& s : lines_of(epath)) {
+            if (s.find(",edge,stay_enter,") != std::string::npos) ++n_stay;
+            if (s.find(",rate,pos_clamp,") == std::string::npos) continue;
+            std::vector<std::string> f;
+            size_t a = 0, b;
+            while ((b = s.find(',', a)) != std::string::npos) { f.push_back(s.substr(a, b - a)); a = b + 1; }
+            f.push_back(s.substr(a));
+            if (f.size() > 6) vals.push_back(f[6]);             // value 열 = 이번 표본의 증가분
+        }
+        chk(n_stay == 2, "E: stay_enter 사건이 체류마다 한 줄");
+        chk(vals.size() == 2 && vals[0] == "100" && vals[1] == "5",
+            "E: 재진입 첫 표본의 증가분 = 이번 체류 누적 그대로(5) — 옛 기준이면 5−100 이 uint 로 ~4.29e9");
+        if (vals.size() == 2) std::printf("  E) pos_clamp 표본 증가분: 첫 체류 %s · 재진입 %s\n", vals[0].c_str(), vals[1].c_str());
+    }
+
     // never-opened 인스턴스: close() 가 안전(두 번 호출도 안전)해야 한다.
     {
         g1::SafetyLog never;

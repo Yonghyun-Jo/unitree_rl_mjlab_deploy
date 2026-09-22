@@ -17,7 +17,9 @@
 //      쓰기 스레드: 100 ms 마다 링을 비워 파일에 쓴다. 여기서 블록해도 제어는 안 멈춘다.
 //    ⇒ 실기에서 켜도 된다. 상시 로깅은 여전히 온보드 piene_g1_logger 의 역할이다.
 //
-//    ⚠ SIGKILL 로 죽이면 링에 남은 최대 100 ms 가 사라진다(정상 종료·Ctrl-C 는 close() 가 비운다).
+//    ⚠ 링에 남은 최대 100 ms 는 «정상 종료(main 반환·exit)» 때만 close() 가 비운다. Ctrl-C(SIGINT)·pkill(SIGTERM)
+//      은 main.cpp 의 핸들러가 터미널만 복구하고 기본 처분을 다시 일으켜(SIG_DFL + raise) 소멸자가 안 돈다 →
+//      SIGKILL 과 같이 그 ≤100 ms 를 잃는다(체류 끝 close 도 없다 — Ruling 27). 디스크는 100 ms 마다 fflush 된다.
 //
 // 🔴 프로세스에 하나뿐인 공유 인스턴스 — `StateDump::shared()` 로만 쓴다. State_Mimic 은
 //    Mimic_Masked / Mimic_Dance1_subject2 처럼 **FSM 상태마다 하나씩** 만들어지는데,

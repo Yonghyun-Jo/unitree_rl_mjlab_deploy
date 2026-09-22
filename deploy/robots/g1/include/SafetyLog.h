@@ -93,6 +93,18 @@ public:
         std::fflush(f_);   // 발산 직전일 수 있다 — 버퍼에 남기지 않는다
     }
 
+    // ── 체류 시작: State_Mimic::enter() 가 정책 스레드를 띄우기 «전» 에 한 번 부른다 ─────────
+    // stay_enter 사건 한 줄 + 1 Hz 표본의 기준을 새로 잡는다. State_Mimic::mon_reset() 이 체류마다 누적값
+    // (mon_clamp_ticks_·mon_rate_ticks_)을 0 으로 되돌리는데 prev_* 는 프로세스 수명이라, 재진입(또는 Masked ↔
+    // Dance1 전환) 첫 표본의 «누적 − 직전» 이 음수 → uint32 로 ~4.29e9 가 찍혔다(최종 검토 M-7). 표본 시계도
+    // 새로 잡아 이번 체류의 첫 표본이 1 s 를 기다리지 않게 한다. 파일이 꺼져 있어도(비활성) 기준은 잡는다.
+    // 스레드: enter()(FSM 스레드)가 부르는 이 시점엔 정책 스레드가 없다(이전 체류는 exit() 에서 join) — prev_* 경합 없음.
+    void stay_enter(const char* detail) {
+        prev_clamp_ = prev_rate_ = 0;
+        last_ = 0.0;
+        event("stay_enter", -1, "", 0.f, 0.f, detail);
+    }
+
     // ── 1 Hz 표본: 정책 스레드(50 Hz)에서 부른다. 누적값이 «움직였을 때만» 기록 ──
     void sample(
                 uint32_t clamp_ticks, float clamp_max, int clamp_joint,
