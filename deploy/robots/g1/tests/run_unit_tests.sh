@@ -27,6 +27,10 @@ for t in test_height_estimator test_motion_preview test_safety_policy; do   # Ei
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -Werror=switch -I../include -I/usr/include/eigen3 $t.cpp
 done
 [ -f test_no_mode_ordinals.sh ] && { bash test_no_mode_ordinals.sh && echo "ok   no_mode_ordinals" || { echo "FAIL no_mode_ordinals"; fail=1; }; }
+# shm 바이트 배치(C++ 구조체 ↔ python FMT) — 표준 라이브러리만 쓴다(uv 불필요)
+for t in test_gui_shm_layout test_vr_shm_layout; do
+  [ -f $t.py ] && { python3 $t.py >"$OUT/$t.out" 2>&1 && echo "ok   $t" || { echo "FAIL $t"; tail -5 "$OUT/$t.out"; fail=1; }; }
+done
 
 # 생성된 ModeTable.h 가 원장(mode_spec.py + config/modes.yaml)과 같은가 — 손으로 고친 헤더·한쪽만
 # 고친 표를 잡는다. 🔴 원장의 «학습 쪽»(mode_spec.py)은 다른 repo 에 있어 로봇·깨끗한 clone 에는

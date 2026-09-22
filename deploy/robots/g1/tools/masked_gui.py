@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Browser control GUI for the masked-locomotion deploy (mjlab-style, via viser).
 
-Mirrors the mjlab play GUI (mode 1/2/3 + base_vel + foot-trajectory generator) AND the C++
-keyboard teleop (WASD/QE/space) — both via browser widgets and browser keyboard hotkeys.
+Mirrors the mjlab play GUI (modes from the mode table + mode5 postures + clip select +
+base_vel + foot-trajectory generator) AND the C++ keyboard teleop (WASD/QE/space) — both via
+browser widgets and browser keyboard hotkeys.
 Instead of driving a sim it writes a small packed struct to shared memory
 (/dev/shm/g1_masked_gui); the C++ controller (State_Mimic.cpp g_poll_gui) reads it each step
 and overrides mode / base_vel / foot-gen params. Run it ALONGSIDE the running g1_ctrl, ON
@@ -24,13 +25,20 @@ import time
 import viser
 
 import gui_shm  # shared /dev/shm struct contract (also used by pico_control_bridge.py)
+from mode5_presets_gen import PRESETS   # 생성 파일 — mode5 자세 버튼 표 (index, name, key, n)
+from mode_table_gen import MODES        # 생성 파일 — 모드 표 (id, name, key, safety). 번호를 여기 박지 않는다
 
 KB_STEP = 0.1
 VXCAP, VXCAP_BWD = gui_shm.VXCAP, gui_shm.VXCAP_BWD   # deploy caps (match C++). vx 는 비대칭
 VYCAP, WCAP = gui_shm.VYCAP, gui_shm.WCAP
 
 state = dict(seq=0, cmd_mode=1, vx=0.0, vy=0.0, wz=0.0,
-             period_steps=43, height_scale=1.0, turn_k=0.3)
+             period_steps=43, height_scale=1.0, turn_k=0.3,
+             mode_req=0, m5_preset=0, m5_press_seq=0, clip_req=-1)   # 1회성 요청은 gui_shm.write 가 되돌린다
+
+# 클립 칸 = State_Mimic.cpp g_build_clips 의 이름·순서(primary · light · demo6). 제어기는 «실은 로더만» 칸으로
+# 만들므로 light 가 없는 슬롯이면 demo6 이 1 번이 된다 — 제어기가 고른 칸 이름을 로그로 답한다(«[clip] i/n «이름»»).
+CLIPS = ("0 primary", "1 light", "2 demo6")
 
 
 def _clamp(x, lo, hi):
@@ -49,17 +57,38 @@ def main() -> None:
     status = g.add_markdown("")
 
     def refresh() -> None:
-        names = {1: "full-auto", 2: "upper-teleop", 3: "full-teleop"}
+        names = {i: name for i, name, _key, _s in MODES}
         status.content = (f"**mode {state['cmd_mode']}** ({names[state['cmd_mode']]})  ·  "
                           f"base_vel [{state['vx']:.2f}, {state['vy']:.2f}, {state['wz']:.2f}]")
 
     # ---- sliders (also updated by the hotkeys below) ----
     with g.add_folder("Mode"):
-        mode_btns = g.add_button_group("cmd_mode", ("1: full-auto", "2: upper-teleop", "3: full-teleop"))
+        mode_btns = g.add_button_group("cmd_mode", tuple(f"{i}: {name}" for i, name, _key, _s in MODES))
 
         @mode_btns.on_click
         def _(ev) -> None:
-            set_mode(int(ev.target.value[0]))
+            set_mode(int(ev.target.value.split(":")[0]))
+
+    with g.add_folder("mode5 posture"):
+        g.add_markdown("mode5 에서만 — 다른 모드에선 제어기가 거부한다")
+        preset_label = {(f"{name} ({key}) n={n}" if key else f"{name} n={n}"): index
+                        for index, name, key, n in PRESETS}
+        preset_btns = g.add_button_group("m5_preset", tuple(preset_label))
+
+        @preset_btns.on_click
+        def _(ev) -> None:
+            state["m5_preset"] = preset_label[ev.target.value] + 1   # shm: 0 = 없음, 1.. = PRESETS[index] + 1
+            state["m5_press_seq"] = state.get("m5_press_seq", 0) + 1  # 같은 자세 재입력 = 새 목표
+            _write(); refresh()
+
+    with g.add_folder("Clip (mode4 playback)"):
+        g.add_markdown("재생 중에는 제어기가 거부한다 — 다른 모드에서 고른 뒤 들어갈 것")
+        clip_btns = g.add_button_group("Select clip", CLIPS)
+
+        @clip_btns.on_click
+        def _(ev) -> None:
+            state["clip_req"] = int(ev.target.value.split(" ")[0])
+            _write(); refresh()
 
     with g.add_folder("base_vel (yaw-local)"):
         vx = g.add_slider("vx", -VXCAP_BWD, VXCAP, 0.01, 0.0)   # 전진 2.5 / 후진 1.5
@@ -116,7 +145,8 @@ def main() -> None:
         _write(); refresh()                         # single authoritative publish
 
     def set_mode(m) -> None:
-        state["cmd_mode"] = m
+        state["cmd_mode"] = m     # 이 GUI 의 표시용 (제어기가 거부했을 수도 있다 — 터미널 로그가 답한다)
+        state["mode_req"] = m     # 1회성 요청 — gui_shm.write 가 보낸 뒤 0 으로 되돌린다
         _write(); refresh()
 
     # ---- browser keyboard hotkeys (mirror the C++ keyboard teleop) ----

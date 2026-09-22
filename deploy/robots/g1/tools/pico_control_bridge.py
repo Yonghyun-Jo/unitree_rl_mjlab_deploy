@@ -75,7 +75,9 @@ def main() -> None:
                    or abs(vx - state["vx"]) > 1e-3
                    or abs(vy - state["vy"]) > 1e-3
                    or abs(wz - state["wz"]) > 1e-3)
-        state["cmd_mode"] = mode
+        if mode != state["cmd_mode"]:
+            state["mode_req"] = mode   # gui_shm v2: 1회성 모드 요청 — 바뀔 때만 (보낸 뒤 write 가 0 으로)
+        state["cmd_mode"] = mode       # 브리지 자기 표시용 (C++ 로는 mode_req 만 간다)
         state["vx"], state["vy"], state["wz"] = vx, vy, wz
         if changed:
             gui_shm.write(state)

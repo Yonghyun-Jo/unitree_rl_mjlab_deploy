@@ -172,17 +172,25 @@ static inline float clamp_vx(float v) { return std::clamp(v, -VX_MAX_BWD, VX_MAX
 // /dev/shm/g1_masked_gui; g_poll_gui() reads it each step and overrides mode / base_vel /
 // foot-gen params. Optional: if the file is absent, keyboard + joystick drive everything.
 #pragma pack(push, 1)
-struct GuiCtrl {
-    int32_t  magic;          // 0x6701 validity tag
-    uint32_t seq;            // increments on each GUI change (edge-triggered apply)
-    int32_t  cmd_mode;       // 직립 모드만(g_channel_may_request) — 현재 1/2/3
-    float    vx, vy, wz;     // base_vel command (deploy velocity caps still apply)
-    int32_t  period_steps;   // foot-gen gait period
-    float    height_scale;   // foot-gen swing-height multiplier
-    float    turn_k;         // foot-gen |wz|->step gain
+struct GuiCtrl {                 // v2 (2026-09-22). tools/gui_shm.py FMT 와 같은 커밋으로만 바꾼다
+    int32_t  magic;              // GUI_CTRL_MAGIC
+    uint32_t seq;                // GUI 가 바꿀 때마다 +1 (에지 적용)
+    int32_t  mode_req;           // 0 = 요청 없음(1회성). 1.. = 표의 모드 (슬롯 지원·이탈 조건은 ModeRuntime)
+    float    vx, vy, wz;         // base_vel 명령 (배포 상한은 아래에서 한 번 더)
+    int32_t  period_steps;       // foot-gen gait period
+    float    height_scale;       // foot-gen swing-height multiplier
+    float    turn_k;             // foot-gen |wz|->step gain
+    int32_t  m5_preset;          // 0 = 없음, 1..N = Mode5Presets.h PRESETS[i-1]
+    uint32_t m5_press_seq;       // 누를 때마다 +1 (같은 자세 재입력 = 새 목표)
+    int32_t  clip_req;           // −1 = 그대로, 0.. = 고를 클립 (재생 중이면 거부). 1회성
 };
 #pragma pack(pop)
+static_assert(sizeof(GuiCtrl) == 12 * 4, "GuiCtrl = gui_shm.FMT 12칸 48 바이트 (tests/test_gui_shm_layout.py)");
+static constexpr int32_t GUI_CTRL_MAGIC = 0x6703;
+static constexpr int32_t GUI_CTRL_MAGIC_V1 = 0x6701;   // 옛 형식 — 읽지 않는다(한 번 알린다)
 static uint32_t g_gui_last_seq = 0;
+static uint32_t g_gui_last_m5_seq = 0;
+static bool g_gui_seen = false;                          // 첫 읽기는 기준선만 잡는다(지난 세션의 버튼을 재생하지 않는다)
 
 // 조작자의 모드 요청이 들어오는 유일한 문. 거부되면 이유를 한 줄 남긴다(같은 모드 재요청은 조용히 통과).
 // ⚠ GUI·VR 은 50 Hz 로 들어온다 — 같은 거부를 매 틱 찍으면 정책 스레드에서 초당 50번 I/O 다.
@@ -199,19 +207,45 @@ static void g_request_mode(int m, const char* src) {
     printf("\r\n[cmd_mode] %s -> %d 거부: %s\r\n", src, m, r.reason); fflush(stdout);
 }
 
-// GUI(/dev/shm)·VR 채널이 요청할 수 있는 모드 — 옛 «1 <= cmd_mode <= 3» 범위 검사를 성질로 옮긴 것이다.
-// 이 둘은 사람이 보고 누르는 키보드·조이스틱과 달리 «남이 쓴 바이트» 가 그대로 들어오므로, 이 검사는
-// 쓰레기 값이 저자세·클립재생 모드를 켜지 못하게 막는 필터이기도 했다. 지금 이 조건 = 모드 1·2·3.
-// ⚠ GUI 에 mode4/5 조작이 생기면 B2 에서 «의도적으로» 넓힌다 — 성질로 적어 두는 이유가 그것이다.
-static inline bool g_channel_may_request(int m) {
-    return mode_table::valid(m) && mode_table::row(m).safety == mode_table::Safety::UprightOnly;
+// 채널별로 요청할 수 있는 모드 (옛 «1 <= cmd_mode <= 3» 범위 검사를 성질로 옮긴 것을 채널마다 가른다).
+// GUI = 사람이 화면을 보고 누르는 버튼(v2 부터 모드 4·5 버튼) → 표의 모든 모드. 슬롯이 아는가·지금 나갈 수
+//       있는가는 ModeRuntime 이 본다(이탈 조건에 실측 z_fk·기울기).
+// VR  = 남의 프로그램이 50 Hz 로 쓰는 바이트 → 직립 모드만(옛 «1 <= cmd_mode <= 3» 의 성질판, 그대로).
+//       쓰레기 값이 저자세·클립재생 모드를 켜지 못하게 하는 필터이기도 하다.
+enum class Channel { Gui, Vr };
+static inline bool g_channel_may_request(int m, Channel ch) {
+    if (!mode_table::valid(m)) return false;
+    switch (ch) {
+        case Channel::Gui: return true;
+        case Channel::Vr:  return mode_table::row(m).safety == mode_table::Safety::UprightOnly;
+    }
+    return false;
 }
 // 채널에서 들어온 요청. 자격 없는 값은 옛 코드처럼 «아무 일도 안 일어난다»(한 줄만 남긴다).
-static void g_request_mode_from_channel(int m, const char* src) {
-    if (g_channel_may_request(m)) { g_request_mode(m, src); return; }
+static void g_request_mode_from_channel(int m, Channel ch, const char* src) {
+    if (g_channel_may_request(m, ch)) { g_request_mode(m, src); return; }
     if (m == g_reject_last) return;                      // 50 Hz — 같은 값은 한 번만
     g_reject_last = m;
-    printf("\r\n[cmd_mode] %s -> %d 무시: 이 채널은 직립 모드만 요청한다\r\n", src, m); fflush(stdout);
+    printf("\r\n[cmd_mode] %s -> %d 무시: %s\r\n", src, m,
+           ch == Channel::Vr ? "이 채널은 직립 모드만 요청한다" : "표에 없는 모드"); fflush(stdout);
+}
+
+// 클립 선택의 유일한 문(키보드 [ ] · GUI). 클립 모드가 «들어가기 전에» 고른다.
+// 🔴 재생 중(ref_source=clip)에는 바꾸지 않는다. 클립 정체가 바뀌면 참조가 통째로 갈리는데,
+//    그것을 무해하게 만드는 넷(crossfade · 다리 q_ref 램프 · 되감기 · init_quat 재앵커)은
+//    전부 «전환 블록»(g_mode.consume_switch()) 안에서만 돈다. 여기서 바꾸면 그 밖이다:
+//    masked_joint_command 가 switch_alpha==1.0 으로 새 로더를 즉시 읽어 전신 q_ref 가
+//    한 틱에 점프하고, init_quat 은 옛 클립에 앵커된 채 남고, 되감는 칸은 t0 가 낡아
+//    중간 프레임부터 시작하며, ref_foot_height 도 같이 튄다. 실기에선 모터 보호정지다.
+//    옛 코드에는 이 구멍이 없었다 — 클립 정체는 «모드 전환과 함께만» 바뀌었다.
+static void g_select_clip(int id, const char* src) {
+    if (g_ref_is_clip()) {
+        printf("\r\n[clip] %s: 재생 중에는 못 바꾼다 — 먼저 다른 모드로 나갔다가 고를 것\r\n", src); fflush(stdout);
+        return;
+    }
+    const int n = (int)g_clips.size();
+    if (!g_mode.select_clip(id, n)) { printf("\r\n[clip] %s: 없는 칸 %d (0..%d)\r\n", src, id, n - 1); fflush(stdout); return; }
+    printf("\r\n[clip] %d/%d «%s»\r\n", id, n, g_clips[id].name); fflush(stdout);
 }
 
 static void g_poll_gui()
@@ -219,11 +253,44 @@ static void g_poll_gui()
     FILE* f = std::fopen("/dev/shm/g1_masked_gui", "rb");
     if (!f) return;
     GuiCtrl g{};
-    size_t n = std::fread(&g, sizeof(g), 1, f);
+    const size_t n = std::fread(&g, 1, sizeof(g), f);
     std::fclose(f);
-    if (n != 1 || g.magic != 0x6701 || g.seq == g_gui_last_seq) return;
+    if (n >= sizeof(int32_t) && g.magic == GUI_CTRL_MAGIC_V1) {
+        static bool warned = false;
+        if (!warned) { warned = true; spdlog::warn("[gui] 옛 형식(0x6701) — 무시한다. tools/gui_shm.py 를 이 브랜치 것으로 (GUI·PICO 브리지 재시작)"); }
+        return;
+    }
+    if (n != sizeof(g) || g.magic != GUI_CTRL_MAGIC || g.seq == g_gui_last_seq) return;
     g_gui_last_seq = g.seq;
-    g_request_mode_from_channel(g.cmd_mode, "gui");                   // mode-switch detected in loop
+    if (!g_gui_seen) {                                                // 기준선: 지난 버튼을 재생하지 않는다
+        g_gui_seen = true; g_gui_last_m5_seq = g.m5_press_seq;
+        // 1회성 요청도 파일에는 «마지막 쓰기» 로 남아 있다 — 제어기를 다시 띄우면 지난 세션에 누른
+        // 모드 5 버튼이 기동 직후 재생된다(서 있던 로봇이 드러눕는다). 첫 읽기의 모드·클립 요청은 버린다.
+        if (g.mode_req != 0 || g.clip_req >= 0) {
+            printf("\r\n[gui] 첫 읽기 — 지난 요청(mode_req=%d clip_req=%d)은 재생하지 않는다. 필요하면 다시 누를 것\r\n",
+                   g.mode_req, g.clip_req);
+            fflush(stdout);
+        }
+        g.mode_req = 0; g.clip_req = -1;
+    }
+    if (g.mode_req != 0) {
+        g_reject_last = G1_REJECT_NONE;   // v2 의 mode_req 는 사람이 누른 1회성 입력 → 거부도 매번 한 줄 (키보드와 같다)
+        g_request_mode_from_channel(g.mode_req, Channel::Gui, "gui");
+    }
+    if (g.m5_press_seq != g_gui_last_m5_seq) {
+        g_gui_last_m5_seq = g.m5_press_seq;
+        const int p = g.m5_preset - 1;
+        if (p < 0 || p >= m5::N_PRESETS) {
+            printf("\r\n[m5] gui: 없는 자세 %d\r\n", g.m5_preset);
+        } else if (!g_mode.row().mode5_cmd_live) {
+            printf("\r\n[m5] gui «%s» — mode5 에서만 (지금 mode%d %s)\r\n", m5::PRESETS[p].name, g_mode.row().id, g_mode.row().name);
+        } else {
+            g_m5.press(p);
+            printf("\r\n[m5] gui → «%s»\r\n", m5::PRESETS[p].name);
+        }
+        fflush(stdout);
+    }
+    if (g.clip_req >= 0) g_select_clip(g.clip_req, "gui");
     g_kb_vx = g.vx; g_kb_vy = g.vy; g_kb_wz = g.wz;                   // clamped in g_joystick_base_vel
     if (g.period_steps > 0)  g_loco.period_steps = g.period_steps;
     if (g.height_scale > 0)  g_loco.height_scale = g.height_scale;
@@ -289,7 +356,7 @@ static void g_poll_vr()
     g_vr_last_seq = v.seq;
     g_vr_stale = 0;
     if (!v.valid) { if (State_Mimic::motion) State_Mimic::motion->clear_vr(); return; }
-    g_request_mode_from_channel(v.cmd_mode, "vr");
+    g_request_mode_from_channel(v.cmd_mode, Channel::Vr, "vr");
     g_kb_vx = v.base_vel[0]; g_kb_vy = v.base_vel[1]; g_kb_wz = v.base_vel[2];
     if (State_Mimic::motion) {
         Eigen::VectorXf dp = Eigen::VectorXf::Map(v.dof_pos, 29);
@@ -325,25 +392,9 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     else if (k == "q") { g_kb_wz = std::clamp(g_kb_wz + KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CCW (반시계)
     else if (k == "e") { g_kb_wz = std::clamp(g_kb_wz - KB_STEP, -KB_MAXW, KB_MAXW); vel_changed = true; }  // yaw CW  (시계)
     else if (k == " ") { g_kb_vx = g_kb_vy = g_kb_wz = 0.0f;                          vel_changed = true; }  // stop
-    else if (k == "[" || k == "]") {                       // 클립 모드가 «들어가기 전에» 고른다
-        // 🔴 재생 중(ref_source=clip)에는 바꾸지 않는다. 클립 정체가 바뀌면 참조가 통째로 갈리는데,
-        //    그것을 무해하게 만드는 넷(crossfade · 다리 q_ref 램프 · 되감기 · init_quat 재앵커)은
-        //    전부 «전환 블록»(g_mode.consume_switch()) 안에서만 돈다. 여기서 바꾸면 그 밖이다:
-        //    masked_joint_command 가 switch_alpha==1.0 으로 새 로더를 즉시 읽어 전신 q_ref 가
-        //    한 틱에 점프하고, init_quat 은 옛 클립에 앵커된 채 남고, 되감는 칸은 t0 가 낡아
-        //    중간 프레임부터 시작하며, ref_foot_height 도 같이 튄다. 실기에선 모터 보호정지다.
-        //    옛 코드에는 이 구멍이 없었다 — 클립 정체는 «모드 전환과 함께만» 바뀌었다.
-        if (g_ref_is_clip()) {
-            printf("\r\n[clip] 재생 중에는 못 바꾼다 — 먼저 다른 모드로 나갔다가 고를 것\r\n");
-            fflush(stdout);
-        } else {
-            const int n = (int)g_clips.size();
-            if (n > 0) {
-                const int next = (g_mode.clip_id() + (k == "]" ? 1 : n - 1)) % n;
-                g_mode.select_clip(next, n);
-                printf("\r\n[clip] %d/%d «%s»\r\n", next, n, g_clips[next].name); fflush(stdout);
-            }
-        }
+    else if (k == "[" || k == "]") {                       // 클립 선택 — 재생 중 거부는 g_select_clip 안에서
+        const int n = (int)g_clips.size();
+        if (n > 0) g_select_clip((g_mode.clip_id() + (k == "]" ? 1 : n - 1)) % n, "key");
     }
     else if (k.size() == 1 && m5::preset_by_key(k[0]) >= 0) {   // mode5 자세 버튼 (config/mode5_keys.yaml)
         const int p = m5::preset_by_key(k[0]);
