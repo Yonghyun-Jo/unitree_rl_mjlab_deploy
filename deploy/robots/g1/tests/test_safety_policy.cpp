@@ -53,8 +53,8 @@ int main() {
         chk(s::commanded_upright(r, T - 0.01f, NOD), "클립 모드: 57.3° 바로 아래 → 직립");
         chk(!s::commanded_upright(r, T, NOD), "클립 모드: 57.3° 부터 → 아님 (그 구간은 클립이 눕힌다)");
         chk(!s::commanded_upright(r, 70.f, 0.76), "클립 모드: 기울기 70° → 아님 (mode5 값은 안 본다)");
-        chk(!s::commanded_upright(r, NOF, 0.76), "클립 모드: 활성 클립 없음 → 아님");
-        chk(!s::commanded_upright(r, std::nanf(""), NOD), "클립 모드: 기울기 NaN → 아님");
+        chk(s::commanded_upright(r, NOF, 0.76), "클립 모드: 활성 클립 없음 → 직립(모르면 판정 적용, 안전측)");
+        chk(s::commanded_upright(r, std::nanf(""), NOD), "클립 모드: 기울기 NaN → 직립(모르면 판정 적용, 안전측)");
         // 관문은 «최근 섰음» 을 묻지 않는다 — 클립은 참조 궤적이다
         chk(!s::gate_needs_recent_high(r), "클립 모드: 관문은 «최근 1 s 에 섰음» 을 묻지 않는다");
         chk(s::orientation_check_applies(r, s::commanded_upright(r, 39.f, NOD), /*recently_high=*/false),

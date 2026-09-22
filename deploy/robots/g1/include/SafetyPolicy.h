@@ -77,11 +77,13 @@ class RecentHigh {
 //                         클립 구간에서만 «아님». 높이는 안 본다 — 깊이 앉는 클립도 몸통이 서 있으면 직립 명령)
 //   mode5_cmd_live     → 활성 자세의 목표 높이 m5_goal_z ≥ UPRIGHT_MIN_Z
 //   그 밖              → 아님 (명령에 자세가 없다)
-// 값이 없으면(nullopt = 활성 클립·자세 없음) «아님», NaN 도 «아님». 호출자(State_Mimic)가 이 틱의 값을 모아 넘긴다.
+// 값이 없으면(nullopt = 활성 클립·자세 없음) «아님», NaN 도 «아님». 단 🔴 클립 행은 반대다 — 클립 기울기를 못 얻으면
+// (활성 클립 없음·NaN) «직립» 으로 쳐서 넘어짐 판정을 «적용» 한다(모르면 안전측 = base 처럼 판정). 클립 행은 최근 섰음도
+// 안 묻으므로 이것이 곧 «판정 켜짐» 이다. 호출자(State_Mimic)가 이 틱의 값을 모아 넘긴다.
 inline bool commanded_upright(const mode_table::Row& row, std::optional<float> clip_pelvis_tilt_deg,
                               std::optional<double> m5_goal_z) {
   if (row.ref_source == mode_table::RefSource::Clip)
-    return clip_pelvis_tilt_deg && *clip_pelvis_tilt_deg < ORIENT_TRIP_DEG;
+    return !clip_pelvis_tilt_deg || !(*clip_pelvis_tilt_deg >= ORIENT_TRIP_DEG);   // 없음·NaN → 직립(판정 적용)
   if (row.mode5_cmd_live) return m5_goal_z && *m5_goal_z >= UPRIGHT_MIN_Z;
   return false;
 }
