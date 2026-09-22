@@ -39,7 +39,8 @@ bash deploy/robots/g1/tests/run_unit_tests.sh
 새 모드를 어느 채널로 요청할 수 있게 할지는 따로 정한다:
 - **키보드**: 표의 `key` 로 자동 — 새 행을 채우면 그 키로 바로 요청된다(`State_Mimic.cpp` 가 `mode_table::row(m).key` 로 순회).
 - **클립 고르기**: `[` / `]` 가 `g_clips` 를 순회한다(코드 불필요). 단 **`ref_source: clip` 인 모드에 있는 동안은 거부**된다(한 줄 남기고 아무 일도 안 일어난다) — 클립을 «재생 중에» 갈면 참조가 crossfade·다리 램프·되감기·재앵커 없이 점프한다. 고르는 것은 그 모드에 **들어가기 전**이다.
-- **GUI(`/dev/shm/g1_masked_gui`)·VR**: `g_channel_may_request()` 가 표에서 `safety: upright_only` 인 **모든** 모드를 통과시킨다(옛 `1 <= cmd_mode <= 3` 검사를 성질로 옮긴 것 — 번호가 아니라 성질을 본다). 즉 새 모드를 `upright_only` 로 선언하면 **그 표 행이 생기는 순간 코드를 안 건드려도 GUI/VR 에서 바로 눌린다** — `safety` 를 고를 때 이걸 의식할 것. `ground_capable` 모드만 이 채널에서 막히며, 그 모드도 GUI/VR 에서 누르게 하려면 `g_channel_may_request()` 를 **의도적으로** 넓혀야 한다.
+- **GUI(`/dev/shm/g1_masked_gui`, v2 magic 0x6704)**: `g_channel_may_request(m, Channel::Gui)` 가 표의 **모든** 모드를 통과시킨다(사람이 화면을 보고 누르는 버튼 — 슬롯이 아는가·지금 나갈 수 있는가는 `ModeRuntime` 이 본다). 모드 버튼은 `masked_gui.py` 가 생성된 `tools/mode_table_gen.py` `MODES` 로 만든다 — **새 행을 채우면 GUI 버튼도 코드 없이 생긴다.** 요청은 1회성 `mode_req`(0 = 없음)다.
+- **VR(`/dev/shm/g1_vr_ref`)**: `g_channel_may_request(m, Channel::Vr)` 가 표에서 `safety: upright_only` 인 모드만 통과시킨다(옛 `1 <= cmd_mode <= 3` 검사를 성질로 옮긴 것 — 남의 프로그램이 50 Hz 로 쓰는 바이트라 쓰레기 값이 저자세·클립재생 모드를 켜지 못하게 하는 필터이기도 하다). 즉 새 모드를 `upright_only` 로 선언하면 **그 표 행이 생기는 순간 VR 에서도 바로 눌린다** — `safety` 를 고를 때 이걸 의식할 것. `ground_capable` 모드를 VR 에서 누르게 하려면 `Channel::Vr` 분기를 **의도적으로** 넓혀야 한다.
 
 ## 4. 확인
 

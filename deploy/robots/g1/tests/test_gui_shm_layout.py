@@ -41,8 +41,24 @@ def test_layout_matches():
 def test_magic_matches_and_is_new():
     import gui_shm
     m = re.search(r"GUI_CTRL_MAGIC\s*=\s*0x([0-9A-Fa-f]+)", _cpp_src())
-    assert m and int(m.group(1), 16) == gui_shm.MAGIC == 0x6703
+    assert m and int(m.group(1), 16) == gui_shm.MAGIC == 0x6704
     assert gui_shm.MAGIC != 0x6701, "v1 magic 을 다시 쓰면 옛 GUI 가 새 제어기에 붙는다"
+
+
+def test_magic_differs_from_other_channels():
+    """채널마다 magic 이 다르다 — 경로가 한 번 엇갈려도 남의 파일을 제 것으로 읽지 않게.
+    (E-stop 리더는 «≥12 B + 자기 magic» 이면 받는다 — GUI 가 같은 magic 이면 mode_req 를 E-stop flag 로 읽는다.)"""
+    import gui_shm
+    estop_h = (G1.parent.parent / "include/FSM/EstopChannel.h").read_text(encoding="utf-8")
+    m = re.search(r"ESTOP_MAGIC\s*=\s*0x([0-9A-Fa-f]+)", estop_h)
+    assert m, "deploy/include/FSM/EstopChannel.h 에서 ESTOP_MAGIC 을 못 찾았다"
+    estop = int(m.group(1), 16)
+    vr_py = (G1 / "teleop/vr_shm.py").read_text(encoding="utf-8")
+    mv = re.search(r"^MAGIC\s*=\s*0x([0-9A-Fa-f]+)", vr_py, re.M)
+    assert mv, "teleop/vr_shm.py 에서 MAGIC 을 못 찾았다"
+    vr = int(mv.group(1), 16)
+    assert gui_shm.MAGIC != estop, f"GUI magic {gui_shm.MAGIC:#x} == E-stop magic {estop:#x}"
+    assert gui_shm.MAGIC != vr and gui_shm.MAGIC != 0x6702, f"GUI magic {gui_shm.MAGIC:#x} == VR magic"
 
 
 def test_write_is_one_shot(tmp_path=None):

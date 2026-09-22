@@ -12,7 +12,9 @@ import os
 import struct
 
 SHM_PATH = "/dev/shm/g1_masked_gui"
-MAGIC = 0x6703          # v2 (2026-09-22). v1 = 0x6701 — C++ 가 거부한다(옛 GUI 가 새 제어기를 조종하지 않게).
+MAGIC = 0x6704          # v2 (2026-09-22). v1 = 0x6701 — C++ 가 거부한다(옛 GUI 가 새 제어기를 조종하지 않게).
+#   채널마다 magic 이 다르다: 0x6702 = vr(teleop/vr_shm.py) · 0x6703 = estop(teleop/estop_shm.py).
+#   «잘못된 파일을 읽었다» 를 거르는 마지막 방벽이므로 겹치게 두지 않는다(tests/test_gui_shm_layout.py).
 # <  little-endian, packed.
 #   magic seq mode_req vx vy wz period_steps height_scale turn_k m5_preset m5_press_seq clip_req
 #   mode_req  = 0 이면 «모드 요청 없음». 1회성 — 보낸 뒤 0 으로 되돌린다(속도만 바꿨는데 모드가 다시 요청되지 않게).

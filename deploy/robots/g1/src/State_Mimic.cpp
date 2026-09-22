@@ -186,7 +186,7 @@ struct GuiCtrl {                 // v2 (2026-09-22). tools/gui_shm.py FMT 와 �
 };
 #pragma pack(pop)
 static_assert(sizeof(GuiCtrl) == 12 * 4, "GuiCtrl = gui_shm.FMT 12칸 48 바이트 (tests/test_gui_shm_layout.py)");
-static constexpr int32_t GUI_CTRL_MAGIC = 0x6703;
+static constexpr int32_t GUI_CTRL_MAGIC = 0x6704;      // 0x6701 gui v1 · 0x6702 vr · 0x6703 estop 과 겹치지 않게
 static constexpr int32_t GUI_CTRL_MAGIC_V1 = 0x6701;   // 옛 형식 — 읽지 않는다(한 번 알린다)
 static uint32_t g_gui_last_seq = 0;
 static uint32_t g_gui_last_m5_seq = 0;

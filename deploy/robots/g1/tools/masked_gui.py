@@ -71,8 +71,11 @@ def main() -> None:
 
     with g.add_folder("mode5 posture"):
         g.add_markdown("mode5 에서만 — 다른 모드에선 제어기가 거부한다")
-        preset_label = {(f"{name} ({key}) n={n}" if key else f"{name} n={n}"): index
-                        for index, name, key, n in PRESETS}
+        g.add_markdown("키가 있는 자세만 내놓는다(config/mode5_keys.yaml). 표의 나머지 자세는 검증 뒤에 연다")
+        # 🔴 키 없는 표 자세(베어 크롤·한쪽 낮춘 지지 L/R)는 운용자에게 안 내놓는다 — 검증 전(spec §4.5 = 6).
+        #    m5_preset 은 그대로 «표 index + 1» — 거른다고 번호를 당기지 않는다.
+        preset_label = {f"{name} ({key}) n={n}": index
+                        for index, name, key, n in PRESETS if key}
         preset_btns = g.add_button_group("m5_preset", tuple(preset_label))
 
         @preset_btns.on_click
