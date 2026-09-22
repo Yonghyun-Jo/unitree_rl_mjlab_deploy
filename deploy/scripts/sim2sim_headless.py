@@ -135,10 +135,22 @@ def main():
                     help="Xvfb 디스플레이. :99 는 예약 브라우저 전용(xvfb99.service) — 사용 금지")
     ap.add_argument("--floor-friction", type=float, default=None,
                     help="바닥 마찰 μ 를 이 값으로 바꿔 돌린다(끝나면 원복). 학습 DR 은 (0.3,1.6).")
+    ap.add_argument("--scene", default=None,
+                    help="unitree_mujoco -s 로 줄 장면 (예: src/assets/robots/unitree_g1/xmls/scene_g1_prim.xml). "
+                         "생략 = simulate/config.yaml")
     a = ap.parse_args()
 
     if a.display == ":99":
         print("🔴 :99 는 예약 브라우저 전용(xvfb99.service) — 다른 번호를 쓸 것")
+        return 1
+    if a.scene is not None and a.floor_friction is not None:
+        # --floor-friction 은 scene_g1.xml 을 고쳐 쓰고 되돌린다 — 다른 장면을 돌리면서 그 파일을
+        # 건드리면 엉뚱한 파일을 고치고 되돌리게 된다. (scene_g1_prim.xml 은 로봇 geom 이 priority 1 이라
+        # 바닥 μ 를 바꿔도 접촉 μ 가 안 바뀐다.)
+        print("🔴 --scene 과 --floor-friction 은 같이 못 쓴다")
+        return 1
+    if a.scene is not None and not os.path.isfile(a.scene):
+        print("🔴 장면 파일이 없다: %s" % a.scene)
         return 1
 
     print("[확인] 남의 프로세스는 안 죽인다 — 떠 있으면 거부만 한다")
@@ -166,103 +178,112 @@ def main():
     #     실기 11.7° 는 μ≈1.5~1.6 자리 = 학습 DR 상한.)
     scene = os.path.join(REPO, "src/assets/robots/unitree_g1/xmls/scene_g1.xml")
     scene_backup = None
-    if a.floor_friction is not None:
-        import re as _re
-        src = open(scene, encoding="utf-8").read()
-        scene_backup = src
-        new_geom = ('<geom name="floor" size="0 0 0.05" type="plane" material="groundplane" '
-                    'friction="%g 0.005 0.0001"/>' % a.floor_friction)
-        src2 = _re.sub(r'<geom name="floor"[^/]*/>', new_geom, src, count=1)
-        if src2 == src:
-            print("🔴 바닥 geom 을 못 찾았다 — 마찰을 못 바꾼다"); return 1
-        open(scene, "w", encoding="utf-8").write(src2)
-        print("[바닥] μ = %g (끝나면 원복한다)" % a.floor_friction)
-
-    xv = subprocess.Popen(["Xvfb", a.display, "-screen", "0", "1280x1024x24"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(2)
-    env = dict(os.environ, DISPLAY=a.display)
-    sim = subprocess.Popen([os.path.join(REPO, "simulate/build/unitree_mujoco")],
-                           env=env, stdout=open("/tmp/s2s_mj.log", "w"), stderr=subprocess.STDOUT)
-    time.sleep(8)
-    if sim.poll() is not None:
-        print("🔴 시뮬이 안 떴다 — /tmp/s2s_mj.log"); xv.kill(); return 1
-    print("[sim] 기동")
-
-    if os.path.exists(a.out):
-        os.remove(a.out)
-    cenv = dict(os.environ, G1_STATE_CSV=a.out, G1_POLICY_SLOT=slot)
-    mfd, sfd = pty.openpty()
-    ctl = subprocess.Popen([os.path.join(G1, "build/g1_ctrl"), "--network=lo"],
-                           stdin=sfd, stdout=open("/tmp/s2s_ctl.log", "w"),
-                           stderr=subprocess.STDOUT, env=cenv, close_fds=True)
-    os.close(sfd)
+    # 🔴 장면을 고쳐 쓴 뒤의 «모든» 출구(시뮬 기동 실패 조기 return · 예외 · Ctrl-C)에서 원복한다.
+    #    예전엔 원복이 안쪽 finally 에만 있어 «시뮬이 안 떴다» 경로가 고친 scene_g1.xml 을 남겼다.
+    #    쓰기 자체도 try 안 — 쓰다 죽어도 원본으로 되돌린다.
     try:
-        time.sleep(6); os.write(mfd, b"f"); print("[키] f (FixStand)")
-        time.sleep(6); os.write(mfd, b"m"); print("[키] m (Mimic_Masked)")
-        time.sleep(4); os.write(mfd, a.mode.encode()); print("[키] %s (mode)" % a.mode)
-        time.sleep(3)
+        if a.floor_friction is not None:
+            import re as _re
+            src = open(scene, encoding="utf-8").read()
+            new_geom = ('<geom name="floor" size="0 0 0.05" type="plane" material="groundplane" '
+                        'friction="%g 0.005 0.0001"/>' % a.floor_friction)
+            src2 = _re.sub(r'<geom name="floor"[^/]*/>', new_geom, src, count=1)
+            if src2 == src:
+                print("🔴 바닥 geom 을 못 찾았다 — 마찰을 못 바꾼다"); return 1
+            scene_backup = src
+            open(scene, "w", encoding="utf-8").write(src2)
+            print("[바닥] μ = %g (끝나면 원복한다)" % a.floor_friction)
 
-        # 🔴 키 `9` 는 **토글**이다 — 안 먹었다고 무작정 다시 보내면 도로 켜진다.
-        #    그래서 «보내고 → 확인하고 → 안 됐으면 한 번 더» 로 간다. 확인은 계측 파일의
-        #    발목 토크로 한다(쓰기 스레드가 100 ms 마다 비우므로 실행 중에 읽을 수 있다).
-        #    실측: 3판 중 2판에서 첫 키가 유실됐다(창 포커스/이벤트 루프 경합).
-        def ankle_tau(win_s=2.0):
-            try:
-                rows = open(a.out, encoding="utf-8", errors="ignore").read().splitlines()
-            except OSError:
-                return None
-            if len(rows) < 20:
-                return None
-            hdr = rows[0].split(",")
-            try:
-                i4, i10 = hdr.index("tau_est_4"), hdr.index("tau_est_10")
-            except ValueError:
-                return None
-            vals = []
-            for ln in rows[-int(win_s * 50):]:
-                f = ln.split(",")
-                if len(f) <= i10: continue
-                try: vals.append((abs(float(f[i4])) + abs(float(f[i10]))) / 2)
-                except ValueError: pass
-            return sum(vals) / len(vals) if vals else None
+        xv = subprocess.Popen(["Xvfb", a.display, "-screen", "0", "1280x1024x24"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(2)
+        env = dict(os.environ, DISPLAY=a.display)
+        sim_cmd = ([os.path.join(REPO, "simulate/build/unitree_mujoco")]
+                   + (["-s", os.path.abspath(a.scene)] if a.scene else []))
+        if a.scene:
+            print("[장면] %s" % os.path.abspath(a.scene))
+        sim = subprocess.Popen(sim_cmd,
+                               env=env, stdout=open("/tmp/s2s_mj.log", "w"), stderr=subprocess.STDOUT)
+        time.sleep(8)
+        if sim.poll() is not None:
+            print("🔴 시뮬이 안 떴다 — /tmp/s2s_mj.log"); xv.kill(); return 1
+        print("[sim] 기동")
 
-        released = False
-        for attempt in range(1, 4):
-            keys = ["56", "56", "57"] if attempt == 1 else ["57"]
-            print("[밴드] %s 전송 (시도 %d)" % (",".join("8" if k == "56" else "9" for k in keys), attempt))
-            r = subprocess.run([UV, "run", "--no-project", "--with", "python-xlib",
-                                "python", "-c", SENDKEY, a.display, *keys],
-                               capture_output=True, text=True, timeout=120)
-            if "KEYS_SENT" not in r.stdout:
-                print("  ⚠ 키 전송 자체가 실패: %s" % r.stdout.strip().replace("\n", " ")); continue
-            time.sleep(3.0)
-            tau = ankle_tau()
-            print("  확인: 발목 |tau| %s Nm" % ("%.2f" % tau if tau is not None else "(아직 표본 없음)"))
-            if tau is not None and tau >= 1.0:
-                released = True; print("  🟢 밴드 풀림 — 여기서부터가 데이터다"); break
-        if not released:
-            print("🔴 밴드를 못 풀었다 (3회 시도). 이 로그는 판정에 못 쓴다."); raise RuntimeError("band")
+        if os.path.exists(a.out):
+            os.remove(a.out)
+        cenv = dict(os.environ, G1_STATE_CSV=a.out, G1_POLICY_SLOT=slot)
+        mfd, sfd = pty.openpty()
+        ctl = subprocess.Popen([os.path.join(G1, "build/g1_ctrl"), "--network=lo"],
+                               stdin=sfd, stdout=open("/tmp/s2s_ctl.log", "w"),
+                               stderr=subprocess.STDOUT, env=cenv, close_fds=True)
+        os.close(sfd)
+        try:
+            time.sleep(6); os.write(mfd, b"f"); print("[키] f (FixStand)")
+            time.sleep(6); os.write(mfd, b"m"); print("[키] m (Mimic_Masked)")
+            time.sleep(4); os.write(mfd, a.mode.encode()); print("[키] %s (mode)" % a.mode)
+            time.sleep(3)
 
-        if a.replay:
-            print("[재생] %s" % os.path.basename(a.replay))
-            subprocess.run([sys.executable, os.path.join(G1, "tools/replay_cmd.py"), a.replay])
-        else:
-            print("[정지] %.0f 초 유지" % a.stand)
-            time.sleep(a.stand)
-        os.write(mfd, b"p"); time.sleep(2)
+            # 🔴 키 `9` 는 **토글**이다 — 안 먹었다고 무작정 다시 보내면 도로 켜진다.
+            #    그래서 «보내고 → 확인하고 → 안 됐으면 한 번 더» 로 간다. 확인은 계측 파일의
+            #    발목 토크로 한다(쓰기 스레드가 100 ms 마다 비우므로 실행 중에 읽을 수 있다).
+            #    실측: 3판 중 2판에서 첫 키가 유실됐다(창 포커스/이벤트 루프 경합).
+            def ankle_tau(win_s=2.0):
+                try:
+                    rows = open(a.out, encoding="utf-8", errors="ignore").read().splitlines()
+                except OSError:
+                    return None
+                if len(rows) < 20:
+                    return None
+                hdr = rows[0].split(",")
+                try:
+                    i4, i10 = hdr.index("tau_est_4"), hdr.index("tau_est_10")
+                except ValueError:
+                    return None
+                vals = []
+                for ln in rows[-int(win_s * 50):]:
+                    f = ln.split(",")
+                    if len(f) <= i10: continue
+                    try: vals.append((abs(float(f[i4])) + abs(float(f[i10]))) / 2)
+                    except ValueError: pass
+                return sum(vals) / len(vals) if vals else None
+
+            released = False
+            for attempt in range(1, 4):
+                keys = ["56", "56", "57"] if attempt == 1 else ["57"]
+                print("[밴드] %s 전송 (시도 %d)" % (",".join("8" if k == "56" else "9" for k in keys), attempt))
+                r = subprocess.run([UV, "run", "--no-project", "--with", "python-xlib",
+                                    "python", "-c", SENDKEY, a.display, *keys],
+                                   capture_output=True, text=True, timeout=120)
+                if "KEYS_SENT" not in r.stdout:
+                    print("  ⚠ 키 전송 자체가 실패: %s" % r.stdout.strip().replace("\n", " ")); continue
+                time.sleep(3.0)
+                tau = ankle_tau()
+                print("  확인: 발목 |tau| %s Nm" % ("%.2f" % tau if tau is not None else "(아직 표본 없음)"))
+                if tau is not None and tau >= 1.0:
+                    released = True; print("  🟢 밴드 풀림 — 여기서부터가 데이터다"); break
+            if not released:
+                print("🔴 밴드를 못 풀었다 (3회 시도). 이 로그는 판정에 못 쓴다."); raise RuntimeError("band")
+
+            if a.replay:
+                print("[재생] %s" % os.path.basename(a.replay))
+                subprocess.run([sys.executable, os.path.join(G1, "tools/replay_cmd.py"), a.replay])
+            else:
+                print("[정지] %.0f 초 유지" % a.stand)
+                time.sleep(a.stand)
+            os.write(mfd, b"p"); time.sleep(2)
+        finally:
+            # 🔴 여기서 정리하는 건 이 스크립트가 직접 띄운 Popen(ctl/sim/xv)뿐이다.
+            #    이름 기반 pkill 은 남의 프로세스(부킹 에이전트 Xvfb 등)를 같이 죽일 수 있어 금지.
+            ctl.send_signal(signal.SIGINT)
+            try: ctl.wait(timeout=10)
+            except Exception: ctl.kill()
+            sim.terminate()
+            try: sim.wait(timeout=8)
+            except Exception: sim.kill()
+            xv.terminate()
+            try: xv.wait(timeout=8)
+            except Exception: xv.kill()
     finally:
-        # 🔴 여기서 정리하는 건 이 스크립트가 직접 띄운 Popen(ctl/sim/xv)뿐이다.
-        #    이름 기반 pkill 은 남의 프로세스(부킹 에이전트 Xvfb 등)를 같이 죽일 수 있어 금지.
-        ctl.send_signal(signal.SIGINT)
-        try: ctl.wait(timeout=10)
-        except Exception: ctl.kill()
-        sim.terminate()
-        try: sim.wait(timeout=8)
-        except Exception: sim.kill()
-        xv.terminate()
-        try: xv.wait(timeout=8)
-        except Exception: xv.kill()
         if scene_backup is not None:                 # 🔴 무슨 일이 있어도 원복
             open(scene, "w", encoding="utf-8").write(scene_backup)
             print("[바닥] 씬 원복")

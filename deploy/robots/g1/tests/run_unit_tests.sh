@@ -58,10 +58,13 @@ fi
 # 🔴 conda 가 켜진 셸에서는 LD_LIBRARY_PATH 때문에 uv 의 torch 가 깨진다 → 그 변수들을 뺀 환경으로 돈다.
 UVPY=(env -u LD_LIBRARY_PATH -u CONDA_PREFIX -u CONDA_DEFAULT_ENV "$HOME/.local/bin/uv" run --project "$MJLAB" --no-sync python)
 if [ -x "$HOME/.local/bin/uv" ] && [ -f "$MJLAB/src/mjlab_g1_motion/mode5_presets.py" ]; then
-  for g in gen_mode5_presets_header gen_g1_kinematics_header; do
+  for g in gen_mode5_presets_header gen_g1_kinematics_header gen_prim_scene; do
     if "${UVPY[@]}" ../../../scripts/$g.py --check >"$OUT/$g.out" 2>&1; then echo "ok   $g"
     else echo "FAIL $g"; tail -5 "$OUT/$g.out"; fail=1; fi
   done
+  # 구·캡슐 충돌 장면(scene_g1_prim.xml)이 학습 충돌 33개와 같고 액추에이터·센서가 scene_g1.xml 과 같은가
+  if "${UVPY[@]}" test_prim_scene.py >"$OUT/prim.out" 2>&1; then echo "ok   test_prim_scene"
+  else echo "FAIL test_prim_scene"; tail -5 "$OUT/prim.out"; fail=1; fi
   # gen_preview_golden 은 배포 슬롯 npz(git 밖)가 있어야 --check 가 된다. 없는 머신(로봇·깨끗한
   # clone)에서는 생성기 스스로가 "클립이 없다" 로 끝내므로 그 경우만 skip 으로 통과시킨다.
   if "${UVPY[@]}" ../../../scripts/gen_preview_golden.py --check >"$OUT/pv.out" 2>&1; then echo "ok   gen_preview_golden"
