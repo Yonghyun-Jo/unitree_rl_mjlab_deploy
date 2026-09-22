@@ -1,0 +1,5 @@
+# mode4: 클립 «primary»(0번, 기본 칸) 재생 → mode1. 🔴 개발 슬롯의 mode4 헤드는 이 클립을 학습하지 않았다
+# (Ruling 29: config.yaml 의 primary = COLMOv2 트림, 헤드 학습판 = COLMO v1 과 최대 0.77 rad 다름) — «학습 밖» 참고용.
+# 한 줄 = <밴드 해제 뒤 초> <키>. sim2sim_headless.py --script 로 돌린다(--stand 26).
+4 4
+22 1

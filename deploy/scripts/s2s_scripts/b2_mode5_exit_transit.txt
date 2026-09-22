@@ -1,0 +1,7 @@
+# mode5 이탈 조건: 네발 hold → 직립 누름 → 가는 중(hold 전) 1 = 거부 · 직립 hold 뒤 1 = 수락.
+# 한 줄 = <밴드 해제 뒤 초> <키>. sim2sim_headless.py --script 로 돌린다(--stand 35).
+2 5
+5 x
+17 z
+17.5 1
+30 1
