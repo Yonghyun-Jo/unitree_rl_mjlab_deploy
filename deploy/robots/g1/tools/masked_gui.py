@@ -31,6 +31,7 @@ from mode5_presets_gen import PRESETS   # 생성 파일 — mode5 자세 버튼 
 from mode_table_gen import MODES        # 생성 파일 — 모드 표 (id, name, key, safety). 번호를 여기 박지 않는다
 
 KB_STEP = 0.1
+M5_BTNS_PER_ROW = 3        # mode5 자세 버튼을 몇 개씩 끊어 한 줄에 놓나 (키 있는 자세 6개 = 두 줄)
 VXCAP, VXCAP_BWD = gui_shm.VXCAP, gui_shm.VXCAP_BWD   # deploy caps (match C++). vx 는 비대칭
 VYCAP, WCAP = gui_shm.VYCAP, gui_shm.WCAP
 
@@ -109,13 +110,20 @@ def main() -> None:
         #    m5_preset 은 그대로 «표 index + 1» — 거른다고 번호를 당기지 않는다.
         preset_label = {f"{name} ({key}) n={n}": index
                         for index, name, key, n in PRESETS if key}
-        preset_btns = g.add_button_group("m5_preset", tuple(preset_label))
 
-        @preset_btns.on_click
-        def _(ev) -> None:
+        def _on_preset(ev) -> None:
             state["m5_preset"] = preset_label[ev.target.value] + 1   # shm: 0 = 없음, 1.. = PRESETS[index] + 1
             state["m5_press_seq"] = (state.get("m5_press_seq", 0) + 1) & 0xFFFFFFFF  # 같은 자세 재입력 = 새 목표
             _write(); refresh()
+
+        # 🔴 button_group 은 한 줄로만 편다 — 패널 폭을 넘으면 뒤쪽 자세가 «잘린 채로» 안 보인다(2026-09-23:
+        #    «드러누움» 이 화면 밖이었다. 스크롤 막대도 안 나와서 없는 버튼처럼 보인다). 그래서 줄당 M5_BTNS_PER_ROW
+        #    개씩 끊어 여러 그룹으로 낸다 — 자세를 더 열어도(표엔 9개) 줄이 저절로 는다.
+        #    이름표는 첫 줄만 단다(viser 가 이름표를 왼쪽 칸에 두므로, 빈 이름표 = 버튼이 그만큼 넓어진다).
+        labels = tuple(preset_label)
+        for r in range(0, len(labels), M5_BTNS_PER_ROW):
+            g.add_button_group("m5_preset" if r == 0 else "",
+                               labels[r:r + M5_BTNS_PER_ROW]).on_click(_on_preset)
 
     with g.add_folder("Clip (mode4 playback)"):
         g.add_markdown("재생 중에는 제어기가 거부한다 — 다른 모드에서 고른 뒤 들어갈 것")
