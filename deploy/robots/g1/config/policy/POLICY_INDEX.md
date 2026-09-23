@@ -27,7 +27,9 @@
 | `260917_v1_com2cm_bvt25_30k` | — | 보관 | 2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_30000.pt | ★★★☆☆ 헤드리스 램프 0→2 m/s 60 s: 낙상 0 · crit 초과 0 · 기울기 max 15.0° | 실기 2회 · 최근 09-18 13:31 · 평가 전 |
 | `260917_v2_com2cm_bvt25_60k` | — | 보관 | 2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_59999.pt | ★★★★☆ 헤드리스 램프 0→2 m/s: 세 후보 중 가장 매끈 — 기울기 구간별 ≤6.6°(max 11.2 | 실기 1회 · 최근 09-18 13:35 · 평가 전 |
 | `260917_v3_com2cm_bvt25_57k5` | — | 보관 | 2026-09-16_11-17-44_s4_mode1_com2cm_slip15_bvt25_slow075_scratch60k/model_57500.pt | ★★★☆☆ 헤드리스 램프 0→2 m/s: 낙상 0 · 기울기 max 14.9°(2 m/s) · crit 1샘 | 실기 1회 · 최근 09-18 13:37 · 평가 전 |
-| `260922_v1_m1gen_v2_torso_30k` | v1 | 활성 | 2026-09-20_23-05-48_s4_mode1_m1gen_v2_torso_nocom_scratch60k/model_30000.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `260922_dev_v5_m45` | — | 활성 | none | — | 금지 (개발용) |
+| `260922_v1_m1gen_v2_torso_30k` | v1 | 활성 | 2026-09-20_23-05-48_s4_mode1_m1gen_v2_torso_nocom_scratch60k/model_30000.pt | ★★★☆☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s: 낙상  | 미실행 |
+| `260922_v2_m1gen_v2_toeclr_rollonly_26k5` | v2 | 활성 | 2026-09-22_18-28-05_s4_mode1_m1gen_v2_toeclr_rollonly_scratch60k/model_26500.pt | 미실행 — 사용자가 확인 | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |
