@@ -21,25 +21,56 @@ int main() {
     ModeResult r = rt.request(5);
     CHK(!r.accepted && std::strstr(r.reason, "슬롯") && rt.mode() == 3);
     CHK(!rt.request(0).accepted && !rt.request(99).accepted && rt.mode() == 3);
-    // 이탈 조건 — mode4(exit=upright): 낮거나 기울면 못 나간다
-    CHK(rt.request(4).accepted);
+    // ── 지금 표의 데이터: 이탈·진입 조건이 전부 always (2026-09-23 사용자 지시 «모드 사이는 언제든지») ──
+    // 🔴 이 블록은 «표가 지금 무엇인가» 를 적어 둔 것이다. 다시 조이면(modes.yaml 의 exit 열) 여기가 깨진다 —
+    //    그때는 아래 «조건 자체» 블록이 그 거동을 이미 보증하고 있으니, 이 기대값만 고치면 된다.
+    for (int m = 1; m <= mode_table::N_MODES; ++m)
+        CHK(mode_table::row(m).exit == mode_table::Exit::Always);
     ExitContext low;  low.z_fk = 0.30f;
     ExitContext tilt; tilt.tilt_deg = 45.f;
-    CHK(!rt.request(1, low).accepted && !rt.request(1, tilt).accepted && rt.mode() == 4);
-    CHK(rt.request(1, ExitContext{}).accepted && rt.mode() == 1);
-    // 들어가는 쪽 — mode4(exit=upright)는 직립에서만 들어간다 (최종 검토 I-1(a), Ruling 34).
-    // mode1 에서 무릎이 무너져 앉은 채(기울기 < 57.3° 라 mode1 넘어짐 판정 안 걸림) 4 → 거부, 상태 불변.
-    // (옛 코드는 1·2·3 → 4 를 무조건 받아, 바닥에서 클립 재생 = 넘어짐 판정 꺼짐 · 이탈 거부 · 출구 p 뿐이었다.)
     ExitContext sitting; sitting.z_fk = 0.45f; sitting.tilt_deg = 20.f;
-    ModeResult r14 = rt.request(4, sitting);
-    CHK(!r14.accepted && std::strstr(r14.reason, "직립에서만 들어간다") && rt.mode() == 1 && rt.requested() == 1);
-    CHK(!rt.request(4, low).accepted && !rt.request(4, tilt).accepted && rt.mode() == 1);   // 낮아도·기울어도 거부
-    rt.request(3); rt.consume_switch();
-    CHK(!rt.request(4, sitting).accepted && rt.mode() == 3);                              // 3 → 4 도 같다
     ExitContext standing; standing.z_fk = 0.76f; standing.tilt_deg = 3.f;
-    CHK(rt.request(4, standing).accepted && rt.mode() == 4);                               // 서 있으면 수락
-    CHK(rt.request(1, standing).accepted && rt.mode() == 1);
+    CHK(rt.request(4).accepted);
+    CHK(rt.request(1, low).accepted && rt.mode() == 1);          // 낮아도 나간다
+    CHK(rt.request(4, tilt).accepted && rt.mode() == 4);         // 기울어도 들어간다
+    CHK(rt.request(1, sitting).accepted && rt.mode() == 1);
     rt.consume_switch();
+
+    // ── 조건 «자체» — 표에 그 값이 없어도(데이터로 꺼 두어도) 여기서 전부 돌려 본다 ──
+    //    이 순수 함수들(ModeRuntime.h exit_allowed / enter_allowed)이 request() 의 판정이다.
+    {
+        using mode_table::Exit; using mode_table::Safety;
+        mode_table::Row from{}, to{};
+        const char* why = "";
+        // Always = 언제나 나간다
+        from.exit = Exit::Always;  to.exit = Exit::Always;
+        CHK(exit_allowed(from, to, low, &why) && exit_allowed(from, to, standing, &why));
+        // Upright = 직립일 때만 나가고, 들어갈 때도 직립이어야 한다 (클립 재생 모드가 쓰던 조건)
+        from.exit = Exit::Upright;
+        CHK(!exit_allowed(from, to, low, &why) && !exit_allowed(from, to, tilt, &why));
+        CHK(exit_allowed(from, to, standing, &why) && std::strstr(why, "직립"));
+        to.exit = Exit::Upright;
+        CHK(!enter_allowed(to, sitting) && !enter_allowed(to, low) && enter_allowed(to, standing));
+        to.exit = Exit::Always;
+        CHK(enter_allowed(to, sitting));
+        // StandingHold = 직립 «버튼 유지» + 직립에서만. 단 땅을 거쳐 들어가는 모드로는 그냥 나간다 (mode5 가 쓰던 조건)
+        from.exit = Exit::StandingHold;
+        ExitContext moving_ctx; moving_ctx.m5_standing_hold = false; moving_ctx.z_fk = 0.76f; moving_ctx.tilt_deg = 3.f;
+        CHK(!exit_allowed(from, to, moving_ctx, &why) && std::strstr(why, "직립 버튼"));
+        ExitContext hold_ctx; hold_ctx.m5_standing_hold = true; hold_ctx.z_fk = 0.76f; hold_ctx.tilt_deg = 3.f;
+        CHK(exit_allowed(from, to, hold_ctx, &why));
+        CHK(!exit_allowed(from, to, sitting, &why));                    // 버튼은 직립인데 실측이 낮으면 거부
+        to.exit = Exit::ViaGround;
+        CHK(exit_allowed(from, to, moving_ctx, &why));                  // 땅 모드로는 hold 없이도
+        // ViaGround = 바닥 가능 모드로만 나간다 (mode6 가 쓰던 조건 — 나갈 곳이 없는 방이 되지 않게
+        //             «StandingHold 모드» 가 아니라 «바닥 가능» 으로 본다: 2026-09-23 exit 완화 때 고침)
+        from.exit = Exit::ViaGround;
+        to.exit = Exit::Always; to.safety = Safety::GroundCapable;
+        CHK(exit_allowed(from, to, moving_ctx, &why));
+        to.safety = Safety::UprightOnly;
+        CHK(!exit_allowed(from, to, moving_ctx, &why) && std::strstr(why, "바닥 모드"));
+    }
+
     // 체류 시작 (I-1(b)): 바닥 모드 중 스스로 일어서는 명령이 없는 행(클립 재생·기기)으로는 체류를 시작하지 않는다
     CHK(ModeRuntime::may_start_stay_in(mode_table::ROWS[0]));                             // 폴백(첫 행)은 시작할 수 있다
     CHK(ModeRuntime::may_start_stay_in(mode_table::row(1)) && ModeRuntime::may_start_stay_in(mode_table::row(5)));
@@ -59,22 +90,18 @@ int main() {
         m5.set_supported({1, 4, 5}); CHK(m5.request(5).accepted);
         CHK(m5.begin_stay(1) == nullptr && m5.mode() == 5);
     }
-    // mode5(exit=standing_hold) · mode6(exit=via_ground) — 계약 v2 슬롯
     rt.set_supported({1, 2, 3, 4, 5, 6});
-    CHK(rt.request(5).accepted);
-    ExitContext moving; moving.m5_standing_hold = false;
-    CHK(!rt.request(1, moving).accepted && rt.mode() == 5);
-    // 5 -> 4: mode4 는 ground_capable 이지만 via_ground 는 아니다 — 네발 hold 에선 거부,
-    // 직립 hold 에서만 허용 (Ruling 33, 옛 GroundCapable 바이패스 버그 회귀 방지)
-    ExitContext crawl_hold; crawl_hold.m5_standing_hold = false; crawl_hold.z_fk = 0.42f; crawl_hold.tilt_deg = 64.f;
-    ModeResult r54 = rt.request(4, crawl_hold);
-    CHK(!r54.accepted && std::strstr(r54.reason, "직립 버튼") && rt.mode() == 5);
-    ExitContext upright_hold; upright_hold.m5_standing_hold = true; upright_hold.z_fk = 0.76f; upright_hold.tilt_deg = 3.f;
-    CHK(rt.request(4, upright_hold).accepted && rt.mode() == 4);
-    CHK(rt.request(5, ExitContext{}).accepted && rt.mode() == 5);  // mode4 는 exit=upright — 직립이면 5 로 복귀
-    CHK(rt.request(6, moving).accepted && rt.mode() == 6);      // 5 -> 6 은 via_ground 라 hold 없이도 허용(불변)
-    CHK(!rt.request(1).accepted && rt.mode() == 6);             // 6 은 5 로만 나간다
-    CHK(rt.request(5).accepted && rt.request(1).accepted);
+    CHK(rt.request(5).accepted && rt.request(6).accepted && rt.request(1).accepted);   // 6 도 언제나 나간다(표가 always)
+
+    // 클립 전환 에지 — 모드 전환과 같은 모양(정책 루프가 한 틱에 한 번 소비해 전환 처리를 태운다)
+    {
+        ModeRuntime c;
+        CHK(!c.consume_clip_switch());                     // 처음엔 변화 없음
+        CHK(c.select_clip(2, 4) && c.consume_clip_switch() && !c.consume_clip_switch());
+        CHK(c.select_clip(2, 4) && !c.consume_clip_switch());   // 같은 칸 재선택 = 전환 아님
+        CHK(!c.select_clip(9, 4) && !c.consume_clip_switch());  // 없는 칸 = 상태 불변
+    }
+
     // 안전 폴백: 가드 무시, 조작자 요청은 그대로 남는다
     rt.request(4); rt.consume_switch();
     rt.force(1);

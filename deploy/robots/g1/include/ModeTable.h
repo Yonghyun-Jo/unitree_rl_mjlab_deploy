@@ -29,9 +29,9 @@ inline constexpr std::array<Row, N_MODES> ROWS = {{
   {1, "loco", '1', {{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}}, false, false, true, false, true, false, false, RefSource::None, FootZ::Gen, true, false, Safety::UprightOnly, Exit::Always, "mode1"},
   {2, "upper", '2', {{1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}}, true, false, true, false, true, false, false, RefSource::Vr, FootZ::Gen, false, true, Safety::UprightOnly, Exit::Always, "mode2"},
   {3, "track", '3', {{1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}}, true, true, false, false, true, false, false, RefSource::Vr, FootZ::Ref, false, true, Safety::UprightOnly, Exit::Always, "mode3"},
-  {4, "playback", '4', {{1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}}, true, true, false, true, true, false, false, RefSource::Clip, FootZ::Ref, false, true, Safety::GroundCapable, Exit::Upright, "mode4"},
-  {5, "ground", '5', {{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f}}, false, false, false, false, false, true, false, RefSource::None, FootZ::None, false, true, Safety::GroundCapable, Exit::StandingHold, "mode5"},
-  {6, "crawl", '6', {{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f}}, false, false, true, false, false, false, true, RefSource::None, FootZ::None, false, true, Safety::GroundCapable, Exit::ViaGround, "mode6"},
+  {4, "playback", '4', {{1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f}}, true, true, false, true, true, false, false, RefSource::Clip, FootZ::Ref, false, true, Safety::GroundCapable, Exit::Always, "mode4"},
+  {5, "ground", '5', {{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f}}, false, false, false, false, false, true, false, RefSource::None, FootZ::None, false, true, Safety::GroundCapable, Exit::Always, "mode5"},
+  {6, "crawl", '6', {{0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f}}, false, false, true, false, false, false, true, RefSource::None, FootZ::None, false, true, Safety::GroundCapable, Exit::Always, "mode6"},
 }};
 
 inline constexpr bool valid(int mode) { return mode >= 1 && mode <= N_MODES; }

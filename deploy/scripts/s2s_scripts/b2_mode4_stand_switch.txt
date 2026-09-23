@@ -1,0 +1,9 @@
+# mode4 = «stand» 로 들어가고(재생 안 함), 재생 중에 클립을 바꾼다.
+#   칸: 0 stand · 1 primary(dance1s3) · 2 light(aiming) · 3 demo6(dance1s2)
+#   `]` = 다음 칸, `[` = 이전 칸. 한 줄 = <밴드 해제 뒤 초> <키>
+2 4      # mode4 진입 → 0 stand (정지 자세 유지, 재생 없음)
+12 ]     # -> 1 primary 재생 시작
+30 ]     # 재생 중 교체 -> 2 light (직립이면 수락)
+48 [     # -> 1 primary
+64 [     # -> 0 stand (직립 복귀)
+76 1     # mode1 로

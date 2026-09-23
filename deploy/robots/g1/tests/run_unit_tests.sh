@@ -39,7 +39,7 @@ for t in test_height_estimator test_motion_preview test_safety_policy; do   # Ei
 done
 [ -f test_no_mode_ordinals.sh ] && { bash test_no_mode_ordinals.sh && echo "ok   no_mode_ordinals" || { echo "FAIL no_mode_ordinals"; fail=1; }; }
 # shm 바이트 배치(C++ 구조체 ↔ python FMT) + policy_slot push 게이트 + 헤드리스 도구의 t=0 판정 — 표준 라이브러리만 쓴다(uv 불필요)
-for t in test_gui_shm_layout test_vr_shm_layout test_policy_slot_gate test_headless_pre_t0 test_masked_gui_posture_rows; do
+for t in test_gui_shm_layout test_vr_shm_layout test_policy_slot_gate test_headless_pre_t0 test_masked_gui_posture_rows test_gui_clip_order; do
   [ -f $t.py ] && { python3 $t.py >"$OUT/$t.out" 2>&1 && echo "ok   $t" || { echo "FAIL $t"; tail -5 "$OUT/$t.out"; fail=1; }; }
 done
 

@@ -41,10 +41,12 @@ int main() {
     CHK(row(4).motion_preview && row(4).bits[2] == 1.f);
     CHK(row(5).mode5_cmd_live && !row(5).track_upper && !row(5).track_lower && !row(5).base_vel_live);
     CHK(row(5).bits[3] == 1.f && row(5).foot_z == FootZ::None && row(5).safety == Safety::GroundCapable);
-    CHK(row(5).exit == Exit::StandingHold && row(5).ref_source == RefSource::None);
-    CHK(row(6).base_vel_live && row(6).crawl_cmd_live && row(6).bits[4] == 1.f && row(6).exit == Exit::ViaGround);
-    for (int m = 1; m <= 3; ++m) CHK(row(m).safety == Safety::UprightOnly && row(m).exit == Exit::Always);
-    CHK(row(4).exit == Exit::Upright);
+    CHK(row(5).ref_source == RefSource::None);
+    CHK(row(6).base_vel_live && row(6).crawl_cmd_live && row(6).bits[4] == 1.f);
+    for (int m = 1; m <= 3; ++m) CHK(row(m).safety == Safety::UprightOnly);
+    // 이탈 조건은 지금 전부 always (2026-09-23 «모드 사이는 언제든지» — modes.yaml 의 exit 열).
+    // 조건 자체의 거동은 test_mode_runtime 이 순수 함수(exit_allowed/enter_allowed)로 네 값 다 돌린다.
+    for (int m = 1; m <= N_MODES; ++m) CHK(row(m).exit == Exit::Always);
     // 범위 밖은 안전측(mode1 행)
     CHK(!valid(0) && !valid(N_MODES + 1) && valid(1) && valid(N_MODES));
     CHK(row(0).id == 1 && row(99).id == 1);

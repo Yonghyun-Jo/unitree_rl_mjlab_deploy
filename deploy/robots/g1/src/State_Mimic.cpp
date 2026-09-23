@@ -29,6 +29,7 @@ extern std::string g_network_iface;   // main.cpp — 진단 부하 인터록 �
 
 static Eigen::Quaternionf init_quat;
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion = nullptr;
+std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion_stand = nullptr;
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion_light = nullptr;
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion_demo6 = nullptr;
 
@@ -78,13 +79,21 @@ struct ClipSlot {
     const char* name;
     bool rewind_on_enter;
     float t0;                       // rewind_on_enter 클립의 시계 원점 [s]
+    // 주 클립만 «에피소드 시계 + 트림 오프셋(time_range_[0])» 으로 돈다. 나머지는 자기 원점(t0).
+    // 🔴 이걸 칸 번호(i == 0)로 판정하지 않는다 — 0번이 stand 칸이 되면서 어긋났다.
+    bool uses_episode_clock;
 };
 static std::vector<ClipSlot> g_clips;
+// 0번 칸 = «stand»(정지 자세 유지). 클립 재생 모드는 여기서 시작한다 — 들어가자마자 춤이 시작되지
+// 않게, 그리고 재생 중에 언제든 돌아올 자리를 주려고(재생 중 클립 교체는 직립에서만 되는데, 그 직립으로
+// 되돌아오는 수단이 이 칸이다). 없을 수 없다(enter() 가 로봇 기본 자세로 짓는다) — 없으면 옛 배치 그대로.
+static constexpr const char* G1_STAND_CLIP = "stand";
 static void g_build_clips() {
     g_clips.clear();
-    if (State_Mimic::motion)       g_clips.push_back({State_Mimic::motion,       "primary", false, 0.f});
-    if (State_Mimic::motion_light) g_clips.push_back({State_Mimic::motion_light, "light",   false, 0.f});
-    if (State_Mimic::motion_demo6) g_clips.push_back({State_Mimic::motion_demo6, "demo6",   true,  0.f});
+    if (State_Mimic::motion_stand) g_clips.push_back({State_Mimic::motion_stand, G1_STAND_CLIP, false, 0.f, false});
+    if (State_Mimic::motion)       g_clips.push_back({State_Mimic::motion,       "primary", false, 0.f, true});
+    if (State_Mimic::motion_light) g_clips.push_back({State_Mimic::motion_light, "light",   false, 0.f, false});
+    if (State_Mimic::motion_demo6) g_clips.push_back({State_Mimic::motion_demo6, "demo6",   true,  0.f, false});
     // 슬롯이 줄어들 수 있다(State_Mimic 은 두 번 만들어지고 enter() 마다 주 클립이 다시 묶인다)
     // -> 고른 칸이 사라졌으면 주 클립으로 되돌린다. 범위 안이면 고른 그대로 둔다.
     if (g_mode.clip_id() >= (int)g_clips.size()) g_mode.select_clip(0, (int)g_clips.size());
@@ -100,6 +109,16 @@ static inline std::shared_ptr<State_Mimic::MotionLoader_> active_ref_loader() {
     return State_Mimic::motion;
 }
 static inline bool g_ref_is_clip() { return g_mode.row().ref_source == mode_table::RefSource::Clip; }
+// «stand» 칸의 번호(없으면 −1). 이름으로 찾는다 — 칸 구성은 슬롯 설정에 따라 달라진다.
+static int g_stand_clip_id() {
+    for (size_t i = 0; i < g_clips.size(); ++i)
+        if (g_clips[i].name == G1_STAND_CLIP) return (int)i;
+    return -1;
+}
+// 지금 로봇이 «직립» 인가 — 모드 이탈·진입이 쓰는 것과 같은 조건·같은 상수(ModeRuntime.h).
+static inline bool g_upright_now() {
+    return g_z_fk >= g1::EXIT_MIN_Z && g_tilt.value() < g1::EXIT_MAX_TILT_DEG;
+}
 // 넘어짐 관문(SafetyPolicy.h commanded_upright)에 «지금 명령의 자세» 를 모아 넘긴다 — 표의 성질로만(모드 번호 없음).
 //   ref_source=clip → 재생 중인 클립의 현재 프레임 골반 기울기(quat_tilt_deg — yaw 무관이라 init_quat 정렬 불필요).
 //                     quat() 는 root_quaternions(모든 클립에 있다)만 읽는다 — lin()/ang() 는 부르지 않는다
@@ -236,23 +255,27 @@ static void g_request_mode_from_channel(int m, Channel ch, const char* src) {
            ch == Channel::Vr ? "이 채널은 직립 모드만 요청한다" : "표에 없는 모드"); fflush(stdout);
 }
 
-// 클립 선택의 유일한 문(키보드 [ ] · GUI). 클립 모드가 «들어가기 전에» 고른다.
-// 🔴 재생 중(ref_source=clip)에는 바꾸지 않는다. 클립 정체가 바뀌면 참조가 통째로 갈리는데,
-//    그것을 무해하게 만드는 넷(crossfade · 다리 q_ref 램프 · 되감기 · init_quat 재앵커)은
-//    전부 «전환 블록»(g_mode.consume_switch()) 안에서만 돈다. 여기서 바꾸면 그 밖이다:
-//    masked_joint_command 가 switch_alpha==1.0 으로 새 로더를 즉시 읽어 전신 q_ref 가
-//    한 틱에 점프하고, init_quat 은 옛 클립에 앵커된 채 남고, 되감는 칸은 t0 가 낡아
-//    중간 프레임부터 시작하며, ref_foot_height 도 같이 튄다. 실기에선 모터 보호정지다.
-//    옛 코드에는 이 구멍이 없었다 — 클립 정체는 «모드 전환과 함께만» 바뀌었다.
+// 클립 선택의 유일한 문(키보드 [ ] · GUI).
+// 🔴 여기서는 «고르기만» 한다 — 바뀐 클립을 실제로 태우는 일(crossfade · 다리 q_ref 램프 · 되감기 ·
+//    init_quat 재앵커)은 정책 루프의 전환 블록이 한다(consume_clip_switch). 그 넷을 건너뛰고 로더만
+//    갈면 전신 q_ref 가 한 틱에 점프하고 heading 은 옛 클립에 앵커된 채 남는다 — 실기에선 모터 보호정지다.
+// 🔴 재생 중 교체는 «직립일 때만» — 새 클립은 frame 0(대개 서 있는 자세)부터 명령하는데 로봇이 바닥에
+//    있으면 다리 참조가 1초 램프로 기립 자세까지 끌려간다. 조건·상수는 클립 모드에 «들어갈 때» 와 같다.
+//    단 «stand» 칸으로 돌아오는 것은 언제나 허용한다 — 그게 다시 서는(= 다시 고를 수 있게 되는) 수단이다.
 static void g_select_clip(int id, const char* src) {
-    if (g_ref_is_clip()) {
-        printf("\r\n[clip] %s: 재생 중에는 못 바꾼다 — 먼저 다른 모드로 나갔다가 고를 것\r\n", src); fflush(stdout);
-        return;
-    }
     const int n = (int)g_clips.size();
     if (n == 0) { printf("\r\n[clip] %s: 이 슬롯엔 클립이 없다\r\n", src); fflush(stdout); return; }
+    if (id < 0 || id >= n) { printf("\r\n[clip] %s: 없는 칸 %d (0..%d)\r\n", src, id, n - 1); fflush(stdout); return; }
+    if (g_ref_is_clip() && id != g_stand_clip_id() && !g_upright_now()) {
+        printf("\r\n[clip] %s: 재생 중 교체는 직립에서만 (골반 %.2f m / 기울기 %.0f° — 기준 %.2f m / %.0f°)."
+               " «%s» 로 먼저 서거나 다른 모드로 나갈 것\r\n",
+               src, g_z_fk, g_tilt.value(), g1::EXIT_MIN_Z, g1::EXIT_MAX_TILT_DEG, G1_STAND_CLIP);
+        fflush(stdout);
+        return;
+    }
     if (!g_mode.select_clip(id, n)) { printf("\r\n[clip] %s: 없는 칸 %d (0..%d)\r\n", src, id, n - 1); fflush(stdout); return; }
-    printf("\r\n[clip] %d/%d «%s»\r\n", id, n, g_clips[id].name); fflush(stdout);
+    printf("\r\n[clip] %d/%d «%s»%s\r\n", id, n, g_clips[id].name,
+           g_ref_is_clip() ? " — 다음 틱에 전환(crossfade·다리 램프·되감기·재앵커)" : ""); fflush(stdout);
 }
 
 static void g_poll_gui()
@@ -1272,6 +1295,19 @@ void State_Mimic::enter()
     // 클립 슬롯은 «여기서» 짓는다 — 생성자가 아니라. State_Mimic 은 두 번 만들어지고(dance /
     // masked) 주 클립(motion)은 enter() 마다 그 인스턴스 것으로 다시 묶이므로, 생성자에서만
     // 지으면 0번 칸이 나중에 만들어진 쪽을 가리킨 채 남는다. 정책 루프가 뜨기 전이다.
+    // 0번 칸 «stand» — 로봇 기본 자세(default_joint_pos = 학습의 action offset, FixStand 가 세워 둔 자세)를
+    // «그대로 유지하라» 는 합성 참조. 한 번만 짓는다(자세도 FK 도 안 변한다). 클립 재생 모드는 여기서 시작하고,
+    // 재생 중엔 이 칸으로 언제나 돌아올 수 있다(g_select_clip).
+    if (!motion_stand_) {
+        const auto& dj = env->robot->data.default_joint_pos;
+        Eigen::VectorXf q((int)dj.size());
+        for (int i = 0; i < (int)dj.size(); ++i) q[i] = dj[i];
+        const float z_stand = g1::z_fk(dj.data(), Eigen::Quaternionf::Identity());
+        motion_stand_ = std::make_shared<MotionLoader_>(q, z_stand);
+        spdlog::info("[clip] 0번 칸 «{}» = 기본 자세 유지 (골반 FK {:.3f} m) — 재생 모드는 여기서 시작한다",
+                     G1_STAND_CLIP, z_stand);
+    }
+    motion_stand = motion_stand_;
     g_build_clips();
     // 같은 이유로 «이 슬롯이 아는 모드» 도 여기서 건다 — 지금 들어가는 정책의 것이어야 한다.
     g_mode.set_supported(slot_modes_);
@@ -1585,23 +1621,34 @@ void State_Mimic::enter()
             // one step so the obs (base_vel_command / ref_foot_height) see fresh values.
             // consume_switch() 는 «직전 consume 때의 모드와 지금» 을 견준다 — 조작 채널이 요청한
             // 것을 같은 틱에 위 qd 가드가 되돌렸으면 전환이 아니다(ModeRuntime.h).
-            if (g_mode.consume_switch()) {
+            // 클립 모드로 «들어오면» 재생을 시작하지 않는다 — 0번 칸 «stand»(정지 자세 유지)로 시작한다.
+            //   («4» 를 누르자마자 춤이 시작되면 사람이 자세를 고를 틈이 없다. 클립은 들어온 뒤에 고른다.)
+            //   여기서 바꾼 칸도 아래 consume_clip_switch() 가 같은 틱에 소비한다 → 전환 처리는 한 번만 돈다.
+            const bool mode_switched = g_mode.consume_switch();
+            if (mode_switched && g_ref_is_clip() && g_stand_clip_id() >= 0)
+                g_mode.select_clip(g_stand_clip_id(), (int)g_clips.size());
+            // 클립이 바뀐 에지 = 모드 전환과 «같은 길» 로 태운다(g_select_clip 주석). 클립 모드가 아닐 때의
+            // 선택(들어가기 전에 고르기)은 소비만 하고 지나간다 — 참조가 아직 그 클립이 아니다.
+            const bool clip_switched = g_mode.consume_clip_switch();
+            if (mode_switched || (clip_switched && g_ref_is_clip())) {
                 const mode_table::Row& M = g_mode.row();
                 g_loco.notify_mode_switch(M.id);
                 // mode5 에 들어오면 진입 자세(직립)로 시작한다(spec §4.4) — 사람이 버튼을 누르기 전에도
                 // 학습 문법 그대로의 명령이 나간다. 나가면 상태를 비운다(다음 진입은 새로 시작).
-                if (M.mode5_cmd_live) {
-                    g_m5.press(m5::ENTER_PRESET);
-                    printf("\r\n[m5] 진입 → «%s» (자세 키: %s)\r\n", m5::PRESETS[m5::ENTER_PRESET].name, g_m5_key_hint());
-                    fflush(stdout);
-                } else {
-                    g_m5.reset();
+                if (mode_switched) {                 // 자세 상태는 «모드» 전환에서만 (클립 교체는 안 건드린다)
+                    if (M.mode5_cmd_live) {
+                        g_m5.press(m5::ENTER_PRESET);
+                        printf("\r\n[m5] 진입 → «%s» (자세 키: %s)\r\n", m5::PRESETS[m5::ENTER_PRESET].name, g_m5_key_hint());
+                        fflush(stdout);
+                    } else {
+                        g_m5.reset();
+                    }
                 }
                 // 되감는 클립: «들어올 때마다» frame 0 으로. 아래 재앵커가 active_ref_loader()
                 // 의 «현재 프레임» 자세를 기준으로 init_quat 을 잡으므로, 되감기는 반드시
                 // 그보다 먼저다 — 순서가 바뀌면 중간 프레임 heading 에 정렬된 채로 첫
                 // 동작이 재생돼 진입 순간 몸이 돈다.
-                if (g_ref_is_clip()) if (ClipSlot* c = active_clip()) if (c->rewind_on_enter) {
+                if (g_ref_is_clip()) if (ClipSlot* c = active_clip()) if (c->rewind_on_enter || clip_switched) {
                     c->t0 = env->episode_length * env->step_dt;
                     c->loader->reset(env->robot->data, 0.0f);
                 }
@@ -1633,9 +1680,11 @@ void State_Mimic::enter()
                     }
                     const auto fz = (g_ref_is_clip() && dl->has_foot_z) ? dl->foot_z_clip()
                                                                         : g_loco.foot_z;
-                    spdlog::info("[diag:switch] -> mode{} ({})  clip frame={}  q_ref 점프 max={:.2f} rad @{} {}"
+                    spdlog::info("[diag:switch] -> mode{} ({}) {}  clip frame={}  q_ref 점프 max={:.2f} rad @{} {}"
                                  "  발-z 목표=({:.3f},{:.3f})  생성기=({:.3f},{:.3f})  원천={}",
-                                 M.id, M.name, dl ? dl->frame : -1, qmax, qj, qj >= 0 ? jname(qj) : "-",
+                                 M.id, M.name,
+                                 mode_switched ? "[모드 전환]" : fmt::format("[클립 -> «{}»]", active_clip() ? active_clip()->name : "-"),
+                                 dl ? dl->frame : -1, qmax, qj, qj >= 0 ? jname(qj) : "-",
                                  fz[0], fz[1], g_loco.foot_z[0], g_loco.foot_z[1], g_footz_src_name);
                 }
             }
@@ -1652,7 +1701,7 @@ void State_Mimic::enter()
                 const float t_ep = env->episode_length * env->step_dt;
                 for (size_t i = 0; i < g_clips.size(); ++i) {
                     ClipSlot& c = g_clips[i];
-                    c.loader->update(i == 0 ? t_ep + time_range_[0] : t_ep - c.t0);
+                    c.loader->update(c.uses_episode_clock ? t_ep + time_range_[0] : t_ep - c.t0);
                 }
             }
             // 계약 v2: 관측 항이 읽을 이 틱의 mode5 명령·미리보기 (클립 시계가 이 틱으로 옮겨진 뒤).

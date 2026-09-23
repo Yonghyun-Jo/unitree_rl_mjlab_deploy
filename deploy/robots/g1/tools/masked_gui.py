@@ -31,7 +31,7 @@ from mode5_presets_gen import PRESETS   # 생성 파일 — mode5 자세 버튼 
 from mode_table_gen import MODES        # 생성 파일 — 모드 표 (id, name, key, safety). 번호를 여기 박지 않는다
 
 KB_STEP = 0.1
-M5_BTNS_PER_ROW = 3        # mode5 자세 버튼을 몇 개씩 끊어 한 줄에 놓나 (키 있는 자세 6개 = 두 줄)
+BTNS_PER_ROW = 3           # 버튼 그룹 한 줄에 몇 개 (viser 는 한 줄로만 펴서 폭을 넘으면 잘린다)
 VXCAP, VXCAP_BWD = gui_shm.VXCAP, gui_shm.VXCAP_BWD   # deploy caps (match C++). vx 는 비대칭
 VYCAP, WCAP = gui_shm.VYCAP, gui_shm.WCAP
 
@@ -48,16 +48,34 @@ state = dict(seq=0, cmd_mode=1, vx=0.0, vy=0.0, wz=0.0,
 # light 가 없는 설정이면 demo6 이 1 번이 된다. 읽지 못하면 옛 고정 표로 — 제어기가 고른 칸 이름을 로그로 답한다
 # («[clip] i/n «이름»»).
 _CLIP_KEYS = (("motion_file", "primary"), ("motion_file_light", "light"), ("motion_file_demo6", "demo6"))
-_CLIPS_FALLBACK = ("0 primary", "1 light", "2 demo6")
+# 0번 칸은 파일이 아니라 제어기가 짓는 합성 «stand»(기본 자세 유지) — g_build_clips 가 맨 앞에 넣는다.
+# 🔴 순서·개수가 제어기와 어긋나면 엉뚱한 클립이 재생된다(제어기는 번호만 받는다).
+_STAND_LABEL = "0 stand (정지)"
+_CLIPS_FALLBACK = (_STAND_LABEL, "1 primary", "2 light", "3 demo6")
+
+
+def _short_clip(stem: str) -> str:
+    """클립 파일명을 버튼에 들어갈 짧은 이름으로: g1_fight1_subject1_colmov2 → fight1s1.
+    «g1_» 접두 · «_subject<N>» → «s<N>» · 꼬리의 리타겟/트림 표시(colmov2 · upper16s · stand10s)를 뗀다.
+    떼고 나서 두 클립이 같은 이름이 되면 그 둘은 원래 이름을 쓴다(_clip_labels 가 본다) — 버튼이 짧아도
+    «어느 클립인지» 가 흐려지면 안 된다."""
+    s = re.sub(r"^g1_", "", stem)
+    s = re.sub(r"_subject(\d+)", r"s\1", s)
+    tail = re.compile(r"^(colmov?\d*|[a-z]*\d+s)$")          # colmo·colmov2 · upper16s·stand10s (트림 길이 표시)
+    parts = [p for p in s.split("_") if p]
+    while len(parts) > 1 and tail.match(parts[-1]):
+        parts.pop()
+    return "_".join(parts) or stem
 
 
 def _clip_labels(config_yaml: str) -> tuple:
-    """config.yaml 의 Mimic_Masked 상태 블록(들여쓰기 2)에서 클립 줄을 찾아 "i 이름 (파일)" 라벨을 만든다.
-    PyYAML 없이 줄 단위로 읽는다(이 GUI 는 viser 만 얹은 uv 환경에서 돈다)."""
+    """config.yaml 의 Mimic_Masked 상태 블록(들여쓰기 2)에서 클립 줄을 찾아 "i 짧은이름" 라벨을 만든다.
+    PyYAML 없이 줄 단위로 읽는다(이 GUI 는 viser 만 얹은 uv 환경에서 돈다).
+    반환 = (버튼 라벨들, "i = 원래 파일명" 한 줄) — 버튼은 짧게, 원래 이름은 버튼 밑 한 줄에 남긴다."""
     try:
         lines = open(config_yaml, encoding="utf-8").read().splitlines()
     except OSError:
-        return _CLIPS_FALLBACK
+        return _CLIPS_FALLBACK, ""
     found, inside = {}, False
     for ln in lines:
         if re.match(r"^  Mimic_Masked:", ln):
@@ -68,11 +86,21 @@ def _clip_labels(config_yaml: str) -> tuple:
         m = re.match(r"^    (motion_file(?:_light|_demo6)?):\s*(\S+)", ln) if inside else None
         if m:
             found[m.group(1)] = os.path.splitext(os.path.basename(m.group(2)))[0]
-    labels = [f"{i} {name} ({found[k]})" for i, (k, name) in enumerate((k, n) for k, n in _CLIP_KEYS if k in found)]
-    return tuple(labels) if labels else _CLIPS_FALLBACK
+    stems = [found[k] for k, _n in _CLIP_KEYS if k in found]
+    if not stems:
+        return _CLIPS_FALLBACK, ""
+    short = [_short_clip(s) for s in stems]
+    for i, s in enumerate(short):                              # 짧게 하다 겹치면 그 칸은 원래 이름으로
+        if short.count(s) > 1:
+            short[i] = stems[i]
+    labels = (_STAND_LABEL,) + tuple(f"{i + 1} {s}" for i, s in enumerate(short))
+    detail = "0 = 기본 자세 유지(제어기가 만든다) · " + " · ".join(
+        f"{i + 1} = {stem}" for i, stem in enumerate(stems))
+    return labels, detail
 
 
-CLIPS = _clip_labels(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "config.yaml"))
+CLIPS, CLIPS_DETAIL = _clip_labels(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "config.yaml"))
 
 
 def _clamp(x, lo, hi):
@@ -95,6 +123,14 @@ def main() -> None:
         status.content = (f"**mode {state['cmd_mode']}** ({names[state['cmd_mode']]})  ·  "
                           f"base_vel [{state['vx']:.2f}, {state['vy']:.2f}, {state['wz']:.2f}]")
 
+    # 🔴 viser 의 button_group 은 한 줄로만 편다 — 패널 폭을 넘으면 뒤쪽 버튼이 «잘린 채로» 안 보인다
+    #    (2026-09-23: 자세 «드러누움», 클립 뒷칸. 스크롤 막대도 안 나와서 없는 버튼처럼 보인다).
+    #    그래서 per_row 개씩 끊어 여러 그룹으로 낸다 — 항목이 늘어도 줄이 저절로 는다.
+    #    이름표는 첫 줄만 단다(viser 가 이름표를 왼쪽 칸에 두므로, 빈 이름표 = 버튼이 그만큼 넓어진다).
+    def button_rows(label: str, options, on_click, per_row: int = BTNS_PER_ROW) -> None:
+        for r in range(0, len(options), per_row):
+            g.add_button_group(label if r == 0 else "", options[r:r + per_row]).on_click(on_click)
+
     # ---- sliders (also updated by the hotkeys below) ----
     with g.add_folder("Mode"):
         mode_btns = g.add_button_group("cmd_mode", tuple(f"{i}: {name}" for i, name, _key, _s in MODES))
@@ -116,23 +152,20 @@ def main() -> None:
             state["m5_press_seq"] = (state.get("m5_press_seq", 0) + 1) & 0xFFFFFFFF  # 같은 자세 재입력 = 새 목표
             _write(); refresh()
 
-        # 🔴 button_group 은 한 줄로만 편다 — 패널 폭을 넘으면 뒤쪽 자세가 «잘린 채로» 안 보인다(2026-09-23:
-        #    «드러누움» 이 화면 밖이었다. 스크롤 막대도 안 나와서 없는 버튼처럼 보인다). 그래서 줄당 M5_BTNS_PER_ROW
-        #    개씩 끊어 여러 그룹으로 낸다 — 자세를 더 열어도(표엔 9개) 줄이 저절로 는다.
-        #    이름표는 첫 줄만 단다(viser 가 이름표를 왼쪽 칸에 두므로, 빈 이름표 = 버튼이 그만큼 넓어진다).
-        labels = tuple(preset_label)
-        for r in range(0, len(labels), M5_BTNS_PER_ROW):
-            g.add_button_group("m5_preset" if r == 0 else "",
-                               labels[r:r + M5_BTNS_PER_ROW]).on_click(_on_preset)
+        button_rows("m5_preset", tuple(preset_label), _on_preset)   # 자세 9개까지 늘어도 줄이 는다
 
     with g.add_folder("Clip (mode4 playback)"):
-        g.add_markdown("재생 중에는 제어기가 거부한다 — 다른 모드에서 고른 뒤 들어갈 것")
-        clip_btns = g.add_button_group("Select clip", CLIPS)
+        g.add_markdown("mode4 는 «0 stand»(정지 자세)로 들어간다 — 클립은 들어간 뒤에 고른다. "
+                       "재생 중 교체는 직립일 때만(아니면 거부 한 줄), «0 stand» 로 돌아오는 것은 언제나 된다")
 
-        @clip_btns.on_click
-        def _(ev) -> None:
+        def _on_clip(ev) -> None:
             state["clip_req"] = int(ev.target.value.split(" ")[0])
             _write(); refresh()
+
+        # 버튼은 짧은 이름(g1_fight1_subject1_colmov2 → «1 fight1s1»), 원래 파일명은 밑에 한 줄로 남긴다.
+        button_rows("Select clip", CLIPS, _on_clip)
+        if CLIPS_DETAIL:
+            g.add_markdown(CLIPS_DETAIL)
 
     with g.add_folder("base_vel (yaw-local)"):
         vx = g.add_slider("vx", -VXCAP_BWD, VXCAP, 0.01, 0.0)   # 전진 2.5 / 후진 1.5

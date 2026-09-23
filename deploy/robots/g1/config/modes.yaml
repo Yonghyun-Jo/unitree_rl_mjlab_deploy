@@ -13,6 +13,10 @@ modes:
   1: {key: "1", ref_source: none, foot_z: gen,  arm_blend_enter: true,  crossfade_enter: false, safety: upright_only,   exit: always,        gait: mode1}
   2: {key: "2", ref_source: vr,   foot_z: gen,  arm_blend_enter: false, crossfade_enter: true,  safety: upright_only,   exit: always,        gait: mode2}
   3: {key: "3", ref_source: vr,   foot_z: ref,  arm_blend_enter: false, crossfade_enter: true,  safety: upright_only,   exit: always,        gait: mode3}
-  4: {key: "4", ref_source: clip, foot_z: ref,  arm_blend_enter: false, crossfade_enter: true,  safety: ground_capable, exit: upright,       gait: mode4}
-  5: {key: "5", ref_source: none, foot_z: none, arm_blend_enter: false, crossfade_enter: true,  safety: ground_capable, exit: standing_hold, gait: mode5}
-  6: {key: "6", ref_source: none, foot_z: none, arm_blend_enter: false, crossfade_enter: true,  safety: ground_capable, exit: via_ground,    gait: mode6}
+  # 🔴 2026-09-23 사용자 지시: «모드 사이는 언제든지 바꿀 수 있게» → 4·5·6 의 이탈 조건을 always 로.
+  #    되돌리는 법 = 이 열을 upright / standing_hold 로 바꾸고 헤더 재생성(코드 수정 0). 그 조건들이
+  #    무엇을 막았는지는 rules/ADDING_A_MODE.md 함정 (e)·(f) 와 ModeRuntime::request 에 그대로 남아 있다.
+  #    지금 남은 방어 = 넘어짐 판정(바닥 모드에서 직립 모드로 나가면 즉시 적용 → 기울면 Passive) · qd_warn/crit.
+  4: {key: "4", ref_source: clip, foot_z: ref,  arm_blend_enter: false, crossfade_enter: true,  safety: ground_capable, exit: always,        gait: mode4}
+  5: {key: "5", ref_source: none, foot_z: none, arm_blend_enter: false, crossfade_enter: true,  safety: ground_capable, exit: always,        gait: mode5}
+  6: {key: "6", ref_source: none, foot_z: none, arm_blend_enter: false, crossfade_enter: true,  safety: ground_capable, exit: always,        gait: mode6}

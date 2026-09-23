@@ -20,6 +20,56 @@ struct ModeResult { bool accepted; const char* reason; };
 inline constexpr float EXIT_MIN_Z = 0.65f;          // spec §4.6
 inline constexpr float EXIT_MAX_TILT_DEG = 30.f;
 
+// ── 이탈·진입 조건의 «판정만» (순수 함수) ────────────────────────────────────────────────
+// 표의 행 두 개와 실측 자세만 본다. ModeRuntime::request 가 이것을 부른다.
+// 🔴 순수 함수로 빼 둔 이유: 표의 exit 열은 «데이터» 라 운용 중에 꺼 둘 수 있는데(2026-09-23 현재 전부
+//    always = 언제나 전환), 그러면 조건 코드가 실제 표로는 한 번도 안 돌아 회귀를 못 잡는다. 여기 있으면
+//    단위 테스트가 «가짜 행» 으로 네 조건을 전부 돌려 본다 — 다시 조일 때 그 거동이 살아 있음을 보증한다.
+inline bool upright_of(const ExitContext& ctx) {
+  return ctx.z_fk >= EXIT_MIN_Z && ctx.tilt_deg < EXIT_MAX_TILT_DEG;
+}
+
+// 지금 모드(from)에서 나가도 되나. 기본은 «거부» — 각 case 가 허용을 켠다. switch 에 default 를 두지
+// 않는 것은 새 Exit 값이 생겼을 때 빠진 case 를 잡으려는 것(단위 테스트가 -Werror=switch 로 빌드한다).
+inline bool exit_allowed(const mode_table::Row& from, const mode_table::Row& to,
+                         const ExitContext& ctx, const char** why) {
+  using mode_table::Exit;
+  const bool upright = upright_of(ctx);
+  switch (from.exit) {
+    case Exit::Always:
+      return true;
+    case Exit::Upright:
+      *why = "먼저 직립 (높이·기울기 조건)";
+      return upright;
+    case Exit::StandingHold:
+      // 직립 유지 없이 나갈 수 있는 곳은 «땅을 거쳐 들어가는» 모드(to.exit==ViaGround)뿐이다 — 그 모드
+      // 자체가 네발 진입을 전제하기 때문. 나머지는 직립 버튼 유지(m5_standing_hold) ∧ upright 를 요구 (Ruling 33).
+      *why = "먼저 직립 버튼 (직립 유지 상태에서만 나간다)";
+      return to.exit == Exit::ViaGround || (ctx.m5_standing_hold && upright);
+    case Exit::ViaGround:
+      // 🔴 땅을 거쳐 들어간 모드는 «땅 모드로» 나간다. 그 땅 모드의 exit 가 always 로 풀리면(2026-09-23)
+      //    여기 조건도 같이 풀어야 한다 — 안 그러면 나갈 곳이 없는 방이 된다. 그래서 «바닥 가능 모드» 로 본다.
+      *why = "바닥 모드를 거쳐서만 나간다";
+      return to.safety == mode_table::Safety::GroundCapable;
+  }
+  return false;                                   // 도달 불가(위 switch 가 전부 반환) — fail-closed
+}
+
+// 목적지(to)로 들어가도 되나. exit == Upright 인 모드는 «직립에서만 나가는» 모드라 들어갈 때도 직립이어야
+// 한다: 바닥에서 들어가면 스스로 일어서는 명령이 없고 이탈도 거부돼 출구가 p 뿐이다 (Ruling 34, I-1).
+inline bool enter_allowed(const mode_table::Row& to, const ExitContext& ctx) {
+  using mode_table::Exit;
+  switch (to.exit) {
+    case Exit::Upright:
+      return upright_of(ctx);
+    case Exit::Always:
+    case Exit::StandingHold:
+    case Exit::ViaGround:
+      return true;
+  }
+  return false;                                   // 도달 불가 — fail-closed
+}
+
 class ModeRuntime {
  public:
   void set_supported(const std::vector<int>& modes) { supported_ = modes; }
@@ -33,49 +83,9 @@ class ModeRuntime {
     if (!mode_table::valid(m)) return {false, "없는 모드"};
     if (!supports(m))          return {false, "이 슬롯(ONNX)이 모르는 모드"};
     if (m != mode_) {
-      using mode_table::Exit;
-      const bool upright = ctx.z_fk >= EXIT_MIN_Z && ctx.tilt_deg < EXIT_MAX_TILT_DEG;
-      // 기본은 «거부». 각 case 가 허용을 켠다 — switch 에 default 를 두지 않는 것은 새 Exit 값이
-      // 생겼을 때 빠진 case 를 잡으려는 것. 단위 테스트 러너(run_unit_tests.sh)가 이 헤더를
-      // -Werror=switch 로 빌드하므로 빠뜨리면 거기서 빌드가 죽는다. 🔴 컨트롤러 자체의 CMake
-      // 빌드는 이 경고를 켜지 않는다(-Wall/-Wswitch 없음) — 그래도 놓치면 여기 런타임은
-      // fail-closed(ok=false)로 그 모드에서 나가는 전환을 전부 거부한다.
-      bool ok = false;
       const char* why = "알 수 없는 이탈 조건";
-      switch (row().exit) {
-        case Exit::Always:
-          ok = true;
-          break;
-        case Exit::Upright:
-          ok = upright; why = "먼저 직립 (높이·기울기 조건)";
-          break;
-        case Exit::StandingHold:
-          // 직립 유지 없이 나갈 수 있는 곳은 «땅을 거쳐 들어가는» 모드(row(m).exit==ViaGround, 지금은
-          // 예약된 mode6)뿐이다 — 그 모드 자체가 네발 진입을 전제하기 때문. 나머지(1·2·3·4, mode4 의
-          // ground_capable 포함)는 전부 직립 버튼 유지(m5_standing_hold) ∧ upright 를 요구한다 (Ruling 33).
-          ok = mode_table::row(m).exit == Exit::ViaGround || (ctx.m5_standing_hold && upright);
-          why = "먼저 직립 버튼 (직립 유지 상태에서만 나간다)";
-          break;
-        case Exit::ViaGround:
-          ok = mode_table::row(m).exit == Exit::StandingHold; why = "ground 모드를 거쳐서만 나간다";
-          break;
-      }
-      if (!ok) return {false, why};
-      // 들어가는 쪽 조건 — 목적지 행의 exit 가 정한다. exit == Upright 인 모드(지금 클립 재생)는 «직립에서만
-      // 나가는» 모드라 들어갈 때도 직립이어야 한다: 바닥에서 들어가면 그 모드는 스스로 일어서는 명령이 없고
-      // 이탈도 거부돼 출구가 p 뿐이다(최종 검토 I-1, Ruling 34). 나가는 쪽과 같이 기본은 거부, case 가 허용을 켠다.
-      bool enter_ok = false;
-      switch (mode_table::row(m).exit) {
-        case Exit::Upright:
-          enter_ok = upright;
-          break;
-        case Exit::Always:
-        case Exit::StandingHold:
-        case Exit::ViaGround:
-          enter_ok = true;
-          break;
-      }
-      if (!enter_ok) return {false, "직립에서만 들어간다 (높이·기울기 조건)"};
+      if (!exit_allowed(row(), mode_table::row(m), ctx, &why)) return {false, why};
+      if (!enter_allowed(mode_table::row(m), ctx)) return {false, "직립에서만 들어간다 (높이·기울기 조건)"};
       mode_ = m;
     }
     requested_ = m;
@@ -117,10 +127,15 @@ class ModeRuntime {
 
   int  clip_id() const { return clip_id_; }
   bool select_clip(int id, int n_clips) { if (id < 0 || id >= n_clips) return false; clip_id_ = id; return true; }
+  // 클립이 «바뀐 에지». consume_switch() 와 같은 모양 — 정책 루프가 한 틱에 한 번 소비해서, 모드 전환과
+  // 똑같은 전환 처리(crossfade · 다리 q_ref 램프 · 되감기 · init_quat 재앵커)를 태운다. 클립 모드가
+  // 아닐 때(들어가기 전에 고르는 경우)도 여기서 소비돼 없어진다 — 나중에 뒤늦게 발동하지 않게.
+  bool consume_clip_switch() { const bool s = clip_id_ != last_consumed_clip_; last_consumed_clip_ = clip_id_; return s; }
 
  private:
   int mode_ = 1, requested_ = 1, clip_id_ = 0;
   int last_consumed_ = 1;                         // consume_switch() 가 마지막으로 본 모드
+  int last_consumed_clip_ = 0;                    // consume_clip_switch() 가 마지막으로 본 클립 칸
   std::vector<int> supported_ = {1, 2, 3, 4};      // 계약 v1 슬롯의 기본
 };
 

@@ -31,11 +31,13 @@ public:
     class MotionLoader_;
 
     static std::shared_ptr<MotionLoader_> motion; // for obs computation
-    static std::shared_ptr<MotionLoader_> motion_light; // 선택 클립 «light»(서기+상체 test). 클립 칸 1. null if unset.
-    static std::shared_ptr<MotionLoader_> motion_demo6; // 선택 클립 «demo6»(진입마다 되감음). 클립 칸 2. null if unset.
+    static std::shared_ptr<MotionLoader_> motion_stand; // 합성 «stand»(정지 자세 유지). 클립 칸 0 — 재생 모드는 여기서 시작한다.
+    static std::shared_ptr<MotionLoader_> motion_light; // 선택 클립 «light»(서기+상체 test). null if unset.
+    static std::shared_ptr<MotionLoader_> motion_demo6; // 선택 클립 «demo6»(진입마다 되감음). null if unset.
 private:
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::shared_ptr<MotionLoader_> motion_; // for saving
+    std::shared_ptr<MotionLoader_> motion_stand_; // stand 칸 로더 (owns; enter() 가 로봇 기본 자세로 짓는다)
     std::shared_ptr<MotionLoader_> motion_light_; // light 클립 로더 (owns; motion_light aliases this)
     std::shared_ptr<MotionLoader_> motion_demo6_; // demo6 클립 로더 (owns; motion_demo6 aliases this)
 
@@ -131,6 +133,33 @@ public:
         num_frames = dof_positions.size();
         duration = num_frames * dt;
 
+        update(0.0f);
+    }
+
+    // «stand» 합성 클립 — 클립 재생 모드(mode4)의 0번 칸. 파일이 아니라 «로봇 기본 자세를 그대로 유지하라»
+    // 는 참조다: 관절 = q_stand(= default_joint_pos, 학습의 action offset이자 FixStand 가 세워 둔 자세라
+    // 진입 순간 점프가 0) · 관절 속도 0 · 골반 수직(identity) · 골반 높이 = 그 자세의 FK · 발-z = 두 발 접지.
+    // 미리보기(has_preview)는 «미래 20틱도 전부 이 정지 자세» 로 참이다 — 미리보기를 요구하는 슬롯이
+    // 이 칸에서 기동을 거부하지 않게, 그리고 «서 있으라» 가 미래 칸에도 그대로 가게.
+    // 프레임이 여럿인 이유 = update() 의 나머지 연산(f % num_frames)이 0 나눗셈을 만나지 않게. 값은 다 같다.
+    MotionLoader_(const Eigen::VectorXf& q_stand, float pelvis_z, int frames = 2)
+    : dt(1.0f / 50.0f)
+    {
+        Eigen::VectorXf root_pos(3); root_pos << 0.f, 0.f, pelvis_z;
+        const Eigen::VectorXf dq = Eigen::VectorXf::Zero(q_stand.size());
+        for (int i = 0; i < frames; ++i) {
+            root_positions.push_back(root_pos);
+            root_quaternions.push_back(Eigen::Quaternionf::Identity());
+            dof_positions.push_back(q_stand);
+            dof_velocities.push_back(dq);
+            foot_z_frames.push_back({STANCE_Z_FALLBACK, STANCE_Z_FALLBACK});
+            root_lin_vel.push_back(Eigen::Vector3f::Zero());
+            root_ang_vel.push_back(Eigen::Vector3f::Zero());
+        }
+        has_foot_z = true;
+        has_preview = true;
+        num_frames = frames;
+        duration = num_frames * dt;
         update(0.0f);
     }
 
