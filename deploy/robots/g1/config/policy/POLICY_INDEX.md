@@ -30,7 +30,7 @@
 | `260922_dev_v5_m45` | — | 활성 | none | — | 금지 (개발용) |
 | `260922_v1_m1gen_v2_torso_30k` | v1 | 활성 | 2026-09-20_23-05-48_s4_mode1_m1gen_v2_torso_nocom_scratch60k/model_30000.pt | ★★★☆☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s: 낙상  | 미실행 |
 | `260922_v2_m1gen_v2_toeclr_rollonly_26k5` | v2 | 활성 | 2026-09-22_18-28-05_s4_mode1_m1gen_v2_toeclr_rollonly_scratch60k/model_26500.pt | ★★★★☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s, 같은  | 미실행 |
-| `260922_v3_splayband_60k` | v3 | 활성 | 2026-09-23_15-10-34_s4_mode1_splayband_resume26k_to60k/model_59999.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `260922_v3_splayband_60k` | v3 | 활성 | 2026-09-23_15-10-34_s4_mode1_splayband_resume26k_to60k/model_59999.pt | ★★★★☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s, 같은  | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |

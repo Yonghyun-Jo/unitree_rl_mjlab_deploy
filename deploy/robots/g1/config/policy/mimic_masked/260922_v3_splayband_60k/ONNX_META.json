@@ -45,11 +45,21 @@
   },
   "verify": {
     "onnx_md5": "9d1ba2e168e0b2903289a1822acd2afc",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
-    "real_robot": "미실행"
+    "sim2sim_walk": "★★★★☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s, 같은 빌드에서 v2 를 대조로 연달아: 낙상 0 · pos_clamp 0 · |qd| crit 초과 0 샘플(최악 R_knee 82 %; 대조 L_knee 89 %) · 기울기 max 14.1°(대조 12.6°). ★ 팔자 처방이 배포 스택에서도 그대로 — 정지 hip_yaw (L−R)/2 +8.3~+9.2°(대조 −0.4~+1.1° = 일자) · 걷기 12.9/12.9/14.9°(0.5/1.0/1.5; 대조 13.0/17.4/19.3°) → 학습 sim 측정(정지 +10.4 · 걷기 13.2°)과 일치. 정지 waist_roll |1.3~3.2°| · 골반 roll +1.6~+2.6° 로 작다. 남은 관찰 ① 정지 무릎 L/R 20~26/27~33°(대조 10~12/23~24°) = 배포 스택에서도 더 깊은 웅크림(몸높이 학습 sim 77.1 vs 78.2 cm) ② 걷기 중 몸이 앞으로 기운다 — 배포 rpy_p 는 부호가 반대 규약이라 학습 sim 으로 환산하면 골반 +4~5° 앞숙임(대조 −3~−6° 뒤로), 몸통(골반+waist_pitch) +19°(대조 +9~14°). 4차의 폭주(+26° 정지)와 다르고 perturbed 게이트(8.6°)에 안 닿으며 정지 CoM +4 cm 앞·뒷걸음 0 과 같은 방향의 자세 이동이다. 계약(obs 1640 · requires 6 · 안전층 3종) 통과. (2026-09-24)",
+    "real_robot": "미실행",
+    "onnx_vs_torch": "max|Δ| = 3.815e-06 (OK, tol 0.0001)",
+    "graph": "OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
+    "obs_contract_sum": "10항 합=1640 == obs 1640  OK",
+    "mask_slice": "(-22, -20) == env.command_mask()  OK"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-09-23_15-10-34_s4_mode1_splayband_resume26k_to60k/model_59999.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/260922_v3_splayband_60k/policy.onnx",
   "deployed": {
     "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "export_device": "cpu (com1 GPU 가 teacher 학습 중 — CUDA_VISIBLE_DEVICES='' --device cpu, 로그 exported/260922_v3_splayband_60k/export_cpu.log)",
+  "sim2sim": {
+    "stars": 4,
+    "memo": "헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s, 같은 빌드에서 v2 를 대조로 연달아: 낙상 0 · pos_clamp 0 · |qd| crit 초과 0 샘플(최악 R_knee 82 %; 대조 L_knee 89 %) · 기울기 max 14.1°(대조 12.6°). ★ 팔자 처방이 배포 스택에서도 그대로 — 정지 hip_yaw (L−R)/2 +8.3~+9.2°(대조 −0.4~+1.1° = 일자) · 걷기 12.9/12.9/14.9°(0.5/1.0/1.5; 대조 13.0/17.4/19.3°) → 학습 sim 측정(정지 +10.4 · 걷기 13.2°)과 일치. 정지 waist_roll |1.3~3.2°| · 골반 roll +1.6~+2.6° 로 작다. 남은 관찰 ① 정지 무릎 L/R 20~26/27~33°(대조 10~12/23~24°) = 배포 스택에서도 더 깊은 웅크림(몸높이 학습 sim 77.1 vs 78.2 cm) ② 걷기 중 몸이 앞으로 기운다 — 배포 rpy_p 는 부호가 반대 규약이라 학습 sim 으로 환산하면 골반 +4~5° 앞숙임(대조 −3~−6° 뒤로), 몸통(골반+waist_pitch) +19°(대조 +9~14°). 4차의 폭주(+26° 정지)와 다르고 perturbed 게이트(8.6°)에 안 닿으며 정지 CoM +4 cm 앞·뒷걸음 0 과 같은 방향의 자세 이동이다. 계약(obs 1640 · requires 6 · 안전층 3종) 통과.",
+    "at": "2026-09-24T22:34"
   }
 }
