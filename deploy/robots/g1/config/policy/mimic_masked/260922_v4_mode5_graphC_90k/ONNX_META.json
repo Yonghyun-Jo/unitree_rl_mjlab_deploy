@@ -1,0 +1,112 @@
+{
+  "exported_at": "2026-09-22",
+  "slot": "260922_v4_mode5_graphC_90k",
+  "trial": "v4",
+  "trial_day": "2026-09-22",
+  "note": "실기 mode5 시험용. ONNX 는 260922_dev_v5_m45 와 바이트 동일(md5 e15d58e0…) — 새로 굽지 않았다.",
+  "deployable_real": true,
+  "purpose": "mode5(저자세 자세 전환) 실기 첫 시험. base = v5 109.5k(이 mode5 head 와 짝), head 5 = 2026-09-20 graphC lead 90k, head 4 = 09-06 160k. 🔴 mode1 에는 head 가 없다(이 base 를 쓰는 stage4 run 은 mode4·5 뿐) = 걷기는 검증된 정책이 아니다 → 이 슬롯의 실기 프로토콜은 «걷지 않는 mode5 전용»: f → m(mode1 정지) → 5 → 자세 버튼(z x b n) → z → p. 속도 명령(WASD)을 주지 않는다. mode5 에서 나올 때 1 을 누르지 않는다 — sim(메시)에서 100 s 에 1 로 나간 뒤 2.5 s 만에 bad_orientation → Passive.",
+  "staged_by": "realrobot-trial (손으로 — stage_candidates.py 는 계약 v1·mode1/2/3 전용이라 이 후보를 못 만든다)",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint",
+    "mode_table",
+    "obs_contract_v2",
+    "mode5_driver",
+    "ground_safety"
+  ],
+  "modes": [
+    1,
+    4,
+    5
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "2966",
+  "obs_contract_version": "2",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:8:10,foot_z:2:10,mode5_cmd:53:10,preview_on:1:1,preview_k1:35:1,preview:700:1",
+  "flow_base_checkpoint": "/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-02_10-05-13_stage2_v5_m5goal_tgoal_cap1024_steps6_resume49k_to120k/model_109500.pt",
+  "mode1_ckpt": "none",
+  "mode2_ckpt": "none",
+  "mode3_ckpt": "none",
+  "heads": "1=none,2=none,3=none,4=/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-06_10-55-11_s4_mode4_base109k_trackonly_mu3_resume100k_to160k/model_159997.pt,5=/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-20_19-35-40_s4_mode5_graphC_lead_resume60k_to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v4.yaml",
+  "residual_delta_clip": "None",
+  "onnxruntime_version": "1.22.0",
+  "flow_base_run": "2026-09-02_10-05-13_stage2_v5_m5goal_tgoal_cap1024_steps6_resume49k_to120k",
+  "flow_base_ckpt": "logs/rsl_rl/g1_student/2026-09-02_10-05-13_stage2_v5_m5goal_tgoal_cap1024_steps6_resume49k_to120k/model_109500.pt",
+  "mode4_ckpt": "logs/rsl_rl/g1_student/2026-09-06_10-55-11_s4_mode4_base109k_trackonly_mu3_resume100k_to160k/model_159997.pt",
+  "mode4_run": "2026-09-06_10-55-11_s4_mode4_base109k_trackonly_mu3_resume100k_to160k",
+  "mode4_train": "cmd_mode 4 · manifest motions/g1_flow_specialists_v4.yaml · actor [512,512,256] · base = 위 109.5k (train_args.json)",
+  "mode5_ckpt": "logs/rsl_rl/g1_student/2026-09-20_19-35-40_s4_mode5_graphC_lead_resume60k_to90k/model_89997.pt",
+  "mode5_run": "2026-09-20_19-35-40_s4_mode5_graphC_lead_resume60k_to90k",
+  "mode5_train": "cmd_mode 5 · manifest logs/_motion_data/mode5_gen/_subset_graphC_v2.yaml · actor [512,512,256] · base = 위 109.5k (train_args.json, 상대경로)",
+  "clips": {
+    "_rule": "--policy <슬롯> (G1_POLICY_SLOT) 은 policy_dir 만 바꾼다 — motion_file* 는 config.yaml 그대로(State_Mimic.cpp 생성자). 지금 config.yaml = 260922_v1_m1gen_v2_torso_30k/params. 이 슬롯의 params/*.npz 는 그 세 파일의 실사본(같은 이름·같은 md5) — config.yaml 을 이 슬롯으로 옮겨도 그대로 뜬다.",
+    "primary": {
+      "file": "g1_dance1_subject3_upper16s.npz",
+      "md5": "78ea9689a301721ef0735d5746cdd03b",
+      "source": "COLMOv2/dance/dance1_subject3.npz 프레임 200–999 그대로 + 50프레임 복귀 구간(850f, 17.0 s)",
+      "manifest_v4": "COLMO/dance/dance1_subject3.npz (v1 리타겟, md5 b2ceba35380ccb8436dfc4ba03fac71c) — 다른 리타겟. mode4 가 학습한 판이 아니다"
+    },
+    "light": {
+      "file": "g1_aiming_stand10s.npz",
+      "md5": "b9231c18c6b34d1e097b110400fff645",
+      "source": "COLMOv2/aiming/aiming1_subject1.npz 프레임 1857–2356 (7 배열 전부 Δ=0)",
+      "manifest_v4": "COLMOv2/aiming/aiming1_subject1.npz (md5 b639aa30b51cc9a93c365b302223ddb6) — 같은 데이터의 구간"
+    },
+    "demo6": {
+      "file": "g1_dance1_subject2_colmov2.npz",
+      "md5": "b94bddb7f3f31627db4ea95e042237e5",
+      "source": "COLMOv2/dance/dance1_subject2.npz",
+      "manifest_v4": "COLMOv2/dance/dance1_subject2.npz (md5 b94bddb7f3f31627db4ea95e042237e5) — 바이트 동일"
+    }
+  },
+  "verify": {
+    "onnx_md5": "e15d58e0051cfc85b3ca84af653e4899",
+    "onnx_vs_torch": "max|Δ| = 4.768e-06 (OK, tol 0.0001) modes 1,2,3,4,5 · ORT 1.22.0",
+    "parity_per_mode": {
+      "1": "3.010e-06",
+      "2": "4.768e-06",
+      "3": "4.530e-06",
+      "4": "4.292e-06",
+      "5": "3.815e-06"
+    },
+    "graph": "OK — GEMM 54 = enc 4 + motion 2 + actor 5×6 + heads 18",
+    "obs_contract_sum": "14항 합=2966 == obs 2966  OK (policy 2230 + motion 736)",
+    "mask_slice": "(1672, 1680) == env.command_mask()  OK (모드 1~5)",
+    "head_pairing": "mode4·mode5: base 짝 OK · cmd_mode 4/5 일치",
+    "startup": "요구 기능 10개 전부 지원 · ONNX 계약 v2 — 항 14개 통과 · 아는 모드 1 4 5 · 클립 미리보기 항 있음(세 클립 모두 body_lin/ang_vel_w)",
+    "sim2sim_stand": "헤드리스 :97, mode1(base 만) 밴드 해제 뒤 20 s 정지 🟢 — scene_g1.xml: 기울기 max 5.3° · |qd| max 5.83 · pos_clamp 0 · 최종 mode1 / scene_g1_prim.xml: 기울기 max 5.1° · |qd| max 5.31 · pos_clamp 0 · 최종 mode1. xvfb99 재시작 0 (2026-09-22)",
+    "real_robot": "금지 (개발용)",
+    "sim2sim_mode5_mesh": "2026-09-29 헤드리스, 메시 장면(scene_g1.xml), s2s_scripts/b2_mode5_loop.txt 114 s: 자세 7/7 도착(0.47~3.50 s) — 진입 직립 0.47 · 네발 1.08 · 직립 1.43 · 앉기 1.35 · 직립 3.13 · 눕기 2.12 · 직립 3.50. 안전 이벤트 0(자세 구간), pos_clamp 1 tick(0.091 rad), rate_limit 0, nan_hold 0. |qd| 최대 21.90 rad/s @L_knee (warn 12 / crit 19) — 🔴 임계 초과이나 지속이 짧아 가드는 안 뜬다: ≥12 는 8구간·최장 43 ms, ≥19 는 1구간·19 ms (트립 조건 = 100 ms 연속). 기울기 최대 94.2°(의도된 눕기). 🔴 100 s 에 mode1 로 나간 뒤 2.5 s 만에 bad_orientation(57.4°) → Passive = 헤드 없는 base 의 한계. 종료는 p 로 한다. 로그 = scratchpad/s2s_mode5_mesh.log",
+    "sim2sim_mode5_prim": "2026-09-22 B2 Task 11, 구·캡슐 장면: 자세 7/7 도착(0.5~3.4 s)·눕기에 Passive 없음 (같은 ONNX·같은 프리셋 헤더)",
+    "sim2sim_walk": "★★★★☆ 메시 장면 mode5 고리 7/7 도착(0.47~3.50 s)·안전 이벤트 0·|qd| 초과는 최장 43 ms 로 가드 미발동. v4 별칭으로 재확인(진입 직립 0.47 s·네발·직립). 🔴 mode1 은 헤드 없는 base — 1 로 나가면 2.5 s 뒤 Passive → 종료는 p (2026-09-29)"
+  },
+  "export_repo": "/home/piene/mjlab1.4/mjlab_g1_mode45 @ c25bebe (mode45_playback_ground)",
+  "export_device": "cpu (CUDA_VISIBLE_DEVICES='' --device cpu — com1 GPU 는 다른 세션 학습 중, Ruling 28). 로그 = /home/piene/mjlab1.4/mjlab_g1_motion/exported/260922_dev_v5_m45/export_cpu.log",
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_mode45 && CUDA_VISIBLE_DEVICES= ~/.local/bin/uv run --no-sync --with onnxruntime==1.22.0 python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --device cpu --flow-base-checkpoint /home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-02_10-05-13_stage2_v5_m5goal_tgoal_cap1024_steps6_resume49k_to120k/model_109500.pt --manifest motions/g1_flow_specialists_v4.yaml --head 4=/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-06_10-55-11_s4_mode4_base109k_trackonly_mu3_resume100k_to160k/model_159997.pt --head 5=/home/piene/mjlab1.4/mjlab_g1_motion/logs/rsl_rl/g1_student/2026-09-20_19-35-40_s4_mode5_graphC_lead_resume60k_to90k/model_89997.pt --num-envs 4 --out /home/piene/mjlab1.4/mjlab_g1_motion/exported/260922_dev_v5_m45/policy.onnx",
+  "obs_block": "params/deploy.yaml observations: = deploy/scripts/gen_obs_block.py exported/policy.onnx 출력 그대로",
+  "deployed": {
+    "status": "안 함 — 개발용 (policy_slot push 금지)"
+  },
+  "staged_at": "2026-09-29",
+  "real_trial_protocol": [
+    "f",
+    "m (mode1 정지 — 헤드 없는 base, 서 있기만)",
+    "5 (mode5 진입 = 직립 프리셋)",
+    "x 네발 → z 직립",
+    "b 바닥 앉기 → z",
+    "n 드러누움 → z",
+    "p (Passive 로 종료 — 1 로 나가지 않는다)"
+  ],
+  "sim2sim": {
+    "stars": 4,
+    "memo": "메시 장면 mode5 고리 7/7 도착(0.47~3.50 s)·안전 이벤트 0·|qd| 초과는 최장 43 ms 로 가드 미발동. v4 별칭으로 재확인(진입 직립 0.47 s·네발·직립). 🔴 mode1 은 헤드 없는 base — 1 로 나가면 2.5 s 뒤 Passive → 종료는 p",
+    "at": "2026-09-29T10:26"
+  }
+}
