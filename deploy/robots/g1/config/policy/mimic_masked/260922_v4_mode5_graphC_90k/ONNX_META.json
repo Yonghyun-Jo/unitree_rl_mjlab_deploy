@@ -82,7 +82,7 @@
     "head_pairing": "mode4·mode5: base 짝 OK · cmd_mode 4/5 일치",
     "startup": "요구 기능 10개 전부 지원 · ONNX 계약 v2 — 항 14개 통과 · 아는 모드 1 4 5 · 클립 미리보기 항 있음(세 클립 모두 body_lin/ang_vel_w)",
     "sim2sim_stand": "헤드리스 :97, mode1(base 만) 밴드 해제 뒤 20 s 정지 🟢 — scene_g1.xml: 기울기 max 5.3° · |qd| max 5.83 · pos_clamp 0 · 최종 mode1 / scene_g1_prim.xml: 기울기 max 5.1° · |qd| max 5.31 · pos_clamp 0 · 최종 mode1. xvfb99 재시작 0 (2026-09-22)",
-    "real_robot": "금지 (개발용)",
+    "real_robot": "실기 2회 · 최근 ★★★★☆ (09-29 15:17)",
     "sim2sim_mode5_mesh": "2026-09-29 헤드리스, 메시 장면(scene_g1.xml), s2s_scripts/b2_mode5_loop.txt 114 s: 자세 7/7 도착(0.47~3.50 s) — 진입 직립 0.47 · 네발 1.08 · 직립 1.43 · 앉기 1.35 · 직립 3.13 · 눕기 2.12 · 직립 3.50. 안전 이벤트 0(자세 구간), pos_clamp 1 tick(0.091 rad), rate_limit 0, nan_hold 0. |qd| 최대 21.90 rad/s @L_knee (warn 12 / crit 19) — 🔴 임계 초과이나 지속이 짧아 가드는 안 뜬다: ≥12 는 8구간·최장 43 ms, ≥19 는 1구간·19 ms (트립 조건 = 100 ms 연속). 기울기 최대 94.2°(의도된 눕기). 🔴 100 s 에 mode1 로 나간 뒤 2.5 s 만에 bad_orientation(57.4°) → Passive = 헤드 없는 base 의 한계. 종료는 p 로 한다. 로그 = scratchpad/s2s_mode5_mesh.log",
     "sim2sim_mode5_prim": "2026-09-22 B2 Task 11, 구·캡슐 장면: 자세 7/7 도착(0.5~3.4 s)·눕기에 Passive 없음 (같은 ONNX·같은 프리셋 헤더)",
     "sim2sim_walk": "★★★★☆ 메시 장면 mode5 고리 7/7 도착(0.47~3.50 s)·안전 이벤트 0·|qd| 초과는 최장 43 ms 로 가드 미발동. v4 별칭으로 재확인(진입 직립 0.47 s·네발·직립). 🔴 mode1 은 헤드 없는 base — 1 로 나가면 2.5 s 뒤 Passive → 종료는 p (2026-09-29)"

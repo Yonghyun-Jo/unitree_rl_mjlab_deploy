@@ -1,0 +1,55 @@
+{
+  "exported_at": "2026-10-01",
+  "slot": "261001_v1_cmdresample_zhold_87k5",
+  "trial": "v1",
+  "trial_day": "2026-10-01",
+  "note": "8차 head(launch d440089, 실기 v3=6차 60k 에서 이어 27.9k → 87.5k). 260922 v3 와 base·manifest·steps·obs·FOOT_GEN 동일, 바뀐 것은 reward·명령 분포뿐: ① 명령을 에피소드 중간에 다시 뽑는다(3~8 s 랜덤, 절반 계단·절반 0.2~1.5 s 램프) — 여태 명령이 에피소드 내내 상수라 «걷다 멈춤» 전환을 한 번도 학습하지 않았다(실기 260929 의 공중 재스텝이 그 OOD) ② 명령이 정확히 0 으로 뽑히면 6~14 s 붙잡는다(zero_hold) — 재추첨만 넣으니 정지 구간이 p50 10 → 4.2 s 로 짧아져 7차가 20 s 홀드에서 초당 3회 제자리걸음으로 굳었다 ③ 정착 창을 perturbed 게이트에서 제외(감속 구간에서 shaping 이 꺼지던 것) ④ stand_planted −1.5 → −2.0. sim 실측(GPU 64 env, 비교 = 실기 v3 = G6 60k · C60k = 실기 260917 라인 · JUL14 = 7월 레시피 재현): ★ 정지 20 s 홀드 들림 2-5/5-10/10-15/15-20 s = 0.03/0.03/0.00/0.00 (제자리걸음 해소) · 발 배치 품질 0.995(v3 0.905) · 정지 팔꿈치 36.8°(v3 −2.7° = 팔이 거의 펴지던 결함 해소, C 44.1) · 걷기 팔자 9.2~9.8°(v3 12.6~14.8, teacher 9.6 = teacher 수준) · 속도 추종 1.00/1.40 m/s(v3 0.92/1.31, C 0.99/1.40) · 스윙 발끝 p50 2.3~2.6 cm·1 cm 미만 0 %(C 1.2~1.7 이고 1.5 m/s 에서 35 %) · 뒤로 치우침 0 %(dx p10 +4.0 cm = 뒤로 가는 env 없음) · 측면 표류 |dy| p90 4.0 cm(v3 7.0) · 낙상 0. 🔴 남은 것: ① action_rate ÷w 5.41 → 8.07(+49 %, 학습 끝까지 상승) = 동작이 거칠어졌다 ② 정지 후 **전진 크리프 +6.8 cm/9 s**(후반 4.5 s 에도 +2.6) — 발을 안 들고(들기 p50 0) 미끄러져 나간다. no_slip ÷w 0.211 → 0.292 가 뒷받침. 🔴 실기는 못 미끄러지니 이 크리프가 **스텝으로 돌아올 수 있다**(09-01 원장: sim 은 정지 정리의 절반을 미끄러짐으로 처리하고 실기는 전부 스텝으로 보였다) ③ 전환 재들림 측면 59 %(v3 50 %)·전진 9 %(v3 3 %) = 전환 꼬리는 안 고쳐졌다 ④ 정지 waist_roll 진폭 4.1°(v3 2.1) ⑤ track_gen_q 0.648 → 0.538. 실기 관전 = 멈췄을 때 제자리걸음이 사라졌는가(1순위) · 멈춘 뒤 앞으로 밀려 나가는가(sim 크리프가 스텝으로 보이는가) · 동작이 거칠어졌는가 · 뒤로 기울기(droop 은 별건) · 전환(vy·wz 크게 → 0) 불안 · 러닝.",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-09-30_15-14-59_s4_mode1_cmdresample_zhold_sp2_resume60k_to90k/model_87500.pt",
+  "mode1_run": "2026-09-30_15-14-59_s4_mode1_cmdresample_zhold_sp2_resume60k_to90k",
+  "mode1_launch_commit": "d440089d50fcd3214179a2b3666dd5279dae5e2e",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_md5": "be17be63334f17a3904b7bbe654f2b4e",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-09-30_15-14-59_s4_mode1_cmdresample_zhold_sp2_resume60k_to90k/model_87500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261001_v1_cmdresample_zhold_87k5/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  }
+}
