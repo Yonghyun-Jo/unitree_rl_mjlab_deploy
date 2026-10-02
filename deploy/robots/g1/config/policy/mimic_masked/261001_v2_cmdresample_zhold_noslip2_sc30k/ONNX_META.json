@@ -1,0 +1,59 @@
+{
+  "exported_at": "2026-10-02",
+  "slot": "261001_v2_cmdresample_zhold_noslip2_sc30k",
+  "trial": "v2",
+  "trial_day": "2026-10-01",
+  "note": "9차 head — v1(8차 87.5k)과 같은 레시피를 **바닥부터 30k** 다시 돌린 판. base·manifest·steps·obs·FOOT_GEN(min_swing 0.08) 동일, 바뀜 것은 단 하나 **no_slip −1.5 → −2.0**(launch bb59498) + scratch. 이유 = v1 의 유일한 새 거품인 «정지 후 전진 토리프 +6.8 cm/9 s» 를 결냈다(삼 9 s 동엄 미끄러진). sim 실제섭(GPU 64 env, 8차 완주 평가와 동일 조건 · 대조 = v1 87.5k · 260922 v3 = 6차 60k): ★ 정지 dx p50 +3.2 cm · **후반 4.5 s −0.3 = 섬다**(v1 +6.8 · 후반 +2.7 = 9 s 내내 간다) · 20 s 홀드 들림 2-5/5-10/10-15/15-20 s = 0/0/0/0(v1 0.03/0.03/0/0) · 스윙 발끝 2.7/2.8/3.1/4.0 cm · 발 최고 4.0/**5.2**/5.0/7.1(v1 3.8/3.6/4.6/6.2 = 발을 1~1.6 cm 더 들어 사용자 요구 방향) · 1 cm 밑 발끝 0 % · 정지 발 배치 q 0.976(v1 0.995) · 정지 무릎 좌우대칭 30.9/31.3(v1 14.4/24.9 = 10.5° 차) · 정지 waist_roll 진폭 1.4°(v1 3.6) · 어깨 pitch 0.6°(v1 3.9) · 낙상 0 · action_rate ÷w 7.93(v1 8.05) · no_slip ÷w 0.294(v1 0.289). 🔴 남은 것(전부 v1 대비 역전): ① **정지 욬크림 31.1°**(v1 19.7 · 실기 v3 26.4) — 욬크림은 실기 droop 증폭기라 **뒤쯏림이 v3 보다 나뱠 수 있다** = 관전 1위 위험. 마지막 2.5k 에서 23 → 31° 로 깊어진 것이고 지직 10~20 s 에서도 유지된다(정착 과도 아님) ② 팔자 12.0~13.6°(v1 7.4~9.8, teacher 9.6) = 실기 v3 수준 복귀 ③ **전진 정지 전환 재들림 42 %**(v1 9 % · v3 5 %), 상대적으로 제일 나은 것은 상대 전환 53 %(v1 59 %) ④ 속도 추종 1.29 m/s @cmd 1.5(v1 1.39) · base_vel_track ÷w 0.357(v1 0.435) = 30k 미성숙 ⑤ 보행 waist_roll 11.8°(v1 8.1~9.7) ⑥ 정지 허리 roll 이 한쪽으로 **+5.6°**(env 100 % 같은 방향, 골반은 −0.1 = 수평) — v1 은 반대로 골반 −5.3·허리 −5.4 지그재고 몼통은 수직. 실기 관전(우선순): ① 지직 뒤쯏림이 v3 보다 심한가(욬크림 31°) ② 지직 후 전진 밀림이 없어지는가(v1 의 토리프가 이 판에선 sim 에서 사라졌다) ③ 전진에서 정지할 때 공중 재스툹 ④ 팔자 ⑤ 지직 자세가 한쪽으로 기울어 보이는가 ⑥ 러닝(발을 더 드니 걸림은 더 없어야 한다).",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-10-01_19-05-20_s4_mode1_cmdresample_zhold_noslip2_scratch30k/model_29999.pt",
+  "mode1_run": "2026-10-01_19-05-20_s4_mode1_cmdresample_zhold_noslip2_scratch30k",
+  "mode1_launch_commit": "bb594981433f78d47940c17b8fa6e6e2a1332ee4",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 7.451e-06 (tol 0.0001) OK",
+    "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
+    "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
+    "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
+    "onnx_md5": "3fd40e2cd790fb7cc2ae0116ddbaaa31",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-10-01_19-05-20_s4_mode1_cmdresample_zhold_noslip2_scratch30k/model_29999.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261001_v2_cmdresample_zhold_noslip2_sc30k/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  }
+}
