@@ -49,11 +49,16 @@
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
     "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
     "onnx_md5": "3fd40e2cd790fb7cc2ae0116ddbaaa31",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "sim2sim_walk": "★★★★☆ 헤드리스 램프(v1 과 같은 대본 ramp_cmd.csv 59 s: 0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8). C++ 무변경이라 v1 수치와 직접 비교. 낙상 0 · pos_clamp 0 · |qd| crit 초과 0 샘플(최악 R_knee 65 %; v1 61 %) · 기울기 max 10.8°(v1 9.7°, 단 그 최댓값은 2.0 m/s 구간이고 **정지 구간 기울기 max 는 2.3~5.0° 로 v1 의 4.5~9.6° 보다 훨씬 평평하다**). ★ 정지 좌우 대칭이 전면적으로 좋아졌다: 무릎 L/R 32.0/32.4°(v1 14.5/36.2 = 21° 차) · 팔벌림 L/R 28.4/28.2(v1 21.6/34.3 = 13° 차) · 골반 roll −0.2~+0.1°(v1 +1.0~+6.0) — 10-01 에 v1 의 🔴 로 적은 세 비대칭이 모두 사라졌다. 🔴 남은 것: ① 정지 waist_roll **+3.8~+5.9°** 한 방향(v1 −2.8~−6.0, 크기는 비슷하고 부호만 반대) = 몸이 허리에서 한쪽으로 굽는다. mjlab 실측과 일치(허리 +5.6°·골반 −0.1°·env 100 % 동일 방향) → 10-02 에 정지 전용 roll 항 둘(torso_tilt stand_weight ×3 · roll_lock −1.5 eff_free 0.3)로 처방하고 이어학습 예정 ② 정지 무릎 32° = v1(평균 ~25)보다 깊은 웅크림 → 실기 droop 증폭 위험 1순위 ③ 걷기 hip_yaw (L−R)/2 11.3~12.7°(v1 9.2~12.3, teacher 9.6) = 팔자가 조금 더 크다. (2026-10-02)",
     "real_robot": "미실행"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-10-01_19-05-20_s4_mode1_cmdresample_zhold_noslip2_scratch30k/model_29999.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261001_v2_cmdresample_zhold_noslip2_sc30k/policy.onnx",
   "deployed": {
     "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "sim2sim": {
+    "stars": 4,
+    "memo": "헤드리스 램프(v1 과 같은 대본 ramp_cmd.csv 59 s: 0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8). C++ 무변경이라 v1 수치와 직접 비교. 낙상 0 · pos_clamp 0 · |qd| crit 초과 0 샘플(최악 R_knee 65 %; v1 61 %) · 기울기 max 10.8°(v1 9.7°, 단 그 최댓값은 2.0 m/s 구간이고 **정지 구간 기울기 max 는 2.3~5.0° 로 v1 의 4.5~9.6° 보다 훨씬 평평하다**). ★ 정지 좌우 대칭이 전면적으로 좋아졌다: 무릎 L/R 32.0/32.4°(v1 14.5/36.2 = 21° 차) · 팔벌림 L/R 28.4/28.2(v1 21.6/34.3 = 13° 차) · 골반 roll −0.2~+0.1°(v1 +1.0~+6.0) — 10-01 에 v1 의 🔴 로 적은 세 비대칭이 모두 사라졌다. 🔴 남은 것: ① 정지 waist_roll **+3.8~+5.9°** 한 방향(v1 −2.8~−6.0, 크기는 비슷하고 부호만 반대) = 몸이 허리에서 한쪽으로 굽는다. mjlab 실측과 일치(허리 +5.6°·골반 −0.1°·env 100 % 동일 방향) → 10-02 에 정지 전용 roll 항 둘(torso_tilt stand_weight ×3 · roll_lock −1.5 eff_free 0.3)로 처방하고 이어학습 예정 ② 정지 무릎 32° = v1(평균 ~25)보다 깊은 웅크림 → 실기 droop 증폭 위험 1순위 ③ 걷기 hip_yaw (L−R)/2 11.3~12.7°(v1 9.2~12.3, teacher 9.6) = 팔자가 조금 더 크다.",
+    "at": "2026-10-02T23:07"
   }
 }

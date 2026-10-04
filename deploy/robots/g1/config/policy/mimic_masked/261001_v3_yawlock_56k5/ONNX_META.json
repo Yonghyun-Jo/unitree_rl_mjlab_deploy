@@ -1,0 +1,59 @@
+{
+  "exported_at": "2026-10-04",
+  "slot": "261001_v3_yawlock_56k5",
+  "trial": "v3",
+  "trial_day": "2026-10-01",
+  "note": "10차 head — v2(9차 30k)에서 26.7k 이어학습(56.7k 에서 사용자 종료). v2 와 base·manifest·steps·obs·FOOT_GEN 동일, 바뀜 것은 reward 둘: ① **yaw_lock 신설**(−2.0 · eff_free 0.3 · |허리 yaw|+5·yaw², 정지 전용·밀리면 해제) — v2 가 정지에서 상체를 **왼쪽으로 12.9° 돌려 고정**하고 있었고(q_des=q 라 드룹 아니라 «명령» · env 100 % 동일 방향 · 시간 흔들림 0.7° = 굳은 할쇎) 이 양을 보는 항이 하나도 없었다 ② 10-02 에 얓었던 roll 처방 되돌림(torso_tilt.stand_weight 3.0→1.0 · roll_lock −1.5→0.0). sim 실제섭(CPU 16 env, 정지 창 2개): ★ **허리 yaw +12.9° → −1.2°** · 몼통↔발 yaw +14.4 → **−2.3°** · 골반↔발 공통모드 +1.1°(3° 초과 env 0 % = 골반으로 도리지 않았다) · 20 s 홀드 들림 2-20 s **전부 0** · 배치 품질 0.968 · 낙상 0 · 정지 변위 dx p50 **+4.5/+2.3 cm(앞으로)** · 뒤로 5 cm 초과 **0 %** · 상쪽 표루 |dy| p90 **2.0 cm(지금까지 중 최소)**. 곡선: base_vel_track ÷w **0.409**(v1 완주 0.435 거의 도달, v2 30k 0.357) · no_slip ÷w **0.252**(v1 0.289 보다 좋다) · foot_z_track 1.078 · action_rate 8.03(v1 8.05) · fall_guard 0.667. 🔴 관전 1위 = **뒤쏏림**: sim CoM_x 는 +2.1~+2.5 cm 로 정상인데 실기 뒤쏏림의 **예재자 세 개가 동시에 나뱠다** — 정지 골반 pitch +1.3°(v2) → **−2.8°** · 욬크림 31.8 → **43.4°**(지금까지 전 판 중 최심, 실기 v3=6차 26.7 · v1 19.3 · 7월 15.3) · 골반 높이 76.6 → **74.5 cm**(7월 78.5 보다 4 cm 낮다). 실기 무릎 droop 은 sim 의 3.4배이고 6차(26.7°)가 12.6° droop·골반 −3.4° 를 냈다 → **이 판은 v2 보다 뒤쯏림 위험이 훨씬 크다.** ③ 팔자 정지 12.1°(teacher 9.6) ④ 정지 자세가 30k→56.7k 에 걸쳐 **단조로** 허리를 펴고(22.2→11.2°) 골반이 가라았다(방향성 드리트, `base_h` 의 정지 바닥이 74 cm 라 거기서 포화). 실기 관전: ① 멈첔을 때 뒤로 기울기(v2·v1 와 직접 비교) ② 상쪽이 한쪽으로 틀어졌는가(v2 의 불만이 여기서 사라졌는지) ③ 팔자 ④ 속도 추종(v2 보다 좋아진 축) ⑤ 러닝.",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-10-03_12-14-02_s4_mode1_yawlock2p0_resume30k_to60k/model_56500.pt",
+  "mode1_run": "2026-10-03_12-14-02_s4_mode1_yawlock2p0_resume30k_to60k",
+  "mode1_launch_commit": "2318d2eb7b6b62040f43b5901cab2b641f4eb216",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 2.265e-06 (tol 0.0001) OK",
+    "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
+    "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
+    "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
+    "onnx_md5": "e9882b6299178ddf66ae05f54c3d1400",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-10-03_12-14-02_s4_mode1_yawlock2p0_resume30k_to60k/model_56500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261001_v3_yawlock_56k5/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  }
+}
