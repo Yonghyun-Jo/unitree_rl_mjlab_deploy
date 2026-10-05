@@ -110,6 +110,14 @@ def scenarios() -> list[dict]:
         off = (t == 20)
         steps.append(dict(reset=(t == 0), press=(q if t == 0 else -1),
                           z=MP.PRESETS[q].z + (0.3 if off else 0.0), g=uq))
+    # E) 🔴 «놓기»(hold_z_mask_s) 를 덮는다. A 는 자세당 2.0 s 뿐이라 직립의 1.5 s 경계에 걸려
+    #    놓기 틱이 골든에 안 들어간다 — 그러면 C++ 가 놓기를 빼먹어도 골든이 통과한다.
+    #    놓는 자세(직립, 1.5 s)와 놓지 않는 자세(네발, None)를 **둘 다** 6 s 굴린다.
+    for i in (enter, q):
+        ui = MP._unit(MP.PRESETS[i].g_pelvis).numpy().astype(np.float64)
+        for t in range(300):                       # 6.0 s @ dt=0.02
+            steps.append(dict(reset=(t == 0), press=(i if t == 0 else -1),
+                              z=MP.PRESETS[i].z, g=ui))
     return steps
 
 
@@ -145,6 +153,7 @@ def build() -> dict[pathlib.Path, str]:
         key = f"'{keys[i]}'" if i in keys else "'\\0'"
         rows.append(f'  {{"{p.name}", {key}, {p.z!r}, {f32(p.transit_z_mask)}, '
                     f'{f32(p.hold_z_mask)}, '
+                    f'{float(p.hold_z_mask_s) if p.hold_z_mask_s is not None else -1.0!r}, '
                     f'{{{{{", ".join(f32(x) for x in u)}}}}}, '
                     f'{{{{{", ".join(f32(x) for x in cmd)}}}}}, {p.n}}},')
     header = f"""#pragma once
@@ -171,6 +180,10 @@ struct Preset {{
   float hold_z_mask;                       // 🔴 도착 «후»(유지) 의 z_mask. 2026-10-05 신설 —
                                            // 그전엔 유지가 0 고정이었다. 값의 근거는 학습 표
                                            // (mode5_presets.Posture.hold_z_mask 머리말)
+  double hold_z_mask_s;                    // 🔴 유지에서 위 값을 몇 초만 쓰고 0 으로 «놓을» 지.
+                                           // **음수 = 끝까지 유지** (파이썬의 None). 직립만 1.5 —
+                                           // 시계를 멈추면(t_goal 클램프) 정책이 영원히 «정착 중»
+                                           // 좌표에 갇힌다. 근거 = Posture.hold_z_mask_s 머리말
   std::array<float, 3> g_pelvis_unit;
   std::array<float, CMD_DIM> cmd;
   int n;                                   // 근거 구간 수 (버튼 라벨용)

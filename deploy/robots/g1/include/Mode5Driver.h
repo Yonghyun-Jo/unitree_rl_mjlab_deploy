@@ -4,7 +4,8 @@
 //   press(p)  → transit · t=0 · 도착 누적 0
 //   tick(z,g) → transit 이면 도착 판정(|z−z*|<TOL ∨ (g·g* ≥ ARRIVE_G_DOT ∧ |z−z*| < ARRIVE_Z_LOOSE))을
 //               누적해 HOLD_S 이상이면 hold 로(t=0). 명령 = 프리셋 + z_mask(프리셋의 transit_z_mask /
-//               hold_z_mask — 🔴 2026-10-05: 유지가 0 고정이 아니라 프리셋별이 됐다)
+//               hold_z_mask — 🔴 2026-10-05: 유지가 0 고정이 아니라 프리셋별이 됐다. 그리고
+//               hold_z_mask_s >= 0 이면 그 초가 지나면 0 으로 «놓고» t_goal 을 리셋한다)
 //               + t_goal = min(t, T_GOAL_MAX). 그 뒤 t += dt.
 // 🔴 수치 규약까지 같게 한다: 시간·도착 누적·높이 차는 double(파이썬 float), g 내적은 float(torch float32).
 //    이 규약이 어긋나면 도착 틱이 하나 밀려 hold 전환 시각이 달라진다 — 골든이 그것을 잡는다.
@@ -36,10 +37,10 @@ class Mode5Driver {
   // 버튼 = 새 목표. 같은 자세를 다시 눌러도 새 목표(트랜짓 재시작) — 학습의 «목표가 바뀌면 t_goal 리셋».
   bool press(int preset) {
     if (preset < 0 || preset >= m5::N_PRESETS) return false;
-    preset_ = preset; hold_ = false; t_ = 0.0; arrive_ = 0.0;
+    preset_ = preset; hold_ = false; t_ = 0.0; arrive_ = 0.0; released_ = false;
     return true;
   }
-  void reset() { preset_ = -1; hold_ = false; t_ = 0.0; arrive_ = 0.0; }
+  void reset() { preset_ = -1; hold_ = false; t_ = 0.0; arrive_ = 0.0; released_ = false; }
 
   bool active() const { return preset_ >= 0; }
   int preset() const { return preset_; }
@@ -64,9 +65,13 @@ class Mode5Driver {
     if (!hold_) {
       arrive_ = arrived(z_now, g) ? arrive_ + dt_ : 0.0;
       if (arrive_ >= m5::HOLD_S) { hold_ = true; t_ = 0.0; arrive_ = 0.0; }
+    } else if (!released_ && p.hold_z_mask_s >= 0.0 && t_ >= p.hold_z_mask_s) {
+      // 정착 뒤 높이 명령을 놓는다 (Mode5Presets.h 의 hold_z_mask_s 주석). 목표 벡터가 바뀌므로
+      // t_goal 리셋 — 도착 전환과 같은 규칙. released_ 는 한 방향이라 깜빡이지 않는다.
+      released_ = true; t_ = 0.0;
     }
     cmd = p.cmd;
-    cmd[m5::SLOT_Z_MASK] = hold_ ? p.hold_z_mask : p.transit_z_mask;
+    cmd[m5::SLOT_Z_MASK] = hold_ ? (released_ ? 0.0f : p.hold_z_mask) : p.transit_z_mask;
     cmd[m5::SLOT_T_GOAL] = static_cast<float>(std::min(t_, m5::T_GOAL_MAX));
     t_ += dt_;
     return cmd;
@@ -75,7 +80,7 @@ class Mode5Driver {
  private:
   double dt_;
   int preset_ = -1;
-  bool hold_ = false;
+  bool hold_ = false, released_ = false;
   double t_ = 0.0, arrive_ = 0.0;
 };
 

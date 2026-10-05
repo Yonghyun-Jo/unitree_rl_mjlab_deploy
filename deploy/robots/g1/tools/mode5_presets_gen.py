@@ -1,5 +1,5 @@
 # 🔴 생성 파일. 손으로 고치지 않는다.  deploy/scripts/gen_mode5_presets_header.py --write
-#   학습 사실: mjlab_g1_motion/mode5_presets.py @ afbb1fc2e325
+#   학습 사실: mjlab_g1_motion/mode5_presets.py @ 8f31d3efbcf7
 """mode5 자세 버튼 표의 파이썬 판 — GUI 가 버튼을 이 표에서 만든다. shm 의 m5_preset = index + 1."""
 ENTER_PRESET = 0
 PRESETS = [  # (index, name, key, n)
