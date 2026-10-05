@@ -118,6 +118,13 @@ def scenarios() -> list[dict]:
         for t in range(300):                       # 6.0 s @ dt=0.02
             steps.append(dict(reset=(t == 0), press=(i if t == 0 else -1),
                               z=MP.PRESETS[i].z, g=ui))
+    # F) 🔴 «전이는 t_goal 상한을 안 받는다» 를 덮는다. E 의 네발은 바로 도착해 유지로 가므로
+    #    전이에서 t_goal 이 2.0(네발 상한)을 넘는 틱이 골든에 없다 — 그러면 C++ 가 상한을 전이에도
+    #    걸어도 골든이 통과한다(2026-10-05 돌연변이로 확인). 그래서 **영원히 도착 못 하는** 높이로
+    #    6 s 굴려 전이 상태의 t_goal 을 포화까지 올린다.
+    for t in range(300):
+        steps.append(dict(reset=(t == 0), press=(q if t == 0 else -1),
+                          z=MP.PRESETS[q].z + 0.40, g=uq))   # 40 cm 위 = z 규칙·자세 규칙 둘 다 불성립
     return steps
 
 
@@ -154,6 +161,7 @@ def build() -> dict[pathlib.Path, str]:
         rows.append(f'  {{"{p.name}", {key}, {p.z!r}, {f32(p.transit_z_mask)}, '
                     f'{f32(p.hold_z_mask)}, '
                     f'{float(p.hold_z_mask_s) if p.hold_z_mask_s is not None else -1.0!r}, '
+                    f'{float(p.hold_t_goal_max) if p.hold_t_goal_max is not None else -1.0!r}, '
                     f'{{{{{", ".join(f32(x) for x in u)}}}}}, '
                     f'{{{{{", ".join(f32(x) for x in cmd)}}}}}, {p.n}}},')
     header = f"""#pragma once
@@ -180,10 +188,17 @@ struct Preset {{
   float hold_z_mask;                       // 🔴 도착 «후»(유지) 의 z_mask. 2026-10-05 신설 —
                                            // 그전엔 유지가 0 고정이었다. 값의 근거는 학습 표
                                            // (mode5_presets.Posture.hold_z_mask 머리말)
+  // 🔴 아래 두 줄의 **순서는 값 방출 순서와 같아야 한다**(gen 의 rows.append). 어긋나면 두 값이
+  //    서로 바뀌어 들어가고, 골든이 step 99 slot 4·52 에서 그것을 잡는다 (2026-10-05 실제로 잡혔다).
   double hold_z_mask_s;                    // 🔴 유지에서 위 값을 몇 초만 쓰고 0 으로 «놓을» 지.
                                            // **음수 = 끝까지 유지** (파이썬의 None). 직립만 1.5 —
                                            // 시계를 멈추면(t_goal 클램프) 정책이 영원히 «정착 중»
                                            // 좌표에 갇힌다. 근거 = Posture.hold_z_mask_s 머리말
+  double hold_t_goal_max;                  // 🔴 유지에서 t_goal 을 이 값에서 **멈춘다**(상한).
+                                           // **음수 = 멈추지 않음**(T_GOAL_MAX 까지 램프). 네발만 2.0 —
+                                           // 그 자세의 «유지 + 높이명령» 학습 데이터가 포화 구간에서
+                                           // **기어가던 것**이라(speed_p50 0.17~0.33 m/s) t_goal 3.0 은
+                                           // 「네발로 움직일 때」 좌표다. 근거 = Posture.hold_t_goal_max
   std::array<float, 3> g_pelvis_unit;
   std::array<float, CMD_DIM> cmd;
   int n;                                   // 근거 구간 수 (버튼 라벨용)

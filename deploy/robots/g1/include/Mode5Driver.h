@@ -6,6 +6,7 @@
 //               누적해 HOLD_S 이상이면 hold 로(t=0). 명령 = 프리셋 + z_mask(프리셋의 transit_z_mask /
 //               hold_z_mask — 🔴 2026-10-05: 유지가 0 고정이 아니라 프리셋별이 됐다. 그리고
 //               hold_z_mask_s >= 0 이면 그 초가 지나면 0 으로 «놓고» t_goal 을 리셋한다)
+//               + t_goal = min(t, T_GOAL_MAX), 단 유지에서 hold_t_goal_max >= 0 이면 그 값이 상한.
 //               + t_goal = min(t, T_GOAL_MAX). 그 뒤 t += dt.
 // 🔴 수치 규약까지 같게 한다: 시간·도착 누적·높이 차는 double(파이썬 float), g 내적은 float(torch float32).
 //    이 규약이 어긋나면 도착 틱이 하나 밀려 hold 전환 시각이 달라진다 — 골든이 그것을 잡는다.
@@ -72,7 +73,10 @@ class Mode5Driver {
     }
     cmd = p.cmd;
     cmd[m5::SLOT_Z_MASK] = hold_ ? (released_ ? 0.0f : p.hold_z_mask) : p.transit_z_mask;
-    cmd[m5::SLOT_T_GOAL] = static_cast<float>(std::min(t_, m5::T_GOAL_MAX));
+    // 유지에서 t_goal 상한을 프리셋이 낮출 수 있다 (Mode5Presets.h 의 hold_t_goal_max). 전이는 전구간.
+    double t_max = m5::T_GOAL_MAX;
+    if (hold_ && p.hold_t_goal_max >= 0.0) t_max = std::min(t_max, p.hold_t_goal_max);
+    cmd[m5::SLOT_T_GOAL] = static_cast<float>(std::min(t_, t_max));
     t_ += dt_;
     return cmd;
   }
