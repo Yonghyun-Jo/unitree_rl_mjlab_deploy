@@ -144,6 +144,7 @@ def build() -> dict[pathlib.Path, str]:
         u = MP._unit(p.g_pelvis).numpy()
         key = f"'{keys[i]}'" if i in keys else "'\\0'"
         rows.append(f'  {{"{p.name}", {key}, {p.z!r}, {f32(p.transit_z_mask)}, '
+                    f'{f32(p.hold_z_mask)}, '
                     f'{{{{{", ".join(f32(x) for x in u)}}}}}, '
                     f'{{{{{", ".join(f32(x) for x in cmd)}}}}}, {p.n}}},')
     header = f"""#pragma once
@@ -165,7 +166,11 @@ inline constexpr double TOL = {tol!r};          // GoalDriver(tol=) 기본값
 inline constexpr double HOLD_S = {hold_s!r};    // GoalDriver(hold_s=) 기본값
 
 struct Preset {{
-  const char* name; char key; double z; float transit_z_mask;
+  const char* name; char key; double z;
+  float transit_z_mask;                    // 가는 중의 z_mask
+  float hold_z_mask;                       // 🔴 도착 «후»(유지) 의 z_mask. 2026-10-05 신설 —
+                                           // 그전엔 유지가 0 고정이었다. 값의 근거는 학습 표
+                                           // (mode5_presets.Posture.hold_z_mask 머리말)
   std::array<float, 3> g_pelvis_unit;
   std::array<float, CMD_DIM> cmd;
   int n;                                   // 근거 구간 수 (버튼 라벨용)
