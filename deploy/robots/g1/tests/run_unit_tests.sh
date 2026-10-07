@@ -11,7 +11,7 @@ run() {  # run <name> <g++ 인자...>
   else echo "FAIL $n"; tail -5 "$OUT/$n.log" "$OUT/$n.out" 2>/dev/null; fail=1; fi
 }
 for t in test_gait_lut test_gait_lut_v2 test_gait_min_swing test_joint_safety test_loco_gait_modes \
-         test_masked_loco_controller test_settle_stop test_deploy_features; do
+         test_masked_loco_controller test_settle_stop test_deploy_features test_cmd_slew; do
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -I../include $t.cpp
 done
 # StateDump 는 쓰기 스레드(std::thread)가 있어 링크에 -pthread 가 필요하다 — 위 루프와 갈라 둔다.
