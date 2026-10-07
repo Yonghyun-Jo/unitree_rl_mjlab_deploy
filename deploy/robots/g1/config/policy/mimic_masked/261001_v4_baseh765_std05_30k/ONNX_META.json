@@ -49,11 +49,16 @@
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
     "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
     "onnx_md5": "63836b1e5dc8e312eb5a2c642c944869",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "sim2sim_walk": "★★★★☆ 헤드리스 램프(v1~v3 와 같은 대본 ramp_cmd.csv 59 s, 밴드 해제 확인 발목 |tau| 4.6 Nm). 🔴 바이너리 = edd3316 (base_vel 명령 필터 slew 1.5 기본) — v1~v3 판정(10-01~04)은 옛 EMA 였다. 같은 조건 대조군 v1 재측정: 낙상 0 · pos_clamp 0 · 기울기 max 9.9°(EMA 때 9.7) = 환경 정상. v4: 낙상 0 · pos_clamp 0 · |qd| max 13.17 R_knee(crit 19 의 69 %; v1 61 · v2 65 · v3 61) · 기울기 max 12.8°(v1 9.9). ★ 정지 자세가 학습 sim 측정을 그대로 전사: 무릎 L/R 35.4~37.1/35.5~35.9(좌우차 ≤1.4°; v1 대조 12/34 = 22° 차) · hip_pitch −22.2~−23.0 · 골반 pitch +0.9~+1.8(mjlab +1.8; v1 −1.2~−3.2) · 골반 roll |≤0.3| · 허리 yaw +1.0~+1.7 · roll +0.9~+1.3 · pitch +20.3~+21.2(teacher +21.7) · 정지 팔자 9.2~10.0. 🔴 ① 보행 중 골반 pitch −6.6/−8.6/−6.4/−2.9 @0.5/1.0/1.5/2.0(v1 −3.1/−0.3/+3.0/+2.9) = 걷는 동안 골반이 v1 보다 3.5~8° 반대쪽으로 기운 채 허리 pitch 로 보상 ② 정지 무릎 36° = 웅크림 깊음(실기 droop 증폭 위험) ③ 보행 팔자 10.2~12.8. 발 최고 11.6/13.0/13.6~16.1/20.4 cm(v1 과 같음). 계약(obs·requires 6·안전층 L1 ON/L2 OFF/L3 ON) 통과. (2026-10-07)",
     "real_robot": "미실행"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-10-06_15-44-34_s4_mode1_baseh765_std05_resume15k_to30k/model_29999.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261001_v4_baseh765_std05_30k/policy.onnx",
   "deployed": {
     "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "sim2sim": {
+    "stars": 4,
+    "memo": "헤드리스 램프(v1~v3 와 같은 대본 ramp_cmd.csv 59 s, 밴드 해제 확인 발목 |tau| 4.6 Nm). 🔴 바이너리 = edd3316 (base_vel 명령 필터 slew 1.5 기본) — v1~v3 판정(10-01~04)은 옛 EMA 였다. 같은 조건 대조군 v1 재측정: 낙상 0 · pos_clamp 0 · 기울기 max 9.9°(EMA 때 9.7) = 환경 정상. v4: 낙상 0 · pos_clamp 0 · |qd| max 13.17 R_knee(crit 19 의 69 %; v1 61 · v2 65 · v3 61) · 기울기 max 12.8°(v1 9.9). ★ 정지 자세가 학습 sim 측정을 그대로 전사: 무릎 L/R 35.4~37.1/35.5~35.9(좌우차 ≤1.4°; v1 대조 12/34 = 22° 차) · hip_pitch −22.2~−23.0 · 골반 pitch +0.9~+1.8(mjlab +1.8; v1 −1.2~−3.2) · 골반 roll |≤0.3| · 허리 yaw +1.0~+1.7 · roll +0.9~+1.3 · pitch +20.3~+21.2(teacher +21.7) · 정지 팔자 9.2~10.0. 🔴 ① 보행 중 골반 pitch −6.6/−8.6/−6.4/−2.9 @0.5/1.0/1.5/2.0(v1 −3.1/−0.3/+3.0/+2.9) = 걷는 동안 골반이 v1 보다 3.5~8° 반대쪽으로 기운 채 허리 pitch 로 보상 ② 정지 무릎 36° = 웅크림 깊음(실기 droop 증폭 위험) ③ 보행 팔자 10.2~12.8. 발 최고 11.6/13.0/13.6~16.1/20.4 cm(v1 과 같음). 계약(obs·requires 6·안전층 L1 ON/L2 OFF/L3 ON) 통과.",
+    "at": "2026-10-07T15:11"
   }
 }
