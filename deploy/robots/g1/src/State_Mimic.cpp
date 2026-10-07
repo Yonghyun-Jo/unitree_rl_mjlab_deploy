@@ -165,6 +165,70 @@ static void g_load_footz_src() {
     spdlog::info("[diag] ref_foot_height 원천 = {} (표의 foot_z==Ref 인 모드에만 영향)", g_footz_src_name);
 }
 
+// ── base_vel 명령 필터 (env G1_CMD_FILTER: slew | slew_ease | ema). 🔴 기본 slew 1.5 (2026-10-07 채택, 종전 ema).
+// 왜: EMA(A=0.25)는 0 에 지수로만 다가가서 «정확히 0» 정지 게이트(stand_eps 1e-6)가 스틱을 놓고 ~0.9 s 뒤에
+//     열린다. 그 사이 0<eff<0.1 이 ~0.76 s 남고, min_swing 이 그 구간에도 8 cm 스윙을 내서 정지마다 꼬리 걸음이
+//     생긴다(실기 09-01/03 로그 정지 221회: 감쇠비 0.75 고정 · 정지당 들림 p50 2회, 84 % 가 eff<0.15).
+//   slew      = 선형 변화율 제한. 세 축을 «한 비율» 로 움직여 같은 틱에 도착(학습 램프 torch.lerp 와 같은 직선)하고
+//               목표에 정확히 닿는다. 정지 시간 = |Δ|/변화율 (r=1.5: 1.0→0 0.67 s · 2.0→0 1.33 s · 학습 램프 0.2~1.5 s).
+//   slew_ease = slew + 가속(목표가 현재보다 0 에서 멀 때)에만 변화율을 0→최대로 CMD_EASE_S 동안 키운다
+//               (발이 먼저 뜨고 속도가 붙게). 감속·정지는 slew 와 같다 — 끝에서 느려지면 EMA 꼬리가 되돌아온다.
+enum class CmdFilter { Ema, Slew, SlewEase };
+// 채택 근거 (com1 sim2sim, v1 슬롯, 계단 입력 출발·정지 11건 × 3판, 최악값 평균 — 노트 261007_cmd_filter_slew_ab):
+//   ema → slew 1.5: 정지 IMU 가속도 피크 54.1 → 40.8 · 출발 골반 pitch 27.1 → 10.5° · 다리 토크 피크 103 → 84 Nm
+//   · 체류 기울기 24.8 → 10.3° · 꼬리 걸음 제거. 대가 = 반응이 느리다(90 % 도달 0.73 → 0.86 s, vx 2.0 은 1.0 → 1.5 s ·
+//   실제 정지 1.38 → 1.76 s). 사용자 기준 «늦게 도달해도 충격 없이» (10-07). 정상 속도 추종은 필터와 무관(1.03).
+//   slew 3 은 정지 충격이 컸고(0 에 너무 빨리 닿음), slew 1 은 더 부드럽지 않은데 2.5→0 이 2.5 s 로 굼떴다.
+static CmdFilter g_cmd_filter = CmdFilter::Slew;
+static const char* g_cmd_filter_name = "slew";
+static constexpr float CMD_EMA_A = 0.25f;   // 종전 값
+static float CMD_SLEW_V = 1.5f;    // vx·vy 최대 변화율 [m/s²] — 1.0→0 0.67 s · 2.5→0 1.67 s (env G1_CMD_SLEW_V)
+static float CMD_SLEW_W = 1.5f;    // wz 최대 변화율 [rad/s²] — 2.0→0 1.33 s (env G1_CMD_SLEW_W)
+static float CMD_EASE_S = 0.3f;    // slew_ease: 가속 변화율이 최대에 닿기까지 [s] (env G1_CMD_EASE_S)
+static void g_env_pos_float(const char* name, float& v) {   // 양수만 받는다 — 0·음수·파싱 실패는 무시
+    const char* e = std::getenv(name);
+    if (!(e && *e)) return;
+    char* end = nullptr; const float f = std::strtof(e, &end);
+    if (end != e && f > 0.0f) v = f; else spdlog::warn("[diag] {}='{}' 는 양수가 아니다 — {} 유지", name, e, v);
+}
+static void g_load_cmd_filter() {
+    g_env_pos_float("G1_CMD_SLEW_V", CMD_SLEW_V);
+    g_env_pos_float("G1_CMD_SLEW_W", CMD_SLEW_W);
+    g_env_pos_float("G1_CMD_EASE_S", CMD_EASE_S);
+    const char* e = std::getenv("G1_CMD_FILTER");
+    if (e && *e) {
+        std::string v(e);
+        if      (v == "slew")      { g_cmd_filter = CmdFilter::Slew;     g_cmd_filter_name = "slew"; }
+        else if (v == "slew_ease") { g_cmd_filter = CmdFilter::SlewEase; g_cmd_filter_name = "slew_ease"; }
+        else if (v == "ema")       { g_cmd_filter = CmdFilter::Ema;      g_cmd_filter_name = "ema"; }
+        else spdlog::warn("[diag] G1_CMD_FILTER='{}' 는 모르는 값 — {} 유지", v, g_cmd_filter_name);
+    }
+    spdlog::info("[diag] base_vel 명령 필터 = {} (ema A={} · slew v={} w={} · ease {} s)", g_cmd_filter_name,
+                 CMD_EMA_A, CMD_SLEW_V, CMD_SLEW_W, CMD_EASE_S);
+}
+struct CmdFilterState {
+    std::array<float, 3> x = {0.f, 0.f, 0.f};   // 필터 «후» 명령 (컨트롤러 입력)
+    float ease_t = 0.f;                         // slew_ease: 이번 가속이 이어진 시간 [s]
+};
+static void g_cmd_filter_step(CmdFilterState& s, const std::array<float, 3>& tgt, float dt) {
+    if (g_cmd_filter == CmdFilter::Ema) {
+        for (int i = 0; i < 3; ++i) s.x[i] += CMD_EMA_A * (tgt[i] - s.x[i]);
+        return;
+    }
+    const float r[3] = {CMD_SLEW_V, CMD_SLEW_V, CMD_SLEW_W};
+    float scale = 1.0f;
+    if (g_cmd_filter == CmdFilter::SlewEase) {
+        float n_x = 0.f, n_t = 0.f;   // 변화율로 정규화한 «0 에서의 거리»
+        for (int i = 0; i < 3; ++i) { n_x += (s.x[i] / r[i]) * (s.x[i] / r[i]); n_t += (tgt[i] / r[i]) * (tgt[i] / r[i]); }
+        if (n_t > n_x + 1e-12f) { s.ease_t = std::min(CMD_EASE_S, s.ease_t + dt); scale = s.ease_t / CMD_EASE_S; }
+        else                    { s.ease_t = 0.f; }
+    }
+    float k = 0.f;                    // 가장 늦는 축이 이번 틱에 필요한 «한도 배수»
+    for (int i = 0; i < 3; ++i) k = std::max(k, std::abs(tgt[i] - s.x[i]) / (r[i] * dt * scale));
+    if (k <= 1.0f) { s.x = tgt; return; }               // 이번 틱에 도착 — 정확히 목표(0 포함)
+    for (int i = 0; i < 3; ++i) s.x[i] += (tgt[i] - s.x[i]) / k;
+}
+
 // Accumulated keyboard velocity command (walker_teleop.py style: each keypress ±STEP, space=reset).
 // Coexists with the joystick stick (base_vel_command sums them). Edge-triggered so one tap = one step.
 static float g_kb_vx = 0.0f, g_kb_vy = 0.0f, g_kb_wz = 0.0f;
@@ -1021,6 +1085,7 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     load_safety_cfg(dcfg["safety"]);   // fail-safe: 없거나/이상하면 전부 비활성 (아래 정의)
     load_gait_cfg(dcfg["gait"]);       // fail-safe: 없으면 종전 quintic 기본값 유지 (아래 정의)
     g_load_footz_src();                // 🔬 진단 A/B (env G1_FOOTZ_SRC): ref | gen | ramp
+    g_load_cmd_filter();               // 🔬 진단 A/B (env G1_CMD_FILTER): ema | slew | slew_ease
 
     const auto & joy = FSMState::lowstate->joystick;
     // end_state가 자기자신이면(=masked/teleop) 클립 끝이 무의미 → 타임아웃 체크 미등록 = 무한 실행.
@@ -1428,7 +1493,7 @@ void State_Mimic::enter()
         auto sleepTill = start + dt;
         // base_vel 저역통과 상태 — 이 스레드(= 이 체류)의 지역 변수라 체류마다 0 에서 시작한다
         // (전엔 루프 안의 함수 static 이라 지난 체류의 값에서 이어졌다).
-        std::array<float, 3> bv_s = {0.f, 0.f, 0.f};
+        CmdFilterState bv_f;
         // mode5 «도착» 로그의 에지 기억도 같은 이유로 이 스레드(= 이 체류)의 지역 변수다(전엔 함수 static 이라
         // 지난 체류의 hold 가 남아 재진입 첫 도착 줄이 빠질 수 있었다 — 로그만).
         bool m5_hold_prev = false;
@@ -1688,13 +1753,12 @@ void State_Mimic::enter()
                                  fz[0], fz[1], g_loco.foot_z[0], g_loco.foot_z[1], g_footz_src_name);
                 }
             }
-            // Low-pass the base_vel target (deploy-side; controller unchanged) so abrupt
-            // GUI/keyboard command changes don't jerk the gait. ~A=0.25 -> ~0.2s settle.
+            // Filter the base_vel target (deploy-side; controller unchanged) so abrupt
+            // GUI/keyboard command changes don't jerk the gait. 방식 = G1_CMD_FILTER (기본 slew 1.5).
             {
-                const float A = 0.25f;
                 auto bv = g_joystick_base_vel(env.get());
-                for (int i = 0; i < 3; ++i) bv_s[i] += A * (bv[i] - bv_s[i]);
-                g_loco.update(bv_s, g_mode.mode());
+                g_cmd_filter_step(bv_f, bv, 0.02f);
+                g_loco.update(bv_f.x, g_mode.mode());
             }
             // 클립 시계: 0번 칸 = 주 클립(구간 오프셋), 그 뒤 = 자기 원점(되감는 칸은 진입 시각이 원점).
             {
