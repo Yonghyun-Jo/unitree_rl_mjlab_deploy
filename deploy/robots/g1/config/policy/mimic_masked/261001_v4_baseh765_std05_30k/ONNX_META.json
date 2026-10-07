@@ -1,0 +1,59 @@
+{
+  "exported_at": "2026-10-07",
+  "slot": "261001_v4_baseh765_std05_30k",
+  "trial": "v4",
+  "trial_day": "2026-10-01",
+  "note": "12차 head — v3(10차 56.5k)을 버리고 **11차(pitchramp) 15k 에서 이어 15k → 30k**. base·manifest·steps·obs·FOOT_GEN(min_swing 0.08) 동일, 바뀐 것은 reward 둘: ① **base_h h0 0.74 → 0.765 + std_stand 0.05**(정지 전용 허용오차, launch 4d890ed) — 11차가 정지에서 단조로 주저앉았고(무릎 10k 5.4° → 29.5k 66.5° · 골반 78.9 → 68.3 cm) σ 0.12 에선 5 cm 미달이 0.096/s 뿐이라 바닥이 작동하지 않았다. h0 0.74 는 teacher 값이 아니라 06-25 «Anti-collapse» 커밋에서 온 값이고, teacher 정지 중앙값은 76.6 cm ② torso_tilt include_pitch 복원 + pitch_eff_free 1.0(정지·저속 전용 앞숙임, launch f8b6f02·c37a67d). sim 실측(GPU 64 env · 0.6 m/s 5 s → 정지 1~5 s 창 · 대조 = v2 9차 30k · v3 10차 56.5k): ★ **주저앉음이 섰다** — 골반 68.3 → **75.8 cm**, 18~30k 전 구간 ±1.2 cm 평평(v2 76.7 · v3 74.8) · 허리 pitch **+21.3°**(teacher +21.7) · **골반 pitch +1.8°** = 실기에서 뒤쏠림이 없던 7월 판(+1.8)과 소수점까지 같다(v2 +1.2 · v3 −2.1) · 몸통 앞숙임 **+23.0°**(v3 10.9 = 사용자 «너무 곧다» 불만 해소) · **허리 yaw −0.2°** (v3 의 yaw_lock 성과 유지) · 무릎 좌우차 **0.3°**(v2 0.4 · 11차 출발 10.5) · 정지 허리 roll **0.7°**(측정 최선) · 정지 접촉점 slip **0.10 cm/s**(>5 cm/s 0 %) · 정지 순이동 −0.3 cm(크리프 없음) · 20 s 홀드 마칭 0 · 낙상 0 % · 속도 0.57/0.91/1.31/1.86/2.23 @cmd 0.5~2.5 단조 · 발끝 p50 2.2~3.1 cm·1 cm 미만 **0 %**(걸림 없음, 예상 실기 3.2~4.1). 🔴 남은 것(전부 v2 대비 역전 — 이 판은 «정지 뒤쏠림 가설» 전용 시험이다): ① **발 추종이 측정 4판 중 최악** — 명령↔실제 발높이 RMS x 0.5/1.0/1.5 = 2.87/**4.55**/**5.33** cm(v2 1.05/3.23/4.84 · v3 1.23/1.45/3.78), 상관 x 1.0 **0.510**·1.5 **0.416**(v2 0.947/0.444 · v3 0.982/0.939). y 축도 0.5/0.8 RMS 1.78/2.20(v2 1.18/1.20 · v3 0.88/0.96) = **보행 품질은 v2 보다 나쁠 것** ② walk 대역 **양발 지지 0.2 %** · 비행 6.0 % @cmd 1.0 = 걷기의 두 박자가 없고 통통 튄다(원인 = foot_sched 임계 0.10 m 가 walk 프로파일 마루보다 높아 사이클의 76 % 를 «접지 기대» 로 판정 → 10-07 에 처방, **이 판에는 안 들어갔다**) ③ **정지 웅크림 36.2°** = 측정 최심 (v2 31.1 · 실기 v3=6차 26.7 · 7월 15.3). base_h 가 골반 «높이» 만 보니 정책이 엉덩이를 7 cm 뒤로 빼는 해를 찾았다(FK: 허벅지 기울기 7.8 → 17.7° · 정강이 불변 → **무릎 중력 모멘트팔 2.7 → 7.9 cm, 3배**). 실기 무릎 droop 은 sim 의 3.4배라 **뒤쏠림 예측자 ⓐ(골반 pitch)는 측정 최고인데 ⓑ(웅크림)는 측정 최악** = 두 예측자가 정반대 끝단, sim 으로는 못 가른다 ④ 팔자 정지 **13.1°**(v2 11.0 · v3 9.9 · teacher 9.6) ⑤ 발 간격 최협 — x 0.5 **15.9 cm**(v2 17.9 · v3 21.0) · y 0.8 **27.3**(v2·v3 31.7) ⑥ 보행 접촉점 slip 5.88 cm/s·>5 cm/s 27 %(v2 4.53/23 % · v3 4.19/24 %). **실기 관전(이 판의 목적 순서)**: ① **멈췄을 때 뒤로 기우는가** — 골반 pitch 출발점이 7월과 같은 유일한 판이라 «출발점이 맞으면 웅크림이 깊어도 괜찮은가» 를 처음으로 가른다(v2·v3 와 직접 비교) ② 정지 자세가 teacher 처럼 보이는가(허리 숙임 +21°·골반 높이 76 cm) ③ 허리 비틀림이 계속 없는가 ④ ⚠ **보행은 v2 보다 나쁠 것으로 예상** — 튐·발 놓는 품질이 sim 예측만큼 나쁜지 확인(13차 run 의 foot_sched·slip 처방이 맞는지 가르는 대조군이 된다) ⑤ 팔자 ⑥ 러닝 걸림(없어야 한다).",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-10-06_15-44-34_s4_mode1_baseh765_std05_resume15k_to30k/model_29999.pt",
+  "mode1_run": "2026-10-06_15-44-34_s4_mode1_baseh765_std05_resume15k_to30k",
+  "mode1_launch_commit": "4d890ed8dc7a4f152705c17ad0196eadf6d70966",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 2.682e-06 (tol 0.0001) OK",
+    "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
+    "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
+    "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
+    "onnx_md5": "63836b1e5dc8e312eb5a2c642c944869",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-10-06_15-44-34_s4_mode1_baseh765_std05_resume15k_to30k/model_29999.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261001_v4_baseh765_std05_30k/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  }
+}
