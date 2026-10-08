@@ -1,0 +1,42 @@
+# 패리티 허용목록 — 학습과 «다르다는 것을 알고» 배포하는 항목. deploy/scripts/check_slot_parity.py 가 읽는다.
+#
+# 🔴 여기 없는 불일치는 FAIL 이다. 여기 있는 것도 «같은 값» 일 때만 KNOWN 이다:
+#    row(판정 행 id) + key(그 행 안의 칸) + train/deploy(적힌 값) 가 지금 측정과 같아야 한다.
+#    값이 달라지면(학습 쪽이 바뀌었거나 배포를 고쳤거나) 그 행은 다시 FAIL 이 되고,
+#    불일치가 사라지면 이 항목은 «낡았다» 로 WARN 이 뜬다 → 지울 것.
+# 왜 목록인가: 알려진 불일치를 표에서 매번 PASS 로 덮으면 «알고 있다» 가 «없다» 로 바뀌어 잊힌다.
+#    KNOWN 은 표에 남고, 사유와 결정 대기 상태가 같이 보인다.
+#
+# 항목 형식:
+#   id      짧은 이름 (PARITY.md 의 KNOWN 절에 그대로 나온다)
+#   row     check_slot_parity.py 의 행 id (예: gait.mode2 · cmd.mode2)
+#   key     그 행 안의 칸 (gait 행 = turn_asym·cadence…, cmd 행 = vx·vy·wz)
+#   train   학습 원장 값  /  deploy  배포 값
+#   reason · since · where(근거가 적힌 곳) · decision
+known:
+  - id: K1
+    row: gait.mode2
+    key: turn_asym
+    train: true
+    deploy: false
+    reason: >-
+      mode2 head(2026-08-20 s4_mode2_v3base_port5_m2lgen_steps6_30k, launch b28ceb3)는 회전 비대칭
+      (17995ba, 08-17)이 켜진 발-z 명령으로 학습됐는데 배포는 끈다. 회전 중에만 foot_z obs 2칸이 다르다
+      (걷기 1.25 rad/s 0.42~0.62 cm · 달리기 1.0 rad/s 1.20 cm, 두 발 평균 스윙은 같다). mode1 만 바꾸는
+      판에서 mode2 를 같이 움직이면 실기 회귀 원인을 못 가르기 때문에 꺼 두었다(재빌드 없이 한 줄로 켠다).
+    since: 2026-10-08
+    where: "슬롯 deploy.yaml 의 gait: mode2 줄 주석 (261001_v1~v4 · «mode2 는 turn_asym 을 일부러 껐다»)"
+    decision: "사용자 결정 대기: 고칠지/유지할지"
+  - id: K2
+    row: cmd.mode2
+    key: vx
+    train: [-1.0, 1.5]
+    deploy: [-1.5, 2.5]
+    reason: >-
+      C++ base_vel 상한(VX_MAX_FWD 2.5 · VX_MAX_BWD 1.5)은 mode1 학습 범위(stage4_mode1 CMD_BASE_VEL)라
+      모드 공통인데, mode2 head 는 stage4_mode2 CMD_BASE_VEL vx (-1.0, 1.5) 로 학습됐다. mode2 에서
+      조이스틱을 앞으로 60 %(1.5 m/s)·뒤로 67 %(1.0 m/s) 넘게 밀면 학습 범위 밖 명령이다(전진 최대 1.67배).
+      vy ±0.8 · wz ±2.0 은 같다.
+    since: 2026-10-08
+    where: "deploy/robots/g1/src/State_Mimic.cpp 의 VX_MAX_* 위 주석 (≈182행, «모드별 봉투 분리는 별건으로 남겨 둔다»)"
+    decision: "사용자 결정 대기: 고칠지/유지할지"

@@ -26,9 +26,10 @@ robot.sh verify 의 md5 대조가 이미 보고 있다.
     policy_slot.py restore <slot>...    보관소에서 되살림
     policy_slot.py activate v1=<slot> [v2=<slot> ...]   오늘 무엇을 v1/v2 로 부를지
     policy_slot.py active               지금 별칭
-    policy_slot.py push [<slot>...]     로봇으로 rsync (생략하면 활성 슬롯 전부)
+    policy_slot.py push [<slot>...]     로봇으로 rsync (생략하면 활성 슬롯 전부). 패리티 표(PARITY.json)가
+                                        PASS/KNOWN 이고 지금 파일에 대한 것인 슬롯만 보낸다
     policy_slot.py index                POLICY_INDEX.md 재생성
-    policy_slot.py check                무결성 (활성 슬롯에 가중치가 실제로 있는가)
+    policy_slot.py check                무결성 (활성 슬롯에 가중치가 실제로 있는가 · ONNX md5 · 패리티 표가 유효한가)
 """
 from __future__ import annotations
 
@@ -115,6 +116,79 @@ def undeployable_slots(slots, slot_dir=SLOTDIR):
         if m.get("deployable_real") is False:
             out.append((s, m.get("note", "")))
     return out
+
+
+def _hash_file(path, algo="md5"):
+    h = hashlib.new(algo)
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def onnx_md5_status(slot, slot_dir=SLOTDIR):
+    """(실제 md5, ONNX_META.json 에 기록된 md5, 일치) — 기록이 없으면 일치=None, ONNX 가 없으면 실제=None.
+    `check` 와 check_slot_parity.py 가 같이 쓴다(판정 함수는 한 벌만)."""
+    onnx = os.path.join(slot_dir, slot, "exported", "policy.onnx")
+    h = _hash_file(onnx, "md5") if os.path.exists(onnx) else None
+    want = (_meta_at(slot_dir, slot).get("verify", {}) or {}).get("onnx_md5")
+    if not want or h is None:
+        return h, want, None
+    return h, want, want.startswith(h[:12])
+
+
+# ── 패리티 판정(PARITY.json)이 «지금 파일» 에 대해 유효한가 ─────────────────
+# check_slot_parity.py 가 슬롯마다 학습↔배포 대조표를 만들고 PARITY.json 에 판정과 «그때의 파일 지문»
+# (ONNX md5 · deploy.yaml sha256) 을 남긴다. 판정 뒤에 ONNX 나 deploy.yaml 이 바뀌면 그 판정은 다른
+# 파일에 대한 것이다 → 무효(STALE). 로봇 쪽 게이트(verify_deploy.py)도 같은 규칙으로 본다.
+PARITY_FILE = "PARITY.json"
+PARITY_OK = ("PASS", "KNOWN")
+
+
+def parity_status(slot, slot_dir=SLOTDIR, repo=REPO):
+    """→ (state, detail, warns). state ∈ PASS·KNOWN(유효) · MISSING · BROKEN · STALE · FAIL.
+    warns = 판정에 쓴 C++/설정 파일이 그 뒤에 바뀐 목록(판정은 유효하지만 다시 돌려 볼 것)."""
+    root = os.path.join(slot_dir, slot)
+    p = os.path.join(root, PARITY_FILE)
+    if not os.path.exists(p):
+        return "MISSING", "PARITY.json 없음", []
+    try:
+        d = json.load(open(p, encoding="utf-8"))
+    except Exception as e:                                    # noqa: BLE001
+        return "BROKEN", "PARITY.json 을 못 읽음: %s" % e, []
+    fresh = d.get("fresh") or {}
+    onnx = os.path.join(root, "exported", "policy.onnx")
+    dy = os.path.join(root, "params", "deploy.yaml")
+    if not os.path.exists(onnx):
+        return "STALE", "ONNX 없음 (restore 필요)", []
+    if not fresh.get("onnx_md5") or fresh.get("onnx_md5") != _hash_file(onnx, "md5"):
+        return "STALE", "ONNX 가 판정 때와 다르다", []
+    if not os.path.exists(dy) or not fresh.get("deploy_yaml_sha256") \
+            or fresh.get("deploy_yaml_sha256") != _hash_file(dy, "sha256"):
+        return "STALE", "deploy.yaml 이 판정 때와 다르다", []
+    warns = []
+    for rel, h in sorted((d.get("context_sha256") or {}).items()):
+        fp = os.path.join(repo, rel)
+        if not os.path.exists(fp) or _hash_file(fp, "sha256") != h:
+            warns.append(rel)
+    v = d.get("verdict")
+    if v not in PARITY_OK:
+        return "FAIL", "판정 %s" % v, warns
+    ids = [e.get("id") for e in (d.get("known_used") or []) if e.get("id")]
+    return v, v + ("(%s)" % ",".join(ids) if ids else ""), warns
+
+
+def parity_blocked_slots(slots, slot_dir=SLOTDIR):
+    """로봇으로 보내면 안 되는 슬롯 [(slot, state, detail)] — 패리티가 PASS/KNOWN 이 아니거나 낡았다."""
+    out = []
+    for s in slots:
+        st, detail, _ = parity_status(s, slot_dir)
+        if st not in PARITY_OK:
+            out.append((s, st, detail))
+    return out
+
+
+PARITY_CMD = "python3 deploy/scripts/check_slot_parity.py"
 
 
 def du_mb(path):
@@ -291,6 +365,15 @@ def cmd_push(args):
         print("🔴 push 를 막았다 — 아무것도 보내지 않았다. "
               "실기로 보내려면 해당 슬롯의 ONNX_META.json 에서 deployable_real 을 고쳐라.")
         return 1
+    # 같은 자리, 같은 방식 — 학습↔배포 패리티 표가 PASS/KNOWN 이고 «지금 파일» 에 대한 것이어야 보낸다.
+    # 입력이 학습과 어긋난 정책은 에러 없이 넘어지기만 한다. 우회 플래그는 없다 — 표를 다시 만들면 된다.
+    blocked = parity_blocked_slots(slots)
+    if blocked:
+        for s, st, detail in blocked:
+            print("🔴 %s : 패리티 %s — %s" % (s, st, detail))
+        print("🔴 push 를 막았다 — 아무것도 보내지 않았다. 먼저:  %s %s"
+              % (PARITY_CMD, " ".join(s for s, _, _ in blocked)))
+        return 1
     rc = 0
     for s in slots:
         root = os.path.join(SLOTDIR, s)
@@ -360,14 +443,21 @@ def cmd_check(args):
             print("🔴 %s -> %s : 슬롯이 없다" % (alias, s)); bad += 1; continue
         if not has_weights(s):
             print("🔴 %s -> %s : 가중치 없음 (restore 필요)" % (alias, s)); bad += 1; continue
-        onnx = os.path.join(root, "exported", "policy.onnx")
-        h = hashlib.md5(open(onnx, "rb").read()).hexdigest()
-        want = (meta_of(s).get("verify", {}) or {}).get("onnx_md5")
-        tag = "" if not want else (" md5 OK" if want.startswith(h[:12]) else
+        h, want, ok = onnx_md5_status(s)
+        tag = "" if not want else (" md5 OK" if ok else
                                    " 🔴 md5 불일치 (기록 %s / 실제 %s)" % (want[:12], h[:12]))
-        if want and not want.startswith(h[:12]):
+        if want and not ok:
             bad += 1
-        print("🟢 %-4s -> %-44s %s%s" % (alias, s, h[:12], tag))
+        pst, pdetail, pwarn = parity_status(s)
+        if pst in PARITY_OK:
+            ptag = " | parity %s" % pdetail
+        else:
+            ptag = " | 🔴 parity %s — %s → %s %s" % (pst, pdetail, PARITY_CMD, s)
+            bad += 1
+        print("🟢 %-4s -> %-44s %s%s%s" % (alias, s, h[:12], tag, ptag))
+        if pwarn:
+            print("   ⚠ 판정 뒤에 바뀐 C++/설정: %s — 판정은 유효하지만 다시 돌려 볼 것 (%s %s)"
+                  % (", ".join(pwarn), PARITY_CMD, s))
     # 깨진 심링크
     for s in slot_names():
         p = os.path.join(SLOTDIR, s, "exported", "policy.onnx")

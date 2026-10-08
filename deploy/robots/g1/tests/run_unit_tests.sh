@@ -79,6 +79,20 @@ else
   echo "skip uv 생성기 검사 (mjlab uv 환경 없음)"
 fi
 
+# 슬롯 패리티 표(deploy/scripts/check_slot_parity.py)의 변이시험 — 고장을 심은 슬롯에서 그 행이 FAIL 하는지,
+# 지금 ACTIVE 슬롯이 PASS + K1·K2 KNOWN 인지. 학습 cfg 를 import 하므로 그 head 들을 학습한 워크트리의 venv 로
+# 돈다(conda 변수 제외). 학습 원장(mjlab logs·git)이 없는 머신(로봇·깨끗한 clone)이면 시험 스스로 skip 한다.
+PARITY_MJLAB="${G1_PARITY_MJLAB:-$HOME/mjlab1.4/mjlab_g1_motion}"
+if [ -f test_slot_parity.py ] && [ -x "$PARITY_MJLAB/.venv/bin/python" ]; then
+  if env -u LD_LIBRARY_PATH -u CONDA_PREFIX -u CONDA_DEFAULT_ENV "$PARITY_MJLAB/.venv/bin/python" test_slot_parity.py \
+       >"$OUT/parity.out" 2>&1; then
+    if grep -q '^skip' "$OUT/parity.out"; then grep -m1 '^skip' "$OUT/parity.out"; else echo "ok   test_slot_parity"; fi
+  else echo "FAIL test_slot_parity"; tail -8 "$OUT/parity.out"; fail=1
+  fi
+else
+  echo "skip test_slot_parity (mjlab venv 없음: $PARITY_MJLAB)"
+fi
+
 # 계약 v2 슬롯의 deploy.yaml `observations:` 블록 == gen_obs_block.py(그 슬롯 ONNX 의 계약) — 배포 항 이름 ↔ 학습 항
 # 매핑이 틀린 것은 C++ 기동 대조가 못 잡는다(최종 검토 M-5). ONNX 는 git 밖이라 exported/policy.onnx 가 있는 슬롯만,
 # onnx 를 import 하는 파이썬(시스템 python3, 없으면 mjlab uv)이 없으면 skip. 계약 v1 슬롯의 블록은 손으로 쓴 것이라 대상 밖.

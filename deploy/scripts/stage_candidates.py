@@ -32,6 +32,8 @@
   ② 슬롯 생성: exported/policy.onnx · params/deploy.yaml(템플릿 + mode1 min_swing) · params/*.npz
      (그날 첫 슬롯만 실사본, 나머지는 상대 심링크 — 저장 규칙) · ONNX_META.json
   ③ 학습측 FOOT_GEN 과 gait 패리티 대조 (체크포인트의 launch 커밋에서 읽음) — 다르면 경고 + META 기록
+  ③-b 슬롯마다 학습↔배포 패리티 표 (check_slot_parity.py → <slot>/PARITY.md·PARITY.json).
+      FAIL 이면 그 후보는 ACTIVE·커밋에서 빠지고, 끝나면 종료코드 1 (로봇 전송도 하지 않는다)
   ④ ACTIVE.yaml = 이 파일의 별칭 전부 (day 교체)
   ⑤ 직전 ACTIVE 에 있었지만 이번에 없는 슬롯은 **보관소로** (policy_slot archive) — «옛 정책 치우기»
   ⑥ check · index · git add(정체만) · commit
@@ -70,6 +72,8 @@ MJLAB = os.environ.get("MJLAB_WS", os.path.expanduser("~/mjlab1.4/mjlab_g1_motio
 UV = os.environ.get("UV_BIN", os.path.expanduser("~/.local/bin/uv"))
 ROBOT_SH = os.path.expanduser("~/piene_automation/robot_bridge/robot.sh")
 CFG_REL = "src/mjlab_g1_motion/tasks/stage4_mode1_env_cfg.py"
+# 학습↔배포 패리티 표 (슬롯마다 PARITY.md·PARITY.json). FAIL 이면 그 후보는 ACTIVE·커밋에서 빠진다.
+CHECK_PY = os.path.join(HERE, "check_slot_parity.py")
 
 try:
     import yaml
@@ -212,6 +216,16 @@ def export_mismatch(meta, cfg, cand):
     return why
 
 
+def export_commit_info():
+    """export 를 «어느 mjlab 코드로» 했나. ONNX 의 obs 계약은 export 시점 env 에서 나오므로 그 commit 과
+    미커밋 변경(추적 파일만)을 META 에 남긴다 — 패리티 표가 «export commit» 행에서 읽는다."""
+    head = subprocess.run(["git", "-C", MJLAB, "rev-parse", "HEAD"], text=True, capture_output=True).stdout.strip()
+    st = subprocess.run(["git", "-C", MJLAB, "status", "--porcelain", "--untracked-files=no"],
+                        text=True, capture_output=True).stdout
+    dirty = [ln[3:].strip() for ln in st.splitlines() if ln.strip()]
+    return {"head": head or None, "dirty": dirty, "at": _dt.datetime.now().isoformat(timespec="seconds")}
+
+
 def export_onnx(cfg, cand, slot, dry):
     out_rel = os.path.join("exported", slot, "policy.onnx")
     out_abs = os.path.join(MJLAB, out_rel)
@@ -226,14 +240,15 @@ def export_onnx(cfg, cand, slot, dry):
         why = export_mismatch(onnx_metadata(out_abs), cfg, cand)
         if not why:
             log("   export 건너뜀 — 이미 있고 메타(base·헤드·steps)가 이 후보와 같다: %s" % out_rel)
-            return out_abs, export_cmd, {}
+            return out_abs, export_cmd, {}, {"head": None, "note": "export 건너뜀 — 이미 있던 ONNX(메타 동일)를 썼다"}
         log("   ⚠ 이미 있는 %s 가 이 후보와 다르다 — 다시 export 한다:" % out_rel)
         for w in why:
             log("      - " + w)
     log("   export → %s" % out_rel)
     if dry:
         log("   (dry-run) " + export_cmd)
-        return out_abs, export_cmd, {}
+        return out_abs, export_cmd, {}, None
+    exp_info = export_commit_info()
     r = sh(cmd, cwd=MJLAB, check=False, capture=True)
     txt = r.stdout or ""
     tail = "\n".join(txt.strip().splitlines()[-25:])
@@ -257,7 +272,7 @@ def export_onnx(cfg, cand, slot, dry):
     if m:
         v["mask_slice"] = m.group(1)
     log("   " + (v.get("onnx_vs_torch") or "parity 줄을 못 찾음"))
-    return out_abs, export_cmd, v
+    return out_abs, export_cmd, v, exp_info
 
 
 def onnx_metadata(path):
@@ -386,7 +401,7 @@ def place_weights(slot_root, onnx_src, tmpl_params, first_slot, slot, dry):
 
 
 def write_meta(slot_root, slot, cand, cfg, day, export_cmd, verify, onnx_meta, fg_train, parity_note,
-               requires, onnx_path, dry):
+               requires, onnx_path, dry, export_info=None):
     ck = cand["mode1_ckpt"]
     run = os.path.basename(os.path.dirname(ck))
     commit = training_commit(ck)
@@ -422,6 +437,8 @@ def write_meta(slot_root, slot, cand, cfg, day, export_cmd, verify, onnx_meta, f
         "export_cmd": export_cmd,
         "deployed": {"status": "pending — stage_candidates --robot 또는 policy_slot push"},
     }
+    if export_info is not None:                       # export 를 어느 mjlab commit 에서 했나 (패리티 표가 읽는다)
+        meta["export_commit"] = export_info
     p = os.path.join(slot_root, "ONNX_META.json")
     if not dry:
         json.dump(meta, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
@@ -472,6 +489,17 @@ def requires_of(deploy_yaml_text):
     return [re.sub(r"\s*#.*", "", l).strip("- ").strip() for l in m.group(1).splitlines()]
 
 
+def run_parity(slot, dry):
+    """슬롯의 학습↔배포 패리티 표. True = PASS/KNOWN. 판정은 여기서 다시 짜지 않고 그 도구를 부른다
+    (판정 함수는 한 벌만). 전체 표는 슬롯의 PARITY.md 에 남고, 화면에는 PASS 가 아닌 행만 흘린다."""
+    if dry:
+        log("   (dry-run) parity:  python3 %s %s" % (os.path.relpath(CHECK_PY, REPO), slot))
+        return True
+    log("   parity 표 → %s/PARITY.md" % os.path.relpath(os.path.join(SLOTDIR, slot), REPO))
+    r = subprocess.run([sys.executable, CHECK_PY, slot, "--brief"], cwd=REPO)
+    return r.returncode == 0
+
+
 # ── 메인 ─────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -516,6 +544,7 @@ def main():
     prev_active = read_active()
 
     made = []
+    parity_failed = []
     first_slot = None
     for c in cands:
         slot = "%s_%s_%s" % (day, c["alias"], c["label"])
@@ -530,13 +559,18 @@ def main():
                 log("   이미 있다 — deploy.yaml 만 다시 그림  %s" % parity_note)
             else:
                 log("   이미 있다 — 건너뜀 (별칭만 갱신)")
+            if not run_parity(slot, dry):
+                parity_failed.append(slot)
+                log("🔴 패리티 FAIL — 이 후보는 ACTIVE·커밋에서 뺀다 (표: %s/PARITY.md)"
+                    % os.path.relpath(root, REPO))
+                continue
             made.append((c["alias"], slot))
             if first_slot is None:
                 first_slot = slot
             continue
         fg_train = foot_gen_at(training_commit(c["mode1_ckpt"]))
         try:
-            onnx_abs, export_cmd, verify = export_onnx(cfg, c, slot, dry)
+            onnx_abs, export_cmd, verify, export_info = export_onnx(cfg, c, slot, dry)
         except RuntimeError as e:
             log("🔴 %s — 이 후보는 건너뛴다" % e)
             continue
@@ -553,11 +587,24 @@ def main():
             % (cfg["template_slot"], c.get("min_swing", 0), parity_note))
         onnx_meta = onnx_metadata(onnx_abs) if (not dry and os.path.exists(onnx_abs)) else {}
         write_meta(root, slot, c, cfg, day, export_cmd, verify, onnx_meta, fg_train, parity_note,
-                   requires_of(text), os.path.join(root, "exported", "policy.onnx"), dry)
+                   requires_of(text), os.path.join(root, "exported", "policy.onnx"), dry,
+                   export_info=export_info)
+        if not run_parity(slot, dry):
+            parity_failed.append(slot)
+            log("🔴 패리티 FAIL — 이 후보는 ACTIVE·커밋에서 뺀다 (표: %s/PARITY.md)" % os.path.relpath(root, REPO))
+            if first_slot == slot:
+                # npz 실사본을 가진 «그날 첫 슬롯» 이 빠지면 뒤 후보의 심링크가 빠진 슬롯을 가리킨다 — 다음
+                # 통과 후보가 실사본을 갖게 비운다(빠진 슬롯은 로봇으로 안 가니 거기를 가리키면 끊긴다).
+                first_slot = None
+            continue
         made.append((c["alias"], slot))
 
+    if parity_failed:
+        log("\n🔴 패리티 FAIL 로 뺀 후보 %d 개: %s" % (len(parity_failed), ", ".join(parity_failed)))
+        log("   표: deploy/robots/g1/config/policy/mimic_masked/<슬롯>/PARITY.md — 알고 배포할 불일치면 "
+            "deploy/robots/g1/config/policy/parity_known.yaml 에 사유와 함께 적는다")
     if not made:
-        die("만들어진 슬롯이 없다")
+        die("만들어진 슬롯이 없다" + (" (패리티 FAIL %d 개)" % len(parity_failed) if parity_failed else ""))
 
     # ④ 별칭
     log("\n■ ACTIVE.yaml  (day %s)" % day)
@@ -599,7 +646,7 @@ def main():
             files = [os.path.relpath(ACTIVE, REPO), os.path.relpath(INDEX, REPO),
                      os.path.relpath(CONFIG_YAML, REPO)]
             for _, s in made:
-                for rel in ("params/deploy.yaml", "ONNX_META.json"):
+                for rel in ("params/deploy.yaml", "ONNX_META.json", "PARITY.md", "PARITY.json"):
                     files.append(os.path.relpath(os.path.join(SLOTDIR, s, rel), REPO))
             for s in old:
                 files.append(os.path.relpath(os.path.join(SLOTDIR, s), REPO))   # 보관으로 빠진 무게(untracked 라 no-op)
@@ -623,7 +670,11 @@ def main():
     log("\n■ 로봇")
     push_cmd = "python3 deploy/scripts/policy_slot.py push"
     dep_cmd = "%s deploy" % ROBOT_SH
-    if a.robot and not dry:
+    if a.robot and not dry and parity_failed:
+        # 패리티 FAIL 이 하나라도 있었던 판은 사람이 표를 보기 전까지 로봇에 아무것도 안 보낸다.
+        log("   🔴 패리티 FAIL 후보가 있어 로봇 전송을 하지 않는다. 표를 확인한 뒤:")
+        log("     cd %s && git push origin $(git branch --show-current) && %s && %s" % (REPO, push_cmd, dep_cmd))
+    elif a.robot and not dry:
         r = subprocess.run([ROBOT_SH, "check"], text=True, capture_output=True, timeout=60)
         if r.returncode != 0:
             log("   로봇이 안 닿는다 (노트북이 로봇 옆에 있어야 한다). 나중에:")
@@ -645,7 +696,7 @@ def main():
     log("\n■ 로봇 앞에서")
     for al, s in made:
         log("   ./deploy/robots/g1/tools/run_g1_with_gui.sh eth0 --policy %s     # %s" % (al, s))
-    return 0
+    return 1 if parity_failed else 0
 
 
 if __name__ == "__main__":

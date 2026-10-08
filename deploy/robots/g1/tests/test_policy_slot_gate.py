@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """policy_slot.py 의 push 안전 게이트(controller Ruling 31) — `deployable_real: false` 슬롯은
-로봇으로 못 나간다.
+로봇으로 못 나간다. 같은 자리의 두 번째 게이트: 학습↔배포 패리티 표(PARITY.json)가 PASS/KNOWN 이고
+«지금 파일» 에 대한 것이어야 나간다 (뒤쪽 test_parity_*).
 
 # 왜 이 테스트가 있나
 개발용 슬롯(예: `260922_dev_v5_m45`)의 ONNX_META.json 은 `deployable_real: false` 를 갖지만,
@@ -84,6 +85,83 @@ def test_cmd_push_default_slot_dir_matches_real_slotdir():
     import policy_slot
     import inspect
     default = inspect.signature(policy_slot.undeployable_slots).parameters["slot_dir"].default
+    assert default == policy_slot.SLOTDIR
+
+
+# ── 패리티 게이트 (PARITY.json) ────────────────────────────────────────────
+# check_slot_parity.py 가 쓴 판정이 «지금 슬롯 파일» 에 대한 PASS/KNOWN 일 때만 push 한다.
+# 판정 뒤에 ONNX·deploy.yaml 이 바뀌면 그 판정은 다른 파일에 대한 것이다 → STALE 로 막는다.
+import hashlib  # noqa: E402
+
+
+def _h(path: Path, algo: str) -> str:
+    return hashlib.new(algo, path.read_bytes()).hexdigest()
+
+
+def _make_parity_slot(root: Path, name: str, verdict="PASS", known_ids=(), context=None):
+    d = root / name
+    (d / "exported").mkdir(parents=True, exist_ok=True)
+    (d / "params").mkdir(parents=True, exist_ok=True)
+    (d / "exported/policy.onnx").write_bytes(b"onnx-bytes-" + name.encode())
+    (d / "params/deploy.yaml").write_text("step_dt: 0.02\n", encoding="utf-8")
+    rep = {"verdict": verdict,
+           "fresh": {"onnx_md5": _h(d / "exported/policy.onnx", "md5"),
+                     "deploy_yaml_sha256": _h(d / "params/deploy.yaml", "sha256")},
+           "context_sha256": context or {},
+           "known_used": [{"id": k} for k in known_ids]}
+    (d / "PARITY.json").write_text(json.dumps(rep), encoding="utf-8")
+    return d
+
+
+def test_parity_missing_and_fail_block_push():
+    import policy_slot
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        _make_parity_slot(root, "ok_pass")
+        _make_parity_slot(root, "ok_known", verdict="KNOWN", known_ids=("K1", "K2"))
+        _make_parity_slot(root, "bad_fail", verdict="FAIL")
+        d = _make_parity_slot(root, "bad_missing")
+        (d / "PARITY.json").unlink()
+        blocked = policy_slot.parity_blocked_slots(["ok_pass", "ok_known", "bad_fail", "bad_missing"],
+                                                   slot_dir=str(root))
+        assert [(s, st) for s, st, _ in blocked] == [("bad_fail", "FAIL"), ("bad_missing", "MISSING")], blocked
+        st, detail, _ = policy_slot.parity_status("ok_known", slot_dir=str(root))
+        assert st == "KNOWN" and "K1,K2" in detail, (st, detail)
+
+
+def test_parity_stale_after_onnx_or_yaml_change():
+    import policy_slot
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        a = _make_parity_slot(root, "onnx_changed")
+        (a / "exported/policy.onnx").write_bytes(b"retrained")
+        b = _make_parity_slot(root, "yaml_changed")
+        (b / "params/deploy.yaml").write_text("step_dt: 0.02\n# 한 줄 더\n", encoding="utf-8")
+        for s in ("onnx_changed", "yaml_changed"):
+            st, detail, _ = policy_slot.parity_status(s, slot_dir=str(root))
+            assert st == "STALE", (s, st, detail)
+
+
+def test_parity_context_change_only_warns():
+    """판정에 쓴 C++ 파일이 바뀌면 판정은 유효(통과)하되 경고 목록에 오른다 — push 는 막지 않는다."""
+    import policy_slot
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        repo = root / "repo"
+        (repo / "deploy").mkdir(parents=True)
+        f = repo / "deploy/State_Mimic.cpp"
+        f.write_text("int a = 1;\n", encoding="utf-8")
+        _make_parity_slot(root, "ctx", context={"deploy/State_Mimic.cpp": _h(f, "sha256")})
+        f.write_text("int a = 2;\n", encoding="utf-8")
+        st, _, warns = policy_slot.parity_status("ctx", slot_dir=str(root), repo=str(repo))
+        assert st == "PASS" and warns == ["deploy/State_Mimic.cpp"], (st, warns)
+        assert policy_slot.parity_blocked_slots(["ctx"], slot_dir=str(root)) == []
+
+
+def test_parity_gate_default_slot_dir_matches_real_slotdir():
+    import policy_slot
+    import inspect
+    default = inspect.signature(policy_slot.parity_blocked_slots).parameters["slot_dir"].default
     assert default == policy_slot.SLOTDIR
 
 
