@@ -2,8 +2,5 @@
 #   ./tools/run_g1_with_gui.sh eth0 --policy v1
 # 🔴 기록(trial 마커·Streamlit)에는 **별칭이 아니라 실제 슬롯 이름**이 남는다 —
 #    v1 은 날마다 다른 것을 가리키므로 별칭으로 기록하면 나중에 못 읽는다.
-day: 261001
-v1: 261001_v1_cmdresample_zhold_87k5
-v2: 261001_v2_cmdresample_zhold_noslip2_sc30k
-v3: 261001_v3_yawlock_56k5
-v4: 261001_v4_baseh765_std05_30k
+day: 261009
+v1: 261009_v1_schedobs_stepw12_27k5

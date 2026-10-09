@@ -32,10 +32,11 @@
 | `260922_v2_m1gen_v2_toeclr_rollonly_26k5` | — | 보관 | 2026-09-22_18-28-05_s4_mode1_m1gen_v2_toeclr_rollonly_scratch60k/model_26500.pt | ★★★★☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s, 같은  | 실기 1회 · 최근 ★★★☆☆ (09-29 14:09) |
 | `260922_v3_splayband_60k` | — | 보관 | 2026-09-23_15-10-34_s4_mode1_splayband_resume26k_to60k/model_59999.pt | ★★★★☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s, 같은  | 실기 3회 · 최근 09-29 14:54 · 평가 전 |
 | `260922_v4_mode5_graphC_90k` | — | 보관 | none | ★★★★☆ 메시 장면 mode5 고리 7/7 도착(0.47~3.50 s)·안전 이벤트 0·|qd| 초과는 최 | 실기 2회 · 최근 ★★★★☆ (09-29 15:17) |
-| `261001_v1_cmdresample_zhold_87k5` | v1 | 활성 | 2026-09-30_15-14-59_s4_mode1_cmdresample_zhold_sp2_resume60k_to90k/model_87500.pt | ★★★★☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s. C++ | 미실행 |
-| `261001_v2_cmdresample_zhold_noslip2_sc30k` | v2 | 활성 | 2026-10-01_19-05-20_s4_mode1_cmdresample_zhold_noslip2_scratch30k/model_29999.pt | ★★★★☆ 헤드리스 램프(v1 과 같은 대본 ramp_cmd.csv 59 s: 0.5→1.0→1.5→2.0  | 미실행 |
-| `261001_v3_yawlock_56k5` | v3 | 활성 | 2026-10-03_12-14-02_s4_mode1_yawlock2p0_resume30k_to60k/model_56500.pt | ★★★★☆ 헤드리스 램프(v1·v2 와 같은 대본 ramp_cmd.csv 59 s). 낙상 0 · pos_c | 미실행 |
-| `261001_v4_baseh765_std05_30k` | v4 | 활성 | 2026-10-06_15-44-34_s4_mode1_baseh765_std05_resume15k_to30k/model_29999.pt | ★★★★☆ 헤드리스 램프(v1~v3 와 같은 대본 ramp_cmd.csv 59 s, 밴드 해제 확인 발목 | | 미실행 |
+| `261001_v1_cmdresample_zhold_87k5` | — | 보관 | 2026-09-30_15-14-59_s4_mode1_cmdresample_zhold_sp2_resume60k_to90k/model_87500.pt | ★★★★☆ 헤드리스 램프(0.5→1.0→1.5→2.0 m/s 계단·정지 반복·회전 0.8) 59 s. C++ | 실기 1회 · 최근 ★★☆☆☆ (10-07 14:51) |
+| `261001_v2_cmdresample_zhold_noslip2_sc30k` | — | 보관 | 2026-10-01_19-05-20_s4_mode1_cmdresample_zhold_noslip2_scratch30k/model_29999.pt | ★★★★☆ 헤드리스 램프(v1 과 같은 대본 ramp_cmd.csv 59 s: 0.5→1.0→1.5→2.0  | 실기 1회 · 최근 ★★★☆☆ (10-07 15:02) |
+| `261001_v3_yawlock_56k5` | — | 보관 | 2026-10-03_12-14-02_s4_mode1_yawlock2p0_resume30k_to60k/model_56500.pt | ★★★★☆ 헤드리스 램프(v1·v2 와 같은 대본 ramp_cmd.csv 59 s). 낙상 0 · pos_c | 실기 1회 · 최근 ★☆☆☆☆ (10-07 15:16) |
+| `261001_v4_baseh765_std05_30k` | — | 보관 | 2026-10-06_15-44-34_s4_mode1_baseh765_std05_resume15k_to30k/model_29999.pt | ★★★★☆ 헤드리스 램프(v1~v3 와 같은 대본 ramp_cmd.csv 59 s, 밴드 해제 확인 발목 | | 실기 1회 · 최근 10-07 15:18 · 평가 전 |
+| `261009_v1_schedobs_stepw12_27k5` | v1 | 활성 | 2026-10-08_13-10-04_s4_mode1_schedobs_stepw12_tiltoff_scratch30k/model_27500.pt | 미실행 — 사용자가 확인 | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |

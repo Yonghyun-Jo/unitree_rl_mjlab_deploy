@@ -1,0 +1,64 @@
+{
+  "exported_at": "2026-10-09",
+  "slot": "261009_v1_schedobs_stepw12_27k5",
+  "trial": "v1",
+  "trial_day": "2026-10-09",
+  "note": "14차 head (launch a68f735, 0 부터 30k 중 27.5k). base·manifest·steps·obs·FOOT_GEN(min_swing 0.08) = 10-07 실기 v2(261001_v2) 와 동일. 10-07 실기에서 v2 가 가장 좋았고(★3) 남은 불만 = 「멈춘 뒤 뒤로 기우뚱·뒷걸음」 「y축으로 발 간격이 좁아짐」. 그 사이 13차에서 생긴 «정지 제자리걸음»(foot_sched 상대 임계가 reward 전용 교정 스윙을 «들어라» 로 읽음)까지 고친 판. v2 대비 바뀐 reward: ① yaw_lock 신설(정지 허리 비틀림 0) ② foot_z_track 허용오차 상한 0.10→0.05 ③ foot_sched 상대 임계 + w 0.4→1.2 + obs 참조 ④ no_slip √ 커널·접촉점·w −1.0 ⑤ base_h 정지 바닥 0.765 ⑥ stand_planted 해제 기울기 0.15→0.25 ⑦ feet_step_width 신설(착지 직후 좌우 거리 < 12 cm, w −3). torso_tilt 앞숙임은 v2 와 같은 «끔». PD 랜덤화·외력 없음. sim 실측(GPU 64 env, 대조 v2 30k): ★ 멈춘 뒤 20 s 발 들림 **0 회/s**(13차 25.5k 2.40) · 정지 후 이동 +24.5→+24.0 cm(멈춤) · 정지 몸통/허리/골반 pitch +25.0/+23.3/+1.7°(v2 +22.5/+21.5/+1.2) · CoM_x +3.8 cm · 골반 76.2 cm · 실제 속도 0.50/0.95/1.36/1.98 @cmd 0.5~2.0 · 양발지지 10.2/5.7/1.8 %(v2 4.0/0.0/0.0) · 비행 @1.5 0.6 %(v2 10.4) · 명령↔실제 발높이 상관 0.971/0.970/0.964/0.991(v2 @1.5 0.452) · 발끝 p50 2.3~2.5 cm·1 cm 미만 0/0/1 % · 착지 순간 발 간격 중앙값(26k·30k 측정, 27.5k 직접 측정 없음) 1.0/2.0 m/s 19~21/17~18 cm(v2 11.5/8.6, teacher 18.5/21.3) · 정지 허리 yaw 0~−2°(v2 +12.9) · 정지 팔자 ≈10~11°. 🔴 남은 것: ① **스윙 중 발을 크게 숙인 채 발목을 높이 든다** — 스윙 중간 발 pitch −25/−42/−52° @0.5/1.0/1.5(v2 −21/−26/−31) · 진폭비 1.39/1.46 @1.0/1.5(v2 1.08/1.25) · 발목 들림 12~13 cm. 발끝 높이는 v2 와 같아 sim 에선 걸림 없음 ② 보행 접촉점 slip 8.1 cm/s @1.0(v2 4.6) — 단 발 굴림 성분 +7.2(v2 +2.0)이 섞였을 수 있어 진짜 미끄러짐인지 미분리 ③ 정지 무릎 35.8/32.4°(v2 31.3/31.6) = 실기 droop 증폭기가 v2 보다 깊다 ④ 측면 0.8 m/s 발 모으는 걸음 p10 9.0(26k)→5.8 cm(30k), v2 10.3 ⑤ 보행 골반 −2~−4°·저속 몸통 +14~+17°(v2 +18). 이 판은 학습 후반 표류(양발지지 감소·발 숙임·무릎) 직전이라 30k 보다 조금 낫다. **실기 관전(우선순)**: ① 멈췄을 때 발을 구르지 않는가(이번 판의 1번 목표) ② 멈춘 뒤 뒤로 기우뚱·뒷걸음이 v2 보다 덜한가 — 단 무릎이 v2 보다 깊어 반대로 갈 수도 있다 ③ 걸을 때 발 간격이 v2 처럼 좁아 보이지 않는가(전진·측면 둘 다) ④ 발을 숙인 스윙이 바닥에 걸리지 않는가 ⑤ 걸을 때 미끄러짐이 늘었는가 ⑥ 허리 비틀림이 없는가. 10-07 v2 와 같은 날 같은 바닥에서 A/B 하면 가장 잘 갈린다.",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-10-08_13-10-04_s4_mode1_schedobs_stepw12_tiltoff_scratch30k/model_27500.pt",
+  "mode1_run": "2026-10-08_13-10-04_s4_mode1_schedobs_stepw12_tiltoff_scratch30k",
+  "mode1_launch_commit": "a68f735cf1f76caef53993a7cd82960ae9d69bf8",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 3.815e-06 (tol 0.0001) OK",
+    "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
+    "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
+    "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
+    "onnx_md5": "9872029720a79343a706575d6be28b38",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-10-08_13-10-04_s4_mode1_schedobs_stepw12_tiltoff_scratch30k/model_27500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261009_v1_schedobs_stepw12_27k5/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "export_commit": {
+    "head": "a68f735cf1f76caef53993a7cd82960ae9d69bf8",
+    "dirty": [],
+    "at": "2026-10-09T15:12:00"
+  }
+}
