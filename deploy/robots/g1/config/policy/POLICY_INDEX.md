@@ -37,8 +37,8 @@
 | `261001_v3_yawlock_56k5` | — | 보관 | 2026-10-03_12-14-02_s4_mode1_yawlock2p0_resume30k_to60k/model_56500.pt | ★★★★☆ 헤드리스 램프(v1·v2 와 같은 대본 ramp_cmd.csv 59 s). 낙상 0 · pos_c | 실기 1회 · 최근 ★☆☆☆☆ (10-07 15:16) |
 | `261001_v4_baseh765_std05_30k` | — | 보관 | 2026-10-06_15-44-34_s4_mode1_baseh765_std05_resume15k_to30k/model_29999.pt | ★★★★☆ 헤드리스 램프(v1~v3 와 같은 대본 ramp_cmd.csv 59 s, 밴드 해제 확인 발목 | | 실기 1회 · 최근 10-07 15:18 · 평가 전 |
 | `261009_v1_schedobs_stepw12_27k5` | v1 | 활성 | 2026-10-08_13-10-04_s4_mode1_schedobs_stepw12_tiltoff_scratch30k/model_27500.pt | ★★★★☆ 헤드리스 램프(10-07 과 같은 대본 ramp_cmd.csv 59 s: 0.5→1.0→1.5→2 | 미실행 |
-| `261009_v2_schedobs_stepw12_50k` | v2 | 활성 | 2026-10-09_15-23-18_s4_mode1_schedobs_stepw12_tiltoff_resume30k_to60k/model_50000.pt | 미실행 — 사용자가 확인 | 미실행 |
-| `261009_v3_schedobs_stepw12_55k` | v3 | 활성 | 2026-10-09_15-23-18_s4_mode1_schedobs_stepw12_tiltoff_resume30k_to60k/model_55000.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `261009_v2_schedobs_stepw12_50k` | v2 | 활성 | 2026-10-09_15-23-18_s4_mode1_schedobs_stepw12_tiltoff_resume30k_to60k/model_50000.pt | ★★★★☆ 헤드리스 램프(v1 과 같은 대본 ramp_cmd.csv 59 s: 0.5→1.0→1.5→2.0  | 미실행 |
+| `261009_v3_schedobs_stepw12_55k` | v3 | 활성 | 2026-10-09_15-23-18_s4_mode1_schedobs_stepw12_tiltoff_resume30k_to60k/model_55000.pt | ★★★★☆ 헤드리스 램프(v2 와 같은 대본·같은 세션, 밴드 풀림 확인 발목 |tau| 5.76 Nm, 바 | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |
