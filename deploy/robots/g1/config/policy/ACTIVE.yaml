@@ -4,3 +4,5 @@
 #    v1 은 날마다 다른 것을 가리키므로 별칭으로 기록하면 나중에 못 읽는다.
 day: 261009
 v1: 261009_v1_schedobs_stepw12_27k5
+v2: 261009_v2_schedobs_stepw12_50k
+v3: 261009_v3_schedobs_stepw12_55k
