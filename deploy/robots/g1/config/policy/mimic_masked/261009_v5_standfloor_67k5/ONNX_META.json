@@ -49,7 +49,7 @@
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
     "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
     "onnx_md5": "56a9815f6e725964ccd369234ae2c6fa",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "sim2sim_walk": "★★★☆☆ 헤드리스 램프(v1~v4 와 같은 대본 ramp_cmd.csv 59 s), 밴드 풀림 확인(발목 |tau| 5.02 Nm), 바이너리 b5e1367. 같은 세션 대조군 261009_v4 재측정: 정지 무릎 35.4/38.6° · |qd| 14.86 · 기울기 14.6° = 10-12 새벽 판정 재현 → 환경 정상. 기동 줄 정상(gait min_swing 0.080 · pos_clamp ON/rate_limit OFF/qd_guard ON · requires 6 전부 지원). 낙상 0 · pos_clamp 0 · nan_hold 0 · |qd| 최대 15.09 rad/s @L_ank_pitch(관절별 crit 대비 최악 R_knee 69 %, v4 62) · 기울기 최대 15.1°. 학습 sim 전사: 걷다 멈춘 뒤 정지 무릎 L/R 37.7/36.9 ~ 37.3/38.4°(mjlab 37.2/37.4) · 골반 pitch +1.6~+2.1°(mjlab +1.3) · 골반 roll +0.1~+0.7° · waist_roll +0.3~+1.1° = 좌우 대칭, 주저앉지 않음. 보행 골반 pitch 0.5/1.0/1.5/2.0 = +3.9/+4.8/+4.6/+2.0°. 🔴 별 하나를 깎은 이유 — **정지에서 팔을 휘젓는 것이 배포 스택에서 더 크게 나온다**: 멈춘 뒤 2 s 이후 정지 창 5 개의 팔 14 관절 평균 속도 33.1 °/s(창별 31.9~33.9), 같은 세션 v4 2.0 °/s · v2 2.2 °/s 의 16 배(mjlab 실측은 16.2 °/s · 손 속도 26.9 cm/s). 그 영향으로 정지 창 기울기 최대 4.4~5.7°(v4 2.9~3.3°). 정지 팔자 hip_yaw (L−R)/2 +11.7~+13.5°(v4 8.6~10.3 · teacher 9.6) · 정지 팔 벌림 L/R 21/30° 로 좌우 다름. 계약·안전층은 통과. 실기에서는 서 있을 때 팔이 계속 움직이니 팔 반경에서 떨어져 있을 것. (2026-10-12)",
     "real_robot": "미실행"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-10-12_00-25-25_s4_mode1_standfloor_resume55k_to75k/model_67500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261009_v5_standfloor_67k5/policy.onnx",
@@ -60,5 +60,10 @@
     "head": "370d4ef67c208cc25e251ca5ac2cd90b3fb18338",
     "dirty": [],
     "at": "2026-10-12T12:17:18"
+  },
+  "sim2sim": {
+    "stars": 3,
+    "memo": "헤드리스 램프(v1~v4 와 같은 대본 ramp_cmd.csv 59 s), 밴드 풀림 확인(발목 |tau| 5.02 Nm), 바이너리 b5e1367. 같은 세션 대조군 261009_v4 재측정: 정지 무릎 35.4/38.6° · |qd| 14.86 · 기울기 14.6° = 10-12 새벽 판정 재현 → 환경 정상. 기동 줄 정상(gait min_swing 0.080 · pos_clamp ON/rate_limit OFF/qd_guard ON · requires 6 전부 지원). 낙상 0 · pos_clamp 0 · nan_hold 0 · |qd| 최대 15.09 rad/s @L_ank_pitch(관절별 crit 대비 최악 R_knee 69 %, v4 62) · 기울기 최대 15.1°. 학습 sim 전사: 걷다 멈춘 뒤 정지 무릎 L/R 37.7/36.9 ~ 37.3/38.4°(mjlab 37.2/37.4) · 골반 pitch +1.6~+2.1°(mjlab +1.3) · 골반 roll +0.1~+0.7° · waist_roll +0.3~+1.1° = 좌우 대칭, 주저앉지 않음. 보행 골반 pitch 0.5/1.0/1.5/2.0 = +3.9/+4.8/+4.6/+2.0°. 🔴 별 하나를 깎은 이유 — **정지에서 팔을 휘젓는 것이 배포 스택에서 더 크게 나온다**: 멈춘 뒤 2 s 이후 정지 창 5 개의 팔 14 관절 평균 속도 33.1 °/s(창별 31.9~33.9), 같은 세션 v4 2.0 °/s · v2 2.2 °/s 의 16 배(mjlab 실측은 16.2 °/s · 손 속도 26.9 cm/s). 그 영향으로 정지 창 기울기 최대 4.4~5.7°(v4 2.9~3.3°). 정지 팔자 hip_yaw (L−R)/2 +11.7~+13.5°(v4 8.6~10.3 · teacher 9.6) · 정지 팔 벌림 L/R 21/30° 로 좌우 다름. 계약·안전층은 통과. 실기에서는 서 있을 때 팔이 계속 움직이니 팔 반경에서 떨어져 있을 것.",
+    "at": "2026-10-12T12:23"
   }
 }

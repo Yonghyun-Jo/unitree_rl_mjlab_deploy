@@ -40,7 +40,7 @@
 | `261009_v2_schedobs_stepw12_50k` | v2 | 활성 | 2026-10-09_15-23-18_s4_mode1_schedobs_stepw12_tiltoff_resume30k_to60k/model_50000.pt | ★★★★☆ 헤드리스 램프(v1 과 같은 대본 ramp_cmd.csv 59 s: 0.5→1.0→1.5→2.0  | 미실행 |
 | `261009_v3_schedobs_stepw12_55k` | v3 | 활성 | 2026-10-09_15-23-18_s4_mode1_schedobs_stepw12_tiltoff_resume30k_to60k/model_55000.pt | ★★★★☆ 헤드리스 램프(v2 와 같은 대본·같은 세션, 밴드 풀림 확인 발목 |tau| 5.76 Nm, 바 | 미실행 |
 | `261009_v4_standlock_55k` | v4 | 활성 | 2026-10-11_03-43-19_s4_mode1_standlock_resume50k_to80k/model_55000.pt | ★★★★☆ 헤드리스 램프(v1~v3 과 같은 대본 ramp_cmd.csv 59 s), 밴드 풀림 확인(발목  | 미실행 |
-| `261009_v5_standfloor_67k5` | v5 | 활성 | 2026-10-12_00-25-25_s4_mode1_standfloor_resume55k_to75k/model_67500.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `261009_v5_standfloor_67k5` | v5 | 활성 | 2026-10-12_00-25-25_s4_mode1_standfloor_resume55k_to75k/model_67500.pt | ★★★☆☆ 헤드리스 램프(v1~v4 와 같은 대본 ramp_cmd.csv 59 s), 밴드 풀림 확인(발목  | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |
