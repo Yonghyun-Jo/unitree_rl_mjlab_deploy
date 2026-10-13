@@ -1,0 +1,64 @@
+{
+  "exported_at": "2026-10-13",
+  "slot": "261009_v6_armpose_79k5",
+  "trial": "v6",
+  "trial_day": "2026-10-09",
+  "note": "19차 head = 17차 65k(v5 와 같은 run 의 2.5k 앞)에서 «정지 팔 자세»(stand_arm_pose: 팔 14 관절이 teacher 정지 자세에서 벗어난 각도 합, w −0.1, 정지 명령 + 마지막 kick 뒤 1 s 부터, launch 6b25dc5)를 넣고 80k 까지 이어학습한 것의 79.5k. base·manifest·steps·obs·FOOT_GEN(min_swing 0.08) = v1~v5 와 동일. v5 대비 reward 차이 = 팔 항 하나(자세 닻 두 항·높이 바닥은 그대로). 마지막 80k 가 아니라 79.5k 인 이유: 80k 는 정지 자세가 내려앉았다(무릎 40.5/38.0° · 골반 pitch +0.3° · 몸통 +16.4° · 75.5 cm). sim 실측(GPU 64 env · 정지 자세/스텝폭/보행 자세는 CPU 16 env, 괄호 = 10-07 실기 ★3 `261001_v2` · v4 16차 55k): 걷다 멈춘 뒤 정지 무릎 L/R 35.3/34.7°(31.4/31.7 · 34.3/38.5) · 좌우 차 0.6° · 골반 roll −0.6° · 골반 pitch +2.6°(+0.9 · +2.0) · 몸통 +18.0°(+23.0 · +18.4) · 골반 76.1 cm(76.6 · 75.8) · 20 s 발 들림 0 · 골반 pitch +3.0 → +2.1° · 학습 DR + kick 정지 60 s 낙상 0/64. 뒤로 당김(몸통 수평 힘 2 s, 조건당 32 env): 걸음 없이 버틴 env −4/−5/−6/−7 N = 88/81/59/12 %(100/88/75/28 · 97/88/50/6) · −8 N 몸통 젖혀짐 −6.5°(−23.5 · −4.2) · kick 아래 몸통 흔들림 ±2.1°(±6.5). 보행: 발높이 RMS @0.5/1.0/1.5/2.0 0.73/0.67/1.42/1.55 cm(1.05/3.23/4.80/2.34) · 실제 속도 0.53/1.00/1.42/1.96(@1.5 1.27) · 착지 스텝폭 p50 20.3/19.0/17.9/15.7 cm(17.7/11.5/12.3/8.6) · 접촉점 slip @1.0 5.1 cm/s(4.5) · 옆걸음 실제 0.26/0.40/0.62 @0.3/0.5/0.8(0.21/0.38/0.57). 🔴 약점: ① **조용히 서 있어도 팔이 움직인다** — 손(손목 링크) 속도 평균 12.1 cm/s · p95 30 cm/s, 왼 어깨 pitch ±5° 약 0.6 Hz(10-07 v2 2.0 · v4 5.2 · v5 26.9). 팔 고정 대조에서 조용할 때는 득이 없는 잔여 운동, kick 때는 골반 오차를 조금 줄인다(kick 아래 손 31.5 cm/s) ② 오른 어깨가 왼쪽보다 12° 앞으로 나와 있다(정지 팔 자세 좌우 차) ③ 0.5~1.0 m/s 보행에서 몸통 +13~+14° 로 teacher(+16.6 @1.0)·10-07 v2(+18)보다 3~5° 서 있다 ④ 걸음 없이 버티는 힘은 10-07 v2 수준을 넘지 못했다(−6 N 59 % 대 75 %) ⑤ 측면 모으는 걸음 p10 10.2/9.2/8.4 cm ⑥ 2.0 m/s 비행 28 %(10-07 v2 19 %). **실기 관전(우선순, v4·v5 와 A/B)**: ① 멈춘 뒤 뒤로 기우뚱·뒷걸음이 10-07 v2 보다 줄었나(자세 닻이 들어간 판은 아직 실기에 오른 적이 없다) ② 뒤에서(머리·어깨) 살짝 당겼을 때 허리를 젖히지 않고 버티나 ③ 서 있을 때 팔 — v5 보다 조용한가, 오른팔이 앞으로 나와 보이는가 ④ 저속 보행에서 몸이 서 보이지 않나 ⑤ 보행 발 궤적·발 간격이 10-07 v2 보다 깨끗한가.",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-10-12_21-56-44_s4_mode1_armpose_resume65k_to80k/keep_cand_79500.pt",
+  "mode1_run": "2026-10-12_21-56-44_s4_mode1_armpose_resume65k_to80k",
+  "mode1_launch_commit": "6b25dc5eb6e66abea4cb6ddb2c7555767f416ba1",
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 4.530e-06 (tol 0.0001) OK",
+    "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
+    "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
+    "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
+    "onnx_md5": "f68fa9f4fcfa63f02642c83e6bbfab71",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-10-12_21-56-44_s4_mode1_armpose_resume65k_to80k/keep_cand_79500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261009_v6_armpose_79k5/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "export_commit": {
+    "head": "6b25dc5eb6e66abea4cb6ddb2c7555767f416ba1",
+    "dirty": [],
+    "at": "2026-10-13T11:17:22"
+  }
+}
