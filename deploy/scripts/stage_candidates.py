@@ -23,7 +23,9 @@
         label: ms8_noslip1_30k
         mode1_ckpt: logs/rsl_rl/g1_student/<run>/model_29999.pt
         min_swing: 0.08                 # 배포 mode1.min_swing. 0 이면 키를 뺀다
-        note: "무슨 실험인지 한 문장"
+        summary: "무엇을 바꾼 실험인가 한 줄 (60자 안팎)"
+        watch: ["실기에서 볼 것 1", "볼 것 2", "볼 것 3"]   # 3개 이하, 우선순
+        note: "상세 — sim 실측·약점·부모 대비 차이 전부 (화면에서는 접혀 있다)"
       - alias: v2
         ...
 
@@ -410,6 +412,10 @@ def write_meta(slot_root, slot, cand, cfg, day, export_cmd, verify, onnx_meta, f
         "slot": slot,
         "trial": cand["alias"],
         "trial_day": "20%s-%s-%s" % (day[:2], day[2:4], day[4:6]),
+        # 화면은 summary · watch 만 펼쳐 보이고 note(상세)는 접는다(2026-10-14 — 실측을 한 칸에
+        # 다 넣은 note 가 한 단락이 되어 «무슨 실험이었나» 가 안 읽혔다).
+        "summary": str(cand.get("summary") or "").strip(),
+        "watch": [str(w).strip() for w in (cand.get("watch") or []) if str(w).strip()][:3],
         "note": cand.get("note", ""),
         "staged_by": "deploy/scripts/stage_candidates.py",
         "requires": requires,
@@ -657,7 +663,8 @@ def main():
                 msg = "deploy(%s): 실기 후보 %s" % (day, ", ".join("%s=%s" % (al, s) for al, s in made))
                 by_alias = {c["alias"]: c for c in cands}
                 body = "\n".join("- %s: %s (min_swing %s) %s" % (al, s, by_alias[al].get("min_swing", 0),
-                                                                 by_alias[al].get("note", ""))
+                                                                 by_alias[al].get("summary")
+                                                                 or by_alias[al].get("note", ""))
                                  for al, s in made)
                 if old and not a.no_archive:
                     body += "\n\n보관(가중치→보관소, 정체는 git): " + ", ".join(old)
