@@ -42,7 +42,7 @@
 | `261009_v4_standlock_55k` | v4 | 활성 | 2026-10-11_03-43-19_s4_mode1_standlock_resume50k_to80k/model_55000.pt | ★★★★☆ 헤드리스 램프(v1~v3 과 같은 대본 ramp_cmd.csv 59 s), 밴드 풀림 확인(발목  | 미실행 |
 | `261009_v5_standfloor_67k5` | v5 | 활성 | 2026-10-12_00-25-25_s4_mode1_standfloor_resume55k_to75k/model_67500.pt | ★★★☆☆ 헤드리스 램프(v1~v4 와 같은 대본 ramp_cmd.csv 59 s), 밴드 풀림 확인(발목  | 미실행 |
 | `261009_v6_armpose_79k5` | v6 | 활성 | 2026-10-12_21-56-44_s4_mode1_armpose_resume65k_to80k/keep_cand_79500.pt | ★★★★☆ 헤드리스 램프 59 s + 걷다 멈춤 22 s (밴드 해제 확인, 대조군 v4 같은 세션): 낙상 | 미실행 |
-| `261009_v7_f6_s1456_109k` | v7 | 활성 | 2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k/keep_108998.pt | ★★★★☆ com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 9098a28, 대조 | 미실행 |
+| `261009_v7_f6_s1456_109k` | v7 | 활성 | 2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k/keep_108998.pt | ★★★★☆ com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 단계 C). ① 사용 | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |
