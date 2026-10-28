@@ -61,7 +61,7 @@ SLOTDIR = os.path.join(POLICY, "mimic_masked")
 KNOWN_DEFAULT = os.path.join(POLICY, "parity_known.yaml")
 CACHE = os.environ.get("G1_PARITY_CACHE", os.path.expanduser("~/.cache/g1_slot_parity"))
 TOOL_VERSION = 1
-TRUTH_VERSION = 1          # _extract_truth 의 출력 형식. 바꾸면 올린다(캐시가 같이 무효가 된다)
+TRUTH_VERSION = 2          # _extract_truth 의 출력 형식 (2 = motion 그룹 항 추가, 2026-10-28). 바꾸면 올린다(캐시가 같이 무효가 된다)
 
 # 판정에 쓴 «배포 쪽» 파일 (repo 상대). 판정 뒤에 이것이 바뀌면 PARITY.json 의 근거가 낡은 것이다 —
 # 게이트(policy_slot·verify_deploy)가 WARN 으로 알린다. ONNX·deploy.yaml 은 따로(하드) 본다.
@@ -221,21 +221,31 @@ def _extract_truth(src, out):
     offset = default if use_default_offset else per_joint(getattr(act, "offset", 0.0), 0.0)
 
     P = G1StudentObservations.StudentPolicyCfg
-    terms = []
-    for k, v in vars(P).items():
-        if isinstance(v, ObservationTermCfg):
-            n = v.noise
-            terms.append(dict(
-                name=k, func=getattr(v.func, "__name__", str(v.func)), func_module=getattr(v.func, "__module__", ""),
-                scale=js(v.scale), clip=js(v.clip), history=getattr(v, "history_length", None),
-                noise=None if n is None else [type(n).__name__, getattr(n, "n_min", None), getattr(n, "n_max", None)]))
+
+    def group_terms(G):
+        out = []
+        for k, v in vars(G).items():
+            if isinstance(v, ObservationTermCfg):
+                n = v.noise
+                out.append(dict(
+                    name=k, func=getattr(v.func, "__name__", str(v.func)), func_module=getattr(v.func, "__module__", ""),
+                    scale=js(v.scale), clip=js(v.clip), history=getattr(v, "history_length", None),
+                    noise=None if n is None else [type(n).__name__, getattr(n, "n_min", None), getattr(n, "n_max", None)]))
+        return out
+    terms = group_terms(P)
+    # 계약 v2 의 motion 그룹(미리보기 3항) — ONNX 입력은 [policy][motion] 한 벡터라 계약 문자열에도 이 순서로 온다.
+    # 그 commit 에 없으면(계약 v1 시절) 빈 목록.
+    M = getattr(G1StudentObservations, "StudentMotionCfg", None)
+    motion_terms = group_terms(M) if M is not None else []
+    motion_history = getattr(M, "HISTORY_LENGTH", None) if M is not None else None
 
     res = dict(truth_version=TRUTH_VERSION, J=list(J), default=default, kp=kp, kd=kd, owners=owners, scale=scale,
                use_default_offset=use_default_offset, offset=offset, act_clip=js(getattr(act, "clip", None)),
                act_type=type(act).__name__, decimation=cfg.decimation, timestep=cfg.sim.mujoco.timestep,
                step_dt=cfg.decimation * cfg.sim.mujoco.timestep,
                obs_terms=terms, obs_history=getattr(P, "HISTORY_LENGTH", None),
-               obs_corruption=getattr(P, "ENABLE_CORRUPTION", None))
+               obs_corruption=getattr(P, "ENABLE_CORRUPTION", None),
+               motion_terms=motion_terms, motion_history=motion_history)
 
     from mjlab_g1_motion.tasks import g1_mimic_env as E
     try:
@@ -296,18 +306,53 @@ def _is_trigger(path):
     return any(path.startswith(p) for p in TRIGGER_PREFIXES)
 
 
+def _infer_remote_meta(mjlab, run_dir, info):
+    """원격 서버(공유 서버 sync)에서 학습해 com1 로 수확한 run — training_meta.json 이 없고 server_pull_meta.json
+    (수확 때 com1 이 적은 branch) 만 있다. 서버 sync 는 com1 작업 트리를 그대로 보내므로 launch commit 이 기록되지
+    않는다. 그 branch 에서 «run 시작 시각(폴더 이름) 직전 커밋» 을 학습 코드로 **추정** 하고 ⚠ 로 남긴다(행 = WARN).
+    미커밋 변경은 알 수 없다 — 그 사실도 같이 적는다. server_pull_meta.json 이 없으면 None(= 종전대로 FAIL)."""
+    sp = os.path.join(run_dir, "server_pull_meta.json")
+    if not os.path.exists(sp):
+        return None
+    try:
+        spm = json.load(open(sp, encoding="utf-8"))
+    except Exception:                                         # noqa: BLE001
+        return None
+    branch, how = (spm.get("branch") or "").strip(), "수확 기록의 branch"
+    ws = spm.get("ws_path_at_capture")
+    if not branch and ws and os.path.isdir(ws):          # 옛 수확 기록엔 branch 가 없다 — 그 워크트리의 브랜치(워크트리 = 연구 고정)
+        r0 = _git(ws, "branch", "--show-current")
+        branch, how = (r0.stdout.strip() if r0.returncode == 0 else ""), "수확 기록 워크트리 %s 의 브랜치" % os.path.basename(ws)
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})_", os.path.basename(run_dir.rstrip("/")))
+    if not branch or not m:
+        return None
+    when = "%s %s:%s:%s" % m.groups()
+    r = _git(mjlab, "rev-list", "-1", "--before=%s" % when, branch)
+    c = r.stdout.strip() if r.returncode == 0 else ""
+    if not c:
+        return None
+    info["inferred"] = True
+    info["notes"].append("⚠ 원격(%s) 학습 run — training_meta.json 없음. launch 시각 %s 직전 %s 커밋 %s 로 추정"
+                         "(branch = %s · 서버 sync 는 com1 작업 트리를 보낸다 — 미커밋 변경은 모른다)"
+                         % (spm.get("host") or "?", when, branch, _short(c), how))
+    return {"commit": c, "branch": branch, "diff": "", "inferred": True}
+
+
 def commit_truth(mjlab, run_dir):
     """run 의 training_meta.json 이 가리키는 그 시점 코드의 «학습 진실». (truth | None, info)."""
     info = {"run": os.path.basename(run_dir.rstrip("/")), "commit": None, "problems": [], "notes": []}
     tm_p = os.path.join(run_dir, "training_meta.json")
     if not os.path.exists(tm_p):
-        info["problems"].append("training_meta.json 없음 — 이 head 가 어느 코드로 학습됐는지 알 수 없다")
-        return None, info
-    try:
-        tm = json.load(open(tm_p, encoding="utf-8"))
-    except Exception as e:                                    # noqa: BLE001
-        info["problems"].append("training_meta.json 을 못 읽음: %s" % e)
-        return None, info
+        tm = _infer_remote_meta(mjlab, run_dir, info)
+        if tm is None:
+            info["problems"].append("training_meta.json 없음 — 이 head 가 어느 코드로 학습됐는지 알 수 없다")
+            return None, info
+    else:
+        try:
+            tm = json.load(open(tm_p, encoding="utf-8"))
+        except Exception as e:                                # noqa: BLE001
+            info["problems"].append("training_meta.json 을 못 읽음: %s" % e)
+            return None, info
     commit = (tm.get("commit") or "").strip()
     info["commit"] = commit
     info["branch"] = tm.get("branch")
@@ -518,6 +563,9 @@ class Report:
         self.rows = []
         self._n = {}
         self.evaluated = set()
+        # 행 → {칸: 학습값}. 허용목록 «낡음» 판정이 «같은 학습값인데 불일치가 사라졌나» 를 보려고 남긴다
+        # (학습값부터 다르면 그 항목이 말하는 상황이 아니다 — 다른 head 의 슬롯).
+        self.row_train = {}
 
     def add(self, group, rid, item, train, deploy, verdict, note="", mismatches=None):
         g = group.split(" ", 1)[0]
@@ -651,7 +699,10 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
     md = ox["meta"]
     cfgc = {"base": meta.get("flow_base_checkpoint"), "sampling_steps": meta.get("sampling_steps", 6),
             "mode2_ckpt": meta.get("mode2_ckpt"), "mode3_ckpt": meta.get("mode3_ckpt")}
-    why = sc.export_mismatch(md, cfgc, {"mode1_ckpt": meta.get("mode1_ckpt")})
+    # 헤드: 새 형식 슬롯(META `heads` = {"1": ckpt, "4": …}) 은 그 맵, 옛 슬롯은 mode1~3 칸.
+    hmap = meta.get("heads") if isinstance(meta.get("heads"), dict) and meta.get("heads") else None
+    why = sc.export_mismatch(md, cfgc, {"heads": {int(k): v for k, v in hmap.items()}} if hmap
+                             else {"mode1_ckpt": meta.get("mode1_ckpt")})
     for k in ("obs_contract", "obs_dim"):
         if str(md.get(k, "")) != str(meta.get(k, "")):
             why.append("%s: ONNX %s ≠ META %s" % (k, md.get(k), meta.get(k)))
@@ -672,10 +723,14 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
             "%s → %s" % (", ".join("%s%s" % i for i in ins), ", ".join("%s%s" % o for o in outs)),
             V_PASS if io_ok else V_FAIL, "" if io_ok else "입력 하나(obs, 폭=계약 합)·출력 하나여야 한다")
 
-    heads = {"base": meta.get("flow_base_checkpoint"), "1": meta.get("mode1_ckpt"),
-             "2": meta.get("mode2_ckpt"), "3": meta.get("mode3_ckpt")}
+    if hmap:
+        heads = {"base": meta.get("flow_base_checkpoint"), **{str(k): v for k, v in hmap.items()}}
+    else:
+        heads = {"base": meta.get("flow_base_checkpoint"), "1": meta.get("mode1_ckpt"),
+                 "2": meta.get("mode2_ckpt"), "3": meta.get("mode3_ckpt")}
+    head_keys = ["base"] + sorted((k for k in heads if k != "base"), key=int)
     truths, infos, commits = {}, {}, {}
-    for hk in ("base", "1", "2", "3"):
+    for hk in head_keys:
         label = "base" if hk == "base" else "mode%s" % hk
         ck = _ckpt_abs(mjlab, heads[hk])
         if ck is None:
@@ -709,16 +764,20 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
                 "%s @%s" % (info["run"][:40], _short(info.get("commit"))), "ONNX_META %s" % label, v,
                 " · ".join(probs + notes))
 
+    uses_motion = any(c[0] == "preview_on" for c in contract)   # 계약 v2(미리보기 입력) 슬롯만 motion 그룹을 대조
+
     def sig_obs(t):
-        return json.dumps([t.get("obs_terms"), t.get("obs_history"), t.get("obs_corruption")], sort_keys=True)
+        sig = [t.get("obs_terms"), t.get("obs_history"), t.get("obs_corruption")]
+        if uses_motion:
+            sig += [t.get("motion_terms"), t.get("motion_history")]
+        return json.dumps(sig, sort_keys=True)
 
     def sig_act(t):
         return json.dumps([t.get("J"), [round(x, 9) for x in t.get("default") or []],
                            [round(x or 0, 9) for x in t.get("kp") or []], [round(x or 0, 9) for x in t.get("kd") or []],
                            [round(x, 9) for x in t.get("scale") or []], t.get("step_dt"),
                            t.get("use_default_offset")], sort_keys=True)
-    labels = [lab for lab, hk in (("base", "base"), ("mode1", "1"), ("mode2", "2"), ("mode3", "3"))
-              if _ckpt_abs(mjlab, heads[hk])]
+    labels = [("base" if hk == "base" else "mode%s" % hk) for hk in head_keys if _ckpt_abs(mjlab, heads[hk])]
     missing = [k for k in labels if k not in truths]
     for rid, item, sig in (("id.obs_same", "base·head 의 obs 그룹이 같은가", sig_obs),
                            ("id.act_same", "base·head 의 작동 상수(관절 순서·기본자세·PD·scale·dt)가 같은가", sig_act)):
@@ -757,8 +816,10 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
         want_blk, gerr = {}, "gen_obs_block 실패: %s" % e
     want_items = list(want_blk.items())
     dep_items = [(k, v) for k, v in obs_d.items() if isinstance(v, dict)]
-    t_terms = (base_t or {}).get("obs_terms") or []
-    t_hist = (base_t or {}).get("obs_history")
+    _pt = (base_t or {}).get("obs_terms") or []
+    _mt = ((base_t or {}).get("motion_terms") or []) if uses_motion else []
+    t_terms = _pt + _mt                                     # ONNX 입력 = [policy 그룹][motion 그룹]
+    t_hists = [(base_t or {}).get("obs_history")] * len(_pt) + [(base_t or {}).get("motion_history")] * len(_mt)
     for i in range(max(len(contract), len(dep_items))):
         c = contract[i] if i < len(contract) else None
         dn, dv = dep_items[i] if i < len(dep_items) else (None, None)
@@ -798,7 +859,7 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
                 tc = tt.get("clip")
                 if not _same(tc, dv.get("clip")):
                     probs.append("clip 학습 %s ≠ 배포 %s" % (_fmt(tc), _fmt(dv.get("clip"))))
-                th = t_hist if t_hist else tt.get("history")
+                th = (t_hists[i] if i < len(t_hists) else None) or tt.get("history")
                 if th and int(th) != c[2]:
                     probs.append("학습 history %s ≠ 계약 %d" % (th, c[2]))
                 if tt.get("noise"):
@@ -834,7 +895,9 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
         md_dim, md_h = contract[mask_i][1], contract[mask_i][2]
         dep_slice = (off + (md_h - 1) * md_dim - d_sum, off + md_h * md_dim - d_sum)
         gs = [(s["start"], s["end"]) for s in ox["slices"] if s["axis"] in (1, -1) and s["end"] - s["start"] == md_dim]
-        ok_ = bool(gs) and all(g == dep_slice for g in gs)
+        # 위치는 절대값으로 비교한다 — 계약 v1 export 는 끝에서 센 음수([-22:-20]), v2 는 앞에서 센 양수([1672:1680])로 자른다.
+        ab = lambda g: (g[0] + d_sum if g[0] < 0 else g[0], g[1] + d_sum if g[1] <= 0 else g[1])   # noqa: E731
+        ok_ = bool(gs) and all(ab(g) == ab(dep_slice) for g in gs)
         rep.add(G, "obs.mask_slice", "head 선택 mask 위치 (ONNX 그래프가 실제로 자르는 곳)",
                 "그래프 Slice %s" % (", ".join("[%d:%d]" % g for g in gs) or "못 찾음"),
                 "배포 배치의 최신 mask = [%d:%d]" % dep_slice, V_PASS if ok_ else V_FAIL,
@@ -918,7 +981,7 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
     # ── 4 명령·gait ─────────────────────────────────────────────
     G = "4 명령·gait"
     rows_mt = cf.get("mode_rows") or {}
-    head_modes = [m for m in (1, 2, 3) if _ckpt_abs(mjlab, heads[str(m)])]
+    head_modes = [int(k) for k in head_keys if k != "base" and _ckpt_abs(mjlab, heads[k])]
     mask_dim = contract[mask_i][1] if mask_i is not None else None
     if mask_dim is None:
         rep.add(G, "cmd.mask", "모드 → mask 비트", "-", "-", V_SKIP, "mask 항 없음")
@@ -960,6 +1023,7 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
                "wz": [-caps["KB_MAXW"], caps["KB_MAXW"]]}
         tvs = {"vx": cb.get("vx_range"), "vy": cb.get("vy_range"), "wz": cb.get("wz_range")}
         mism = [(k, tvs[k], dvs[k]) for k in ("vx", "vy", "wz") if not _same(tvs[k], dvs[k])]
+        rep.row_train[rid] = dict(tvs)
         v, note = judge_mismatches(rid, mism, known, used)
         rep.add(G, rid, "mode%d 명령 범위 (조이스틱 끝 = 학습 범위의 끝)" % m,
                 "stage4_mode%d CMD_BASE_VEL vx %s vy %s wz %s @%s" % (m, _fmt(tvs["vx"]), _fmt(tvs["vy"]), _fmt(tvs["wz"]),
@@ -1083,6 +1147,40 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
                         row3.get("foot_z"), "있음" if "ref_foot_height_ref" in reqs else "없음"),
                     V_PASS if ok_ else V_FAIL, "VR 이 발 높이를 안 줄 때는 두 발 접지(stance)로 대신한다(설계)" if ok_ else
                     "배포가 학습과 다른 원천에서 발-z 를 만든다")
+    if 4 in head_modes:
+        # 클립 재생 head: 슬롯이 내놓는 클립(deploy.yaml clips:)은 학습 manifest 의 mode4 클립이어야 하고(아니면 OOD),
+        # 파일은 manifest 원본과 바이트가 같아야 한다(다른 리타겟판이면 학습과 다른 참조). mode4 = mode3 클립의 합집합.
+        clips = [str(c) for c in ((dep or {}).get("clips") or [])]
+        reqs4 = (dep or {}).get("requires") or []
+        probs, m4 = [], None
+        try:
+            ents = yaml.safe_load(open(_ckpt_abs(mjlab, str(meta.get("manifest") or "")), encoding="utf-8"))["motions"]
+            m4 = {os.path.splitext(os.path.basename(e["file"]))[0]: e["file"] for e in ents
+                  if 4 in (e.get("modes") or []) or 3 in (e.get("modes") or [])}
+        except Exception as e:                                # noqa: BLE001
+            probs.append("학습 manifest 를 못 읽음: %s" % e)
+        stems = [os.path.splitext(os.path.basename(c))[0] for c in clips]
+        if clips and "clip_list" not in reqs4:
+            probs.append("clips: 를 쓰는데 requires 에 clip_list 가 없다(옛 바이너리는 조용히 무시한다)")
+        if m4 is not None:
+            out_ = [s for s in stems if s not in m4]
+            if out_:
+                probs.append("학습 manifest mode4 에 없는 클립(OOD): %s" % ", ".join(out_[:4]))
+            diff_ = []
+            for c, s in zip(clips, stems):
+                p_ = os.path.join(slot_root, "params", c)
+                src_ = _ckpt_abs(mjlab, m4[s]) if s in m4 else None
+                if not os.path.exists(p_):
+                    diff_.append("%s(슬롯에 없음)" % c)
+                elif src_ and os.path.exists(src_) and _hash_file(p_, "md5") != _hash_file(src_, "md5"):
+                    diff_.append(c)
+            if diff_:
+                probs.append("manifest 원본과 다른/없는 클립 파일: %s" % ", ".join(diff_[:4]))
+        v = V_FAIL if probs else (V_WARN if (m4 is not None and set(stems) != set(m4)) else V_PASS)
+        rep.add(G, "cmd.mode4_clips", "mode4 클립 = 학습 manifest(mode4) 클립 (OOD·다른 리타겟판 없음)",
+                "manifest mode4 %s 개" % (len(m4) if m4 is not None else "?"),
+                "slot clips %d 개 · requires clip_list %s" % (len(stems), "있음" if "clip_list" in reqs4 else "없음"),
+                v, " · ".join(probs) or ("" if v == V_PASS else "슬롯이 manifest 의 일부만 내놓는다(OOD 는 아님)"))
     r = subprocess.run([sys.executable, os.path.join(HERE, "gen_gait_lut_header.py"), "--check"],
                        capture_output=True, text=True, cwd=REPO)
     msg = re.sub(r"^[^0-9A-Za-z가-힣(]+", "", " ".join((r.stdout + r.stderr).strip().splitlines()[:1]))
@@ -1110,7 +1208,11 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
     if kerr:
         rep.add("5 허용목록", "known.file", "parity_known.yaml", "-", "-", V_FAIL if known is None else V_WARN, kerr)
     for e in (known or []):
-        if e["id"] not in used and e["row"] in rep.evaluated:
+        # 기본 = 그 행이 평가됐는데 안 쓰였으면 «낡음». `stale_if: same_train` 인 항목은 학습값이 같을 때만 —
+        # 특정 head 의 학습 봉투를 말하는 항목(K3)이 다른 head 의 슬롯에서 «낡음» 으로 뜨지 않게.
+        rt = rep.row_train.get(e["row"])
+        scoped = e.get("stale_if") == "same_train" and rt is not None and not _same(rt.get(str(e["key"])), e["train"])
+        if e["id"] not in used and e["row"] in rep.evaluated and not scoped:
             rep.add("5 허용목록", "known.%s" % e["id"], "허용목록 %s 가 낡았다" % e["id"],
                     "적힌 학습 %s" % _fmt(e["train"]), "적힌 배포 %s" % _fmt(e["deploy"]), V_WARN,
                     "그 불일치가 지금은 없다(고쳐졌다) — parity_known.yaml 에서 지울 것")

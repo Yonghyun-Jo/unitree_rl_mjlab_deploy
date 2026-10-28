@@ -61,6 +61,8 @@ def _clone(src_root: Path, td: str) -> Path:
     shutil.copy2(src_root / "params/deploy.yaml", dst / "params/deploy.yaml")
     shutil.copy2(src_root / "ONNX_META.json", dst / "ONNX_META.json")
     os.symlink(os.path.realpath(src_root / "exported/policy.onnx"), dst / "exported/policy.onnx")
+    for f in (src_root / "params").glob("*.npz"):          # 클립(mode4 clips:)도 «읽기만» — 심링크
+        os.symlink(os.path.realpath(f), dst / "params" / f.name)
     return dst
 
 
@@ -89,15 +91,18 @@ def _base():
 
 # ── 기준선 ───────────────────────────────────────────────────────────────
 def test_baseline_active_slots_known_k1_k2():
-    """지금 ACTIVE 슬롯 전부: FAIL 0, KNOWN 은 정확히 K1(gait.mode2)·K2(cmd.mode2)."""
+    """지금 ACTIVE 슬롯 전부: FAIL 0, KNOWN 은 정확히 K1(gait.mode2)·K2(cmd.mode2).
+    새 형식 슬롯(META `heads`, mode2 head 없음 · mode1 이 vx 3.0 까지 학습)은 K3(cmd.mode1) 하나."""
     for src in _active_slots():
         with tempfile.TemporaryDirectory() as td:
             rep = csp.check_slot(str(_clone(src, td)))
             fails = [(r["id"], r["note"]) for r in rep["rows"] if r["verdict"] == "FAIL"]
             assert not fails, "%s: FAIL %s" % (src.name, fails)
+            multi = bool(json.load(open(src / "ONNX_META.json", encoding="utf-8")).get("heads"))
+            want_rows, want_ids = ({"cmd.mode1"}, {"K3"}) if multi else ({"gait.mode2", "cmd.mode2"}, {"K1", "K2"})
             known = {r["id"] for r in rep["rows"] if r["verdict"] == "KNOWN"}
-            assert known == {"gait.mode2", "cmd.mode2"}, "%s: KNOWN 행 %s" % (src.name, known)
-            assert {e["id"] for e in rep["known_used"]} == {"K1", "K2"}, rep["known_used"]
+            assert known == want_rows, "%s: KNOWN 행 %s" % (src.name, known)
+            assert {e["id"] for e in rep["known_used"]} == want_ids, rep["known_used"]
             assert rep["verdict"] == "KNOWN", rep["verdict"]
             # 계측기 자기검증 행이 실제로 돌았다 (안 돌면 «없음» 이 아니라 FAIL 이어야 한다)
             assert _rows(rep)["gait.reader"]["verdict"] == "PASS"

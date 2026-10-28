@@ -54,6 +54,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as _dt
 import hashlib
 import json
@@ -198,7 +199,9 @@ def export_mismatch(meta, cfg, cand):
     want_steps = str(cfg.get("sampling_steps", 6))
     if str(meta.get("sampling_steps", "")).strip() != want_steps:
         why.append("sampling_steps %s ≠ 후보 %s" % (meta.get("sampling_steps"), want_steps))
-    want = {1: cand["mode1_ckpt"], 2: cfg["mode2_ckpt"], 3: cfg["mode3_ckpt"]}
+    # 새 형식 후보(`heads:` = {모드: ckpt}) 는 그 맵이 원장, 옛 형식은 mode1 + 파일의 mode2·mode3.
+    want = ({int(m): ck for m, ck in cand["heads"].items()} if cand.get("heads")
+            else {1: cand["mode1_ckpt"], 2: cfg["mode2_ckpt"], 3: cfg["mode3_ckpt"]})
     if meta.get("heads"):
         have = {}
         for item in meta["heads"].split(","):
@@ -275,6 +278,198 @@ def export_onnx(cfg, cand, slot, dry):
         v["mask_slice"] = m.group(1)
     log("   " + (v.get("onnx_vs_torch") or "parity 줄을 못 찾음"))
     return out_abs, export_cmd, v, exp_info
+
+
+# ── ①-b 새 형식 후보: head 여러 개(`heads: {1: ckpt, 4: ckpt, …}`) — 2026-10-28 ─────────────────
+# 옛 형식(mode1_ckpt + 파일의 mode2·mode3) 후보는 위 경로 그대로 간다. 새 형식 후보는 자기 base·manifest·
+# 워크트리(mjlab)·템플릿·modes 를 갖고, mode4 클립 목록(슬롯 deploy.yaml clips:)을 manifest 에서 만든다.
+# 같은 후보 파일 안에 두 형식이 섞여도 된다(기존 날짜에 새 슬롯을 «추가» 하는 경우).
+CAND_KEYS = ("base", "manifest", "sampling_steps", "template_slot")
+
+
+def is_multihead(cand):
+    return bool(cand.get("heads"))
+
+
+def cand_cfg(cfg, cand):
+    """후보가 덮어쓴 파일 단위 값(base·manifest·steps·template) — 새 형식 후보는 자기 것을 갖는다."""
+    out = dict(cfg)
+    out.update({k: cand[k] for k in CAND_KEYS if cand.get(k) is not None})
+    if is_multihead(cand):
+        out["mode2_ckpt"] = out["mode3_ckpt"] = "none"     # 옛 칸 — 새 형식은 heads 가 원장
+    return out
+
+
+def cand_heads(cand):
+    return {int(m): str(ck) for m, ck in (cand.get("heads") or {}).items()}
+
+
+@contextlib.contextmanager
+def mjlab_ws(path):
+    """이 후보를 export 할 mjlab 워크트리(`mjlab:`) — 학습 원장·export·메타 읽기가 전부 이 워크트리 기준이다."""
+    global MJLAB
+    old = MJLAB
+    if path:
+        MJLAB = os.path.expanduser(str(path))
+    try:
+        yield MJLAB
+    finally:
+        MJLAB = old
+
+
+def export_onnx_multihead(cfg, cand, slot, dry):
+    """`export_multihead_onnx --head M=ckpt` — 옛 export_onnx 와 같은 건너뜀·대조·검증 줄 읽기."""
+    out_rel = os.path.join("exported", slot, "policy.onnx")
+    out_abs = os.path.join(MJLAB, out_rel)
+    cmd = [UV, "run", "--no-sync", "--with", "onnxruntime==1.22.0", "python", "-m",
+           "mjlab_g1_motion.scripts.tools.export_multihead_onnx",
+           "--flow-base-checkpoint", cfg["base"], "--manifest", cfg["manifest"]]
+    for m, ck in sorted(cand_heads(cand).items()):
+        cmd += ["--head", "%d=%s" % (m, ck)]
+    cmd += ["--sampling-steps", str(cfg.get("sampling_steps", 6)), "--out", out_rel]
+    export_cmd = "cd %s && %s" % (MJLAB, " ".join(cmd))
+    if os.path.exists(out_abs):
+        why = export_mismatch(onnx_metadata(out_abs), cfg, cand)
+        if not why:
+            log("   export 건너뜀 — 이미 있고 메타(base·헤드·steps)가 이 후보와 같다: %s" % out_rel)
+            return out_abs, export_cmd, {}, {"head": None, "note": "export 건너뜀 — 이미 있던 ONNX(메타 동일)를 썼다"}
+        log("   ⚠ 이미 있는 %s 가 이 후보와 다르다 — 다시 export 한다:" % out_rel)
+        for w in why:
+            log("      - " + w)
+    log("   export → %s (헤드 %s)" % (out_rel, ",".join(str(m) for m in sorted(cand_heads(cand)))))
+    if dry:
+        log("   (dry-run) " + export_cmd)
+        return out_abs, export_cmd, {}, None
+    exp_info = export_commit_info()
+    r = sh(cmd, cwd=MJLAB, check=False, capture=True)
+    txt = r.stdout or ""
+    tail = "\n".join(txt.strip().splitlines()[-25:])
+    if r.returncode != 0 or not os.path.exists(out_abs):
+        log(tail)
+        raise RuntimeError("export 실패: %s" % slot)
+    v = {}
+    m = re.search(r"onnxruntime vs torch\s+max\|Δ\|\s*=\s*([0-9.e+-]+)\s*\((\w+), tol=([0-9.e+-]+)\)\s*(modes [0-9,]+)?", txt)
+    if m:
+        v["onnx_vs_torch"] = "max|Δ| = %s (tol %s) %s%s" % (m.group(1), m.group(3), m.group(2),
+                                                           (" · " + m.group(4)) if m.group(4) else "")
+        if m.group(2) != "OK":
+            log(tail)
+            raise RuntimeError("parity 실패: %s" % slot)
+    for key, pat in (("graph", r"\[export\] (그래프 검증 OK — .*)"), ("obs_contract_sum", r"\[export\] (obs 계약 .*OK)"),
+                     ("mask_slice", r"\[export\] (mask slice .*OK)")):
+        mm = re.search(pat, txt)
+        if mm:
+            v[key] = mm.group(1)
+    v["heads_pairing"] = re.findall(r"\[export\] (head mode\d: base 짝 OK[^\n]*)", txt)
+    log("   " + (v.get("onnx_vs_torch") or "parity 줄을 못 찾음"))
+    return out_abs, export_cmd, v, exp_info
+
+
+def manifest_mode4_clips(manifest_rel):
+    """manifest 의 mode4 클립(= mode4 또는 mode3 태그, 학습 env 의 clip_mode_mask[:,3] |= [:,2]) 원본 경로, manifest 순서."""
+    p = manifest_rel if os.path.isabs(manifest_rel) else os.path.join(MJLAB, manifest_rel)
+    ents = load_yaml(p)["motions"]
+    out = []
+    for e in ents:
+        ms = e.get("modes") or []
+        if 4 in ms or 3 in ms:
+            f = e["file"]
+            out.append(f if os.path.isabs(f) else os.path.join(MJLAB, f))
+    return out
+
+
+def gen_obs_block_lines(onnx_abs):
+    """deploy.yaml 의 observations: 블록 = gen_obs_block.py 출력 그대로(ONNX 계약이 원장). onnx 는 mjlab uv 환경에 있다."""
+    r = subprocess.run([UV, "run", "--project", MJLAB, "--no-sync", "python", os.path.join(HERE, "gen_obs_block.py"),
+                        onnx_abs], text=True, capture_output=True,
+                       env={k: v for k, v in os.environ.items() if k not in ("LD_LIBRARY_PATH", "CONDA_PREFIX")})
+    if r.returncode != 0:
+        raise RuntimeError("gen_obs_block 실패: %s" % (r.stderr or r.stdout).strip()[-300:])
+    return r.stdout.rstrip("\n").split("\n")
+
+
+def render_multihead_yaml(tmpl_text, cand, slot, cfg, fg_train, obs_lines, clip_names, contract):
+    """새 형식 슬롯의 deploy.yaml. 템플릿(계약 v2 슬롯)의 작동 상수(관절·PD·action·safety)는 그대로 두고
+    «이 슬롯이 무엇인가» 를 말하는 칸은 전부 새로 쓴다: 머리 주석 · requires · modes · observations · gait 주석 ·
+    mode1 줄(min_swing — 옛 render_deploy_yaml 그대로) · clips."""
+    heads = cand_heads(cand)
+    text, parity = render_deploy_yaml(tmpl_text, dict(cand, mode1_ckpt=heads[1]), slot, cfg, fg_train)
+    modes = [int(m) for m in (cand.get("modes") or sorted(heads))]
+    names = [c.split(":")[0] for c in contract.split(",") if c.strip()]
+    hdr = ["# mjlab_g1_motion multihead 슬롯 %s — stage_candidates.py 가 후보 파일로 생성 (%s). 손으로 고치지 말 것" %
+           (slot, _dt.date.today().isoformat()),
+           "# 🔴 이 슬롯이 무엇인가 (원장 = ONNX_META.json · 각 head run 의 train_args.json):",
+           "#   flow base  %s" % cfg["base"],
+           "#   manifest   %s   (export 워크트리 %s)" % (cfg["manifest"], MJLAB)]
+    for m, ck in sorted(heads.items()):
+        hdr.append("#   mode%d head %s/%s  (launch commit %s)" % (m, os.path.basename(os.path.dirname(ck)),
+                                                                os.path.basename(ck), (training_commit(ck) or "?")[:7]))
+    hdr += ["#   sampling_steps=%s · 내놓는 모드 %s (ONNX 에 든 다른 모드 head 는 이 슬롯이 거부한다)" %
+            (cfg.get("sampling_steps", 6), modes),
+            "# Policy ONNX: obs[1,%d] -> actions[1,29]. observations: 블록은 gen_obs_block.py 출력 그대로(ONNX 계약이 원장)." %
+            sum(int(c.split(":")[1]) * int(c.split(":")[2]) for c in contract.split(",") if c.strip()),
+            "#", "# ⚠ HISTORY LAYOUT = TERM-MAJOR (mjlab ObservationManager 와 같다). use_gym_history: true 금지.", ""]
+    i = text.index("# ── 이 슬롯이 요구하는 C++ 기능")
+    text = "\n".join(hdr) + "\n" + text[i:]
+    # requires: 계약·목록이 요구하는 기능을 더한다(템플릿에 이미 있으면 그대로)
+    m = re.search(r"^requires:\n((?:  - .*\n)+)", text, re.M)
+    if not m:
+        raise RuntimeError("템플릿 deploy.yaml 에 requires: 블록이 없다")
+    have = [re.sub(r"\s*#.*", "", l).strip("- ").strip() for l in m.group(1).splitlines()]
+    add = []
+    if "limb_z" in names and "limb_z_obs" not in have:
+        add.append("  - limb_z_obs        # 🔴 관측 항 ref_limb_height(4) — v6final 이후 base 의 계약\n")
+    if clip_names and "clip_list" not in have:
+        add.append("  - clip_list         # 🔴 clips: 목록. 옛 바이너리는 조용히 무시하고 config.yaml 의 클립만 보인다\n")
+    text = text[:m.end()] + "".join(add) + text[m.end():]
+    text, n = re.subn(r"^modes: \[[^\]]*\]", "modes: [%s]" % ", ".join(str(x) for x in modes), text, count=1, flags=re.M)
+    if n != 1:
+        raise RuntimeError("템플릿 deploy.yaml 에 `modes: [...]` 줄이 없다")
+    # observations: 블록 통째 교체 (다음 최상위 줄 전까지)
+    lines = text.split("\n")
+    a = lines.index("observations:")
+    b = a + 1
+    while b < len(lines) and (lines[b].startswith(" ") or not lines[b].strip()):
+        b += 1
+    while b > a + 1 and not lines[b - 1].strip():
+        b -= 1
+    lines[a:b] = obs_lines
+    text = "\n".join(lines)
+    # gait 주석: «모드별 발-z» 머리부터 gait: 직전까지를 이 슬롯 기준으로
+    g0 = text.index("# ── 모드별 발-z 생성 조건")
+    g1 = text.index("\ngait:", g0)
+    gc = ["# ── 모드별 발-z 생성 조건 (MaskedLocoController; State_Mimic::load_gait_cfg 가 로드) ──",
+          "#   mode1 = %s @launch %s -> stage4_mode1_env_cfg.FOOT_GEN: %s" % (
+              os.path.basename(os.path.dirname(heads[1])), (training_commit(heads[1]) or "?")[:7],
+              ", ".join("%s %s" % (k, v) for k, v in fg_train.items()) or "(launch 커밋을 못 읽음)"),
+          "#   mode4 = 참조(클립) 발-z, mode5·6 = 0 — 생성기를 안 쓴다 → 줄 없음(= C++ 기본값)."]
+    text = text[:g0] + "\n".join(gc) + text[g1:]
+    if clip_names:
+        text = text.rstrip("\n") + "\n\n" + "\n".join(
+            ["# ── 클립 재생 모드(mode4)가 고를 클립 (기능 clip_list) — 학습 manifest 의 mode4 클립 %d 개, manifest 순서." % len(clip_names),
+             "#    파일 = 이 슬롯 params/ (manifest 원본의 실사본). 칸 번호 = 고정 칸(stand·primary·light·demo6) 뒤부터.",
+             "clips:"] + ["  - %s" % c for c in clip_names]) + "\n"
+    return text, parity
+
+
+def place_clips(slot_root, clip_srcs, dry):
+    """mode4 클립 실사본 → params/ (이 슬롯만의 목록이라 늘 실사본). 이미 같은 크기로 있으면 건너뛴다."""
+    par = os.path.join(slot_root, "params")
+    os.makedirs(par, exist_ok=True)
+    names, total = [], 0
+    for src in clip_srcs:
+        nm = os.path.basename(src)
+        if nm in names:
+            raise RuntimeError("클립 파일 이름이 겹친다: %s" % nm)
+        names.append(nm)
+        d = os.path.join(par, nm)
+        total += os.path.getsize(src)
+        if os.path.lexists(d) and os.path.getsize(d) == os.path.getsize(src):
+            continue
+        if not dry:
+            shutil.copy2(os.path.realpath(src), d)
+    log("   params/ 클립 %d 개 ← manifest mode4 (%.0f MB)" % (len(names), total / 1048576))
+    return names
 
 
 def onnx_metadata(path):
@@ -445,6 +640,11 @@ def write_meta(slot_root, slot, cand, cfg, day, export_cmd, verify, onnx_meta, f
     }
     if export_info is not None:                       # export 를 어느 mjlab commit 에서 했나 (패리티 표가 읽는다)
         meta["export_commit"] = export_info
+    if is_multihead(cand):                            # 새 형식: heads 맵이 원장 (패리티 표·index 가 읽는다)
+        meta["heads"] = {str(m): ck for m, ck in sorted(cand_heads(cand).items())}
+        meta["modes"] = [int(m) for m in (cand.get("modes") or sorted(cand_heads(cand)))]
+        meta["mjlab_ws"] = MJLAB
+        meta["clips"] = int(cand.get("_n_clips") or 0)
     p = os.path.join(slot_root, "ONNX_META.json")
     if not dry:
         json.dump(meta, open(p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
@@ -506,6 +706,43 @@ def run_parity(slot, dry):
     return r.returncode == 0
 
 
+def stage_multihead(c, cfg, slot, root, day, dry, npz_dir, first_slot):
+    """새 형식 후보 하나 → 슬롯. 반환 "ok" · "fail"(패리티 FAIL) · None(export 실패로 건너뜀)."""
+    cc = cand_cfg(cfg, c)
+    heads = cand_heads(c)
+    modes = [int(m) for m in (c.get("modes") or sorted(heads))]
+    with mjlab_ws(c.get("mjlab")):
+        log("\n■ %s  (multihead 헤드 %s · 모드 %s · %s)" % (slot, ",".join(map(str, sorted(heads))), modes, MJLAB))
+        if os.path.exists(os.path.join(root, "ONNX_META.json")) and os.path.exists(os.path.join(root, "exported", "policy.onnx")):
+            log("   이미 있다 — 건너뜀 (별칭만 갱신)")
+            return "ok" if run_parity(slot, dry) else "fail"
+        fg_train = foot_gen_at(training_commit(heads[1]))
+        try:
+            onnx_abs, export_cmd, verify, export_info = export_onnx_multihead(cc, c, slot, dry)
+        except RuntimeError as e:
+            log("🔴 %s — 이 후보는 건너뛴다" % e)
+            return None
+        if dry:
+            log("   (dry-run) 슬롯·클립·deploy.yaml·META·패리티는 export 뒤에 만든다")
+            return "ok"
+        os.makedirs(root, exist_ok=True)
+        place_weights(root, onnx_abs, npz_dir, first_slot, slot, dry)          # config.yaml 이 가리키는 템플릿 npz
+        want = str(c.get("clips", "manifest"))
+        clip_srcs = manifest_mode4_clips(cc["manifest"]) if (4 in modes and want == "manifest") else []
+        clip_names = place_clips(root, clip_srcs, dry) if clip_srcs else []
+        slot_onnx = os.path.join(root, "exported", "policy.onnx")
+        meta_onnx = onnx_metadata(slot_onnx)
+        tmpl_text = open(os.path.join(SLOTDIR, cc["template_slot"], "params", "deploy.yaml"), encoding="utf-8").read()
+        text, parity_note = render_multihead_yaml(tmpl_text, c, slot, cc, fg_train, gen_obs_block_lines(slot_onnx),
+                                                  clip_names, meta_onnx.get("obs_contract", ""))
+        open(os.path.join(root, "params", "deploy.yaml"), "w", encoding="utf-8").write(text)
+        log("   params/deploy.yaml  (템플릿 %s · modes %s · clips %d · min_swing %s)  %s"
+            % (cc["template_slot"], modes, len(clip_names), c.get("min_swing", 0), parity_note))
+        write_meta(root, slot, dict(c, mode1_ckpt=heads[1], _n_clips=len(clip_names)), cc, day, export_cmd, verify,
+                   meta_onnx, fg_train, parity_note, requires_of(text), slot_onnx, dry, export_info=export_info)
+        return "ok" if run_parity(slot, dry) else "fail"
+
+
 # ── 메인 ─────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
@@ -524,9 +761,27 @@ def main():
     cands = cfg.get("candidates") or []
     if not cands:
         die("candidates 가 비었다")
+    old_fmt = [c for c in cands if not is_multihead(c)]
     for k in ("base", "manifest", "mode2_ckpt", "mode3_ckpt", "template_slot"):
-        if not cfg.get(k):
-            die("후보 파일에 %s 가 없다" % k)
+        if old_fmt and not cfg.get(k):
+            die("후보 파일에 %s 가 없다 (옛 형식 후보가 있다)" % k)
+    for c in cands:
+        if not is_multihead(c):
+            continue
+        cc = cand_cfg(cfg, c)
+        for k in ("base", "manifest", "template_slot"):
+            if not cc.get(k):
+                die("새 형식 후보 %s 에 %s 가 없다" % (c.get("alias"), k))
+        if 1 not in cand_heads(c):
+            die("새 형식 후보 %s 에 heads 1(mode1) 이 없다 — gait 줄·폴백 모드가 mode1 이다" % c.get("alias"))
+        with mjlab_ws(c.get("mjlab")):
+            for p_ in [cc["base"], cc["manifest"]] + list(cand_heads(c).values()):
+                if not os.path.exists(os.path.join(MJLAB, p_)):
+                    die("새 형식 후보 %s: 없는 파일 %s (워크트리 %s)" % (c.get("alias"), p_, MJLAB))
+        if not os.path.exists(os.path.join(SLOTDIR, cc["template_slot"], "params", "deploy.yaml")):
+            die("새 형식 후보 %s 의 템플릿 슬롯 deploy.yaml 이 없다: %s" % (c.get("alias"), cc["template_slot"]))
+    if not cfg.get("template_slot"):
+        cfg["template_slot"] = cand_cfg(cfg, cands[0])["template_slot"]
     tmpl_root = os.path.join(SLOTDIR, cfg["template_slot"])
     tmpl_yaml = os.path.join(tmpl_root, "params", "deploy.yaml")
     if not os.path.exists(tmpl_yaml):
@@ -539,10 +794,10 @@ def main():
             % (cfg["template_slot"], cfg["template_slot"]))
     log("npz 출처: %s" % os.path.relpath(npz_dir, REPO) if npz_dir.startswith(REPO) else "npz 출처: %s" % npz_dir)
     for c in cands:
-        for k in ("alias", "label", "mode1_ckpt"):
+        for k in ("alias", "label") + (() if is_multihead(c) else ("mode1_ckpt",)):
             if not c.get(k):
                 die("후보에 %s 가 없다: %s" % (k, c))
-        if not os.path.exists(os.path.join(MJLAB, c["mode1_ckpt"])):
+        if not is_multihead(c) and not os.path.exists(os.path.join(MJLAB, c["mode1_ckpt"])):
             die("체크포인트가 없다: %s" % c["mode1_ckpt"])
 
     r = subprocess.run(["git", "branch", "--show-current"], cwd=REPO, text=True, capture_output=True)
@@ -555,6 +810,16 @@ def main():
     for c in cands:
         slot = "%s_%s_%s" % (day, c["alias"], c["label"])
         root = os.path.join(SLOTDIR, slot)
+        if is_multihead(c):
+            res = stage_multihead(c, cfg, slot, root, day, dry, npz_dir, first_slot)
+            if res == "fail":
+                parity_failed.append(slot)
+                log("🔴 패리티 FAIL — 이 후보는 ACTIVE·커밋에서 뺀다 (표: %s/PARITY.md)" % os.path.relpath(root, REPO))
+            elif res == "ok":
+                made.append((c["alias"], slot))
+                if first_slot is None:
+                    first_slot = slot
+            continue
         log("\n■ %s  (%s)" % (slot, c["mode1_ckpt"]))
         if os.path.exists(os.path.join(root, "ONNX_META.json")) and os.path.exists(os.path.join(root, "exported", "policy.onnx")):
             if a.rerender_yaml:

@@ -40,3 +40,17 @@ known:
     since: 2026-10-08
     where: "deploy/robots/g1/src/State_Mimic.cpp 의 VX_MAX_* 위 주석 (≈182행, «모드별 봉투 분리는 별건으로 남겨 둔다»)"
     decision: "사용자 결정 대기: 고칠지/유지할지"
+  - id: K3
+    row: cmd.mode1
+    key: vx
+    train: [-1.5, 3.0]
+    deploy: [-1.5, 2.5]
+    reason: >-
+      final_v6 skill1 head(공유 base m3all 250k 위, s4_mode1_m3all250k_resume89k_to109k)는 stage4_mode1
+      CMD_BASE_VEL vx (-1.5, 3.0)(mjlab beac041, 10-22)로 학습했는데 배포 전진 상한(VX_MAX_FWD)은 2.5 다.
+      조이스틱 끝 = 2.5 m/s 라 학습 봉투 «안쪽» 만 쓴다(OOD 아님) — 2.5~3.0 m/s 구간을 실기에서 안 쓸 뿐이다.
+      후진 1.5 · vy · wz 는 같다.
+    since: 2026-10-28
+    where: "deploy/robots/g1/src/State_Mimic.cpp 의 VX_MAX_FWD · mjlab_g1_final stage4_mode1_env_cfg.CMD_BASE_VEL"
+    decision: "사용자 결정 (2026-10-28): 첫 실기는 전진 상한 2.5 유지"
+    stale_if: same_train      # vx 3.0 으로 학습한 head 의 슬롯에만 해당 — 다른 mode1 head 슬롯에선 «낡음» 아님
