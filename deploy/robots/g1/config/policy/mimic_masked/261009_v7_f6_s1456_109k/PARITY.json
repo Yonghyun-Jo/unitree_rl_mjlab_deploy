@@ -2,23 +2,23 @@
  "tool": "deploy/scripts/check_slot_parity.py",
  "tool_version": 1,
  "slot": "261009_v7_f6_s1456_109k",
- "checked_at": "2026-10-28T16:31:17",
+ "checked_at": "2026-10-28T16:45:20",
  "verdict": "KNOWN",
  "counts": {
-  "PASS": 42,
+  "PASS": 45,
   "WARN": 2,
   "SKIP": 2,
   "KNOWN": 1
  },
  "fresh": {
   "onnx_md5": "ec8802500368ad5c9acdfd17ffcdf90b",
-  "deploy_yaml_sha256": "e2f4eaa0bcdc30c4bc3ee6b0396181220b24c6d43cf8e1d92ffdbf23d72ac9ad"
+  "deploy_yaml_sha256": "13c4a1012f53d579837b9cdd88bd248eaa1d9e8ead7176089261fb568105d925"
  },
  "context_sha256": {
-  "deploy/robots/g1/src/State_Mimic.cpp": "09e6b6a20eff12b5dabac63fd87188bcade329537153383f1aebd8b56f1b3cd9",
+  "deploy/robots/g1/src/State_Mimic.cpp": "3fd9d55ae275076538807757d6e994343babe52b1ee3f0b3972b187f2061ee12",
   "deploy/include/isaaclab/envs/mdp/observations/observations.h": "6b3fb08a75ef44600aa222ef131b66d4404968c0f2b0f9879bd091920a4ee5e5",
   "deploy/robots/g1/include/ModeTable.h": "22e62587418c853972d78f4295d661790682bb13c321c648abbdfd8ce1f08ea6",
-  "deploy/robots/g1/include/DeployFeatures.h": "4eeafc7f9137bd9cd4c2801262600388d1f330f6c78181a69673917195d4bcdc",
+  "deploy/robots/g1/include/DeployFeatures.h": "563c267fef02b0cc0e20d1c4c83d4abb6d39b2ec67adb4300c8601afe74d4727",
   "deploy/robots/g1/include/MaskedLocoController.h": "3e9e2fd4ec7c06ebbdf2df88edd35d07c9120ee3d6d0df2bffbaa43163a642be",
   "deploy/robots/g1/include/GaitLut.h": "617944f093d821f1d31c7886f7a12ccb577564465bb195f769196de11bf22c35",
   "simulate/config.yaml": "2990b4779256d5e2319bafe133de46a1ad987b39b334e3fd4583b14262003a18",
@@ -32,7 +32,7 @@
   "mode6": "88edb2f2e88646b96a7f45fc2ba3655faa394e10"
  },
  "mjlab": "/home/piene/mjlab1.4/mjlab_g1_final",
- "deploy_repo_head": "9098a28",
+ "deploy_repo_head": "368a48a",
  "known_used": [
   {
    "id": "K3",
@@ -448,6 +448,36 @@
   {
    "no": "4.3",
    "group": "4 명령·gait",
+   "id": "cmd.mode6",
+   "item": "mode6 명령 범위 (기는 모드 봉투 = 그 head 의 학습 범위)",
+   "train": "stage4_mode6 CMD_BASE_VEL vx [-0.3, 0.5] vy [-0.3, 0.3] wz [-1, 1] @88edb2f",
+   "deploy": "C++ CRAWL vx [-0.3, 0.5] vy [-0.3, 0.3] wz [-1, 1]",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "4.4",
+   "group": "4 명령·gait",
+   "id": "cmd.limb_z_src",
+   "item": "사지 높이 칸을 켜는 모드 (학습 limb_z_live ↔ 배포 crawl 행)",
+   "train": "limb_z_live 모드 [6] @d84f487",
+   "deploy": "crawl_cmd_live 행 [6] · 내놓는 기는 모드 [6]",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "4.5",
+   "group": "4 명령·gait",
+   "id": "gait.limb_lut",
+   "item": "LimbLut.h 표 == 그 head 의 limb_lut_data (mode6)",
+   "train": "limb_lut_data.py @88edb2f (NB 32 · 주기 1.64 s)",
+   "deploy": "LimbLut.h GENERATED 구역",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "4.6",
+   "group": "4 명령·gait",
    "id": "gait.reader",
    "item": "FOOT_GEN 판독기 두 벌이 같은 값을 읽는가 (계측기 자기검증)",
    "train": "import (그 commit 의 cfg 모듈)",
@@ -456,7 +486,7 @@
    "note": ""
   },
   {
-   "no": "4.4",
+   "no": "4.7",
    "group": "4 명령·gait",
    "id": "gait.mode1",
    "item": "mode1 발-z 생성 조건 (foot_z obs 의 값)",
@@ -466,7 +496,7 @@
    "note": ""
   },
   {
-   "no": "4.5",
+   "no": "4.8",
    "group": "4 명령·gait",
    "id": "cmd.mode4_clips",
    "item": "mode4 클립 = 학습 manifest(mode4) 클립 (OOD·다른 리타겟판 없음)",
@@ -476,7 +506,7 @@
    "note": ""
   },
   {
-   "no": "4.6",
+   "no": "4.9",
    "group": "4 명령·gait",
    "id": "gait.lut_header",
    "item": "GaitLut.h 배열 == 학습 gait_lut_data",
@@ -486,7 +516,7 @@
    "note": "gen_gait_lut_header --check: 표는 같다 (숫자 바이트 동일)."
   },
   {
-   "no": "4.7",
+   "no": "4.10",
    "group": "4 명령·gait",
    "id": "cfg.imu_cal",
    "item": "IMU 보정 (projected_gravity 를 바꾼다)",
@@ -496,17 +526,17 @@
    "note": ""
   },
   {
-   "no": "4.8",
+   "no": "4.11",
    "group": "4 명령·gait",
    "id": "cfg.requires",
    "item": "requires ⊆ 이 소스가 아는 기능",
-   "train": "deploy.yaml requires 12개",
-   "deploy": "DeployFeatures.h known() 13개",
+   "train": "deploy.yaml requires 13개",
+   "deploy": "DeployFeatures.h known() 14개",
    "verdict": "PASS",
    "note": ""
   },
   {
-   "no": "4.9",
+   "no": "4.12",
    "group": "4 명령·gait",
    "id": "tierb.stamp",
    "item": "추적 패리티 (sim2sim obs 덤프 vs 학습 함수)",

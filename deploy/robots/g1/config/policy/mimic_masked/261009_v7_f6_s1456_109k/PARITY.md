@@ -1,9 +1,9 @@
 # 패리티 — `261009_v7_f6_s1456_109k`
 
-판정 **KNOWN** (PASS 42 · KNOWN 1 · WARN 2 · SKIP 2 · FAIL 0) · 2026-10-28T16:31:17 · check_slot_parity.py v1
+판정 **KNOWN** (PASS 45 · KNOWN 1 · WARN 2 · SKIP 2 · FAIL 0) · 2026-10-28T16:45:20 · check_slot_parity.py v1
 
 - 학습 원장(각 run 의 training_meta.json commit): base `d84f487` · mode1 `640aae0` · mode4 `77b6aa0` · mode5 `640aae0` · mode6 `88edb2f`
-- 배포 (판정 당시): deploy repo `9098a28` · ONNX md5 `ec8802500368` · deploy.yaml sha256 `e2f4eaa0bcdc`
+- 배포 (판정 당시): deploy repo `368a48a` · ONNX md5 `ec8802500368` · deploy.yaml sha256 `13c4a1012f53`
 - 이 표가 유효한 조건: ONNX md5·deploy.yaml sha256 가 위와 같을 것 (policy_slot push · robot.sh verify 가 본다)
 
 | # | 항목 | 학습 (원장) | 배포 | 판정 | 비고 |
@@ -48,13 +48,16 @@
 | 3.9 | last_action = 정책 raw 출력 | mjlab last_action → raw_action | observations.h last_action → action_manager->action() | **PASS** |  |
 | 4.1 | 모드 → mask 비트 | mask 8칸 (계약 v2) | - | **SKIP** | 계약 v2 mode_mask 대조는 gen_mode_table_header --check 몫 |
 | 4.2 | mode1 명령 범위 (조이스틱 끝 = 학습 범위의 끝) | stage4_mode1 CMD_BASE_VEL vx [-1.5, 3] vy [-0.8, 0.8] wz [-2, 2] @640aae0 | C++ vx [-1.5, 2.5] vy [-0.8, 0.8] wz [-2, 2] (모드 공통) | **KNOWN** | vx: 학습 [-1.5, 3] ≠ 배포 [-1.5, 2.5] — K3 (사용자 결정 (2026-10-28): 첫 실기는 전진 상한 2.5 유지) |
-| 4.3 | FOOT_GEN 판독기 두 벌이 같은 값을 읽는가 (계측기 자기검증) | import (그 commit 의 cfg 모듈) | stage_candidates.foot_gen_at (META gait_parity 를 쓴 판독기) | **PASS** |  |
-| 4.4 | mode1 발-z 생성 조건 (foot_z obs 의 값) | FOOT_GEN@640aae0: source=lut cadence=1.15 settle_steps=100 min_swing=0.08 stand_deadzone=0 turn_k=0.3 walk_max=1.2 run_min=1.7 table=2 turn_asym=True settle_eff=0.15 settle_phase=0.07 | deploy gait: source=lut cadence=1.15 settle_steps=100 min_swing=0.08 stand_deadzone=0 turn_k=0.3 walk_max=1.2 run_min=1.7 table=2 turn_asym=True settle_eff=0.15 settle_phase=0.07 | **PASS** |  |
-| 4.5 | mode4 클립 = 학습 manifest(mode4) 클립 (OOD·다른 리타겟판 없음) | manifest mode4 58 개 | slot clips 58 개 · requires clip_list 있음 | **PASS** |  |
-| 4.6 | GaitLut.h 배열 == 학습 gait_lut_data | gait_lut_data.py (V1=d94c7d9~1 · V2=워킹트리) | GaitLut.h GENERATED 구역 | **PASS** | gen_gait_lut_header --check: 표는 같다 (숫자 바이트 동일). |
-| 4.7 | IMU 보정 (projected_gravity 를 바꾼다) | 학습: 보정 없음 | config.yaml imu_cal pitch 0° roll 0° | **PASS** |  |
-| 4.8 | requires ⊆ 이 소스가 아는 기능 | deploy.yaml requires 12개 | DeployFeatures.h known() 13개 | **PASS** |  |
-| 4.9 | 추적 패리티 (sim2sim obs 덤프 vs 학습 함수) | - | - | **SKIP** | Tier B 미도입 |
+| 4.3 | mode6 명령 범위 (기는 모드 봉투 = 그 head 의 학습 범위) | stage4_mode6 CMD_BASE_VEL vx [-0.3, 0.5] vy [-0.3, 0.3] wz [-1, 1] @88edb2f | C++ CRAWL vx [-0.3, 0.5] vy [-0.3, 0.3] wz [-1, 1] | **PASS** |  |
+| 4.4 | 사지 높이 칸을 켜는 모드 (학습 limb_z_live ↔ 배포 crawl 행) | limb_z_live 모드 [6] @d84f487 | crawl_cmd_live 행 [6] · 내놓는 기는 모드 [6] | **PASS** |  |
+| 4.5 | LimbLut.h 표 == 그 head 의 limb_lut_data (mode6) | limb_lut_data.py @88edb2f (NB 32 · 주기 1.64 s) | LimbLut.h GENERATED 구역 | **PASS** |  |
+| 4.6 | FOOT_GEN 판독기 두 벌이 같은 값을 읽는가 (계측기 자기검증) | import (그 commit 의 cfg 모듈) | stage_candidates.foot_gen_at (META gait_parity 를 쓴 판독기) | **PASS** |  |
+| 4.7 | mode1 발-z 생성 조건 (foot_z obs 의 값) | FOOT_GEN@640aae0: source=lut cadence=1.15 settle_steps=100 min_swing=0.08 stand_deadzone=0 turn_k=0.3 walk_max=1.2 run_min=1.7 table=2 turn_asym=True settle_eff=0.15 settle_phase=0.07 | deploy gait: source=lut cadence=1.15 settle_steps=100 min_swing=0.08 stand_deadzone=0 turn_k=0.3 walk_max=1.2 run_min=1.7 table=2 turn_asym=True settle_eff=0.15 settle_phase=0.07 | **PASS** |  |
+| 4.8 | mode4 클립 = 학습 manifest(mode4) 클립 (OOD·다른 리타겟판 없음) | manifest mode4 58 개 | slot clips 58 개 · requires clip_list 있음 | **PASS** |  |
+| 4.9 | GaitLut.h 배열 == 학습 gait_lut_data | gait_lut_data.py (V1=d94c7d9~1 · V2=워킹트리) | GaitLut.h GENERATED 구역 | **PASS** | gen_gait_lut_header --check: 표는 같다 (숫자 바이트 동일). |
+| 4.10 | IMU 보정 (projected_gravity 를 바꾼다) | 학습: 보정 없음 | config.yaml imu_cal pitch 0° roll 0° | **PASS** |  |
+| 4.11 | requires ⊆ 이 소스가 아는 기능 | deploy.yaml requires 13개 | DeployFeatures.h known() 14개 | **PASS** |  |
+| 4.12 | 추적 패리티 (sim2sim obs 덤프 vs 학습 함수) | - | - | **SKIP** | Tier B 미도입 |
 
 ## KNOWN — 학습과 다르다는 것을 알고 배포하는 항목 (`parity_known.yaml`)
 

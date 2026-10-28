@@ -69,9 +69,9 @@ candidates:
       5: logs/rsl_rl/g1_student/2026-10-26_01-05-42_s4_mode5_m3all250k_rebase115k_to140k_retry/keep_130000.pt
       6: logs/rsl_rl/g1_student/2026-10-20_12-43-44_s4_mode6_v6final_rebase90k_to110k/rebase_m3all250k_109996.pt
     # ↑ 1 = model_108998.pt 의 같은 바이트 사본(md5 7b1d016f). 6 = 임시 채택판(재학습판으로 바꿀 예정).
-    modes: [1, 4, 5]                       # 🔴 6 은 단계 C(사지 LUT C++ 포팅)까지 잠근다 — 키 6 은 제어기가 거부
+    modes: [1, 4, 5, 6]                    # 6 = 2026-10-28 단계 C(사지 LUT C++ · 기는 모드 봉투 · 네발 진입)로 연다
     clips: manifest                        # mode4 = 학습 manifest 의 mode4 클립 전부(58)
     min_swing: 0.08
-    summary: "final_v6 공유 base 위 skill 1·4·5 한 ONNX — 모드 키로 갈아탄다 (6 은 잠금)"
-    watch: ["1: 걷기·멈춤 자세가 261009 v1~v6 과 비슷한가 (전진 상한 2.5)", "4: 클립 재생 — 고른 클립 따라가다 넘어지지 않나", "5: 자세 버튼 기립·네발·눕기 도착"]
-    note: "공유 flow base v6final-m3all 250k(mjlab final_v6) 위 head 4개를 한 ONNX(obs 3006 = policy 2270 + 미리보기 736, limb_z 4칸 포함)로 묶었다. skill1 = s4_mode1_m3all250k_resume89k_to109k 108,998 (표 A 생존 94.6 % · vx RMS 0.472 · 고정 3.0 m/s 명령 2.70 m/s — 학습은 vx 3.0 까지, 배포 상한 2.5 = KNOWN K3). skill4 = 249,995 (head_probe4 완주 92.6 %, 58 클립 mode4). skill5 = 130,000 (edge_rollout 6 간선 strict 99.8/100/100/99.8/97.0/100 %). skill6 = 임시판 rebase_m3all250k_109996 — 이 슬롯은 modes [1,4,5] 라 키 6 을 거부한다(사지 LUT C++ 미포팅). 키: 1 걷기 · 4 클립 재생(0 stand 에서 시작, [ ] 또는 GUI 목록으로 58 클립 중 선택) · 5 자세(z x c b n h). skill5·6 head 는 도지에서 학습해 launch commit 기록이 없다 — 패리티 표는 launch 시각 직전 final_v6 커밋으로 추정(WARN)."
+    summary: "final_v6 공유 base 위 skill 1·4·5·6 한 ONNX — 모드 키로 걷기·재생·네발·무릎 기기"
+    watch: ["1 걷기·뛰기 → 4 클립 재생 → 5 네발(x) → 6 무릎 기기 이어서 넘어지지 않나", "6: 앞으로 기기가 나아가나 (풀스틱 = 0.5 m/s)", "5 z 로 다시 서서 1 로 돌아오나"]
+    note: "공유 flow base v6final-m3all 250k(mjlab final_v6) 위 head 4개를 한 ONNX(obs 3006 = policy 2270 + 미리보기 736, limb_z 4칸 포함)로 묶었다. skill1 = s4_mode1_m3all250k_resume89k_to109k 108,998 (표 A 생존 94.6 % · vx RMS 0.472 · 고정 3.0 m/s 명령 2.70 m/s — 학습은 vx 3.0 까지, 배포 상한 2.5 = KNOWN K3). skill4 = 249,995 (head_probe4 완주 92.6 %, 58 클립 mode4). skill5 = 130,000 (edge_rollout 6 간선 strict 99.8/100/100/99.8/97.0/100 %). skill6 = 임시판 rebase_m3all250k_109996 (학습 sim 고정 명령 vx 0.3/0.5 → 0.15/0.43 m/s — 망가진 head 계보라 base 수준, 재학습판으로 바꿀 예정). 키: 1 걷기 · 4 클립 재생(0 stand 에서 시작, [ ] 또는 GUI 목록으로 58 클립 중 선택) · 5 자세(z x c b n h) · 6 무릎 기기 = 네발 자세(골반 0.25~0.55 m · 기울기 30~85°)에서만 들어간다(서서 누르면 «네발 자세에서만» 거부) · 그 모드의 명령 = vx −0.3~0.5 · vy ±0.3 · wz ±1.0 (풀스틱 = 끝) · 사지 높이 4칸 = LimbLut.h(학습 limb_lut 1:1, golden 0 오차). skill5·6 head 는 도지에서 학습해 launch commit 기록이 없다 — 패리티 표는 launch 시각 직전 final_v6 커밋으로 추정(WARN)."

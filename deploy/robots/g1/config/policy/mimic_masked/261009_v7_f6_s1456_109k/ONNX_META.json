@@ -3,13 +3,13 @@
   "slot": "261009_v7_f6_s1456_109k",
   "trial": "v7",
   "trial_day": "2026-10-09",
-  "summary": "final_v6 공유 base 위 skill 1·4·5 한 ONNX — 모드 키로 갈아탄다 (6 은 잠금)",
+  "summary": "final_v6 공유 base 위 skill 1·4·5·6 한 ONNX — 모드 키로 걷기·재생·네발·무릎 기기",
   "watch": [
-    "1: 걷기·멈춤 자세가 261009 v1~v6 과 비슷한가 (전진 상한 2.5)",
-    "4: 클립 재생 — 고른 클립 따라가다 넘어지지 않나",
-    "5: 자세 버튼 기립·네발·눕기 도착"
+    "1 걷기·뛰기 → 4 클립 재생 → 5 네발(x) → 6 무릎 기기 이어서 넘어지지 않나",
+    "6: 앞으로 기기가 나아가나 (풀스틱 = 0.5 m/s)",
+    "5 z 로 다시 서서 1 로 돌아오나"
   ],
-  "note": "공유 flow base v6final-m3all 250k(mjlab final_v6) 위 head 4개를 한 ONNX(obs 3006 = policy 2270 + 미리보기 736, limb_z 4칸 포함)로 묶었다. skill1 = s4_mode1_m3all250k_resume89k_to109k 108,998 (표 A 생존 94.6 % · vx RMS 0.472 · 고정 3.0 m/s 명령 2.70 m/s — 학습은 vx 3.0 까지, 배포 상한 2.5 = KNOWN K3). skill4 = 249,995 (head_probe4 완주 92.6 %, 58 클립 mode4). skill5 = 130,000 (edge_rollout 6 간선 strict 99.8/100/100/99.8/97.0/100 %). skill6 = 임시판 rebase_m3all250k_109996 — 이 슬롯은 modes [1,4,5] 라 키 6 을 거부한다(사지 LUT C++ 미포팅). 키: 1 걷기 · 4 클립 재생(0 stand 에서 시작, [ ] 또는 GUI 목록으로 58 클립 중 선택) · 5 자세(z x c b n h). skill5·6 head 는 도지에서 학습해 launch commit 기록이 없다 — 패리티 표는 launch 시각 직전 final_v6 커밋으로 추정(WARN).",
+  "note": "공유 flow base v6final-m3all 250k(mjlab final_v6) 위 head 4개를 한 ONNX(obs 3006 = policy 2270 + 미리보기 736, limb_z 4칸 포함)로 묶었다. skill1 = s4_mode1_m3all250k_resume89k_to109k 108,998 (표 A 생존 94.6 % · vx RMS 0.472 · 고정 3.0 m/s 명령 2.70 m/s — 학습은 vx 3.0 까지, 배포 상한 2.5 = KNOWN K3). skill4 = 249,995 (head_probe4 완주 92.6 %, 58 클립 mode4). skill5 = 130,000 (edge_rollout 6 간선 strict 99.8/100/100/99.8/97.0/100 %). skill6 = 임시판 rebase_m3all250k_109996 (학습 sim 고정 명령 vx 0.3/0.5 → 0.15/0.43 m/s — 망가진 head 계보라 base 수준, 재학습판으로 바꿀 예정). 키: 1 걷기 · 4 클립 재생(0 stand 에서 시작, [ ] 또는 GUI 목록으로 58 클립 중 선택) · 5 자세(z x c b n h) · 6 무릎 기기 = 네발 자세(골반 0.25~0.55 m · 기울기 30~85°)에서만 들어간다(서서 누르면 «네발 자세에서만» 거부) · 그 모드의 명령 = vx −0.3~0.5 · vy ±0.3 · wz ±1.0 (풀스틱 = 끝) · 사지 높이 4칸 = LimbLut.h(학습 limb_lut 1:1, golden 0 오차). skill5·6 head 는 도지에서 학습해 launch commit 기록이 없다 — 패리티 표는 launch 시각 직전 final_v6 커밋으로 추정(WARN).",
   "staged_by": "deploy/scripts/stage_candidates.py",
   "requires": [
     "obs_contract",
@@ -23,7 +23,8 @@
     "mode5_driver",
     "ground_safety",
     "limb_z_obs",
-    "clip_list"
+    "clip_list",
+    "mode6_crawl"
   ],
   "sampling_steps": "6",
   "actor_hidden_dims": "[1024, 1024, 1024, 512]",
@@ -67,7 +68,7 @@
       "head mode6: base 짝 OK — 헤드에 든 얼린 base 사본이 이 base 와 같다 (rebase 판, run 원장의 base 는 keep_199498_privc.pt) · cmd_mode 6 (2026-10-20_12-43-44_s4_mode6_v6final_rebase90k_to110k)"
     ],
     "onnx_md5": "ec8802500368ad5c9acdfd17ffcdf90b",
-    "sim2sim_walk": "★★★★☆ com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 9098a28, 대조군 v6 같은 세션). ① mode1 램프 0.5→1.0→1.5→2.0→2.5 m/s(11 s 씩)→정지→회전 0.8 rad/s 88 s: 안전 이벤트 0 · pos_clamp 0 · |qd| 최대 15.32 rad/s(L_ank_pitch, v6 15.35) · 기울기 최대 13.6°(v6 15.0°). 저속(0.5 m/s) 골반 기울기 11~13°(v6 3~4°) — mjlab 학습 sim 고정 명령에서도 109k 는 0.5/1.0/1.5/2.0 m/s 에 12.9/11.0/8.8/7.9°, 정지 2.4° 라 정책 자체의 자세(배포 불일치 아님). ② mode4: 0 stand → [ (목록 마지막 sprint1_subject4) 21 s 재생 → ] stand → 1: 안전 이벤트 0 · pos_clamp 0 · |qd| 15.28 · 기울기 34° (클립 62 칸 = stand·primary·light·demo6 + clips 58). ③ mode5 자세 고리(직립→네발→직립→앉기→직립→눕기→직립→mode1) 7/7 도착 0.49~3.21 s · 안전 이벤트 0 · pos_clamp 0 · |qd| 최대 19.72 rad/s(R_knee, 기립 중 순간 — crit 19 는 5 틱 연속이 아니라 안 걸림) · 기울기 93°(바닥 자세). 기동 줄: requires 12 전부 지원 · modes 1 4 5 · ref_limb_height 4×10 · 미리보기 있음 · clips 58 · pos_clamp ON · gait mode1 lut V2 cadence 1.15 settle 100 min_swing 0.08. 키 6 은 이 슬롯이 거부(사지 LUT 미포팅). (2026-10-28)",
+    "sim2sim_walk": "★★★★☆ com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 단계 C). ① 사용자 흐름 116 s: 1 걷기 1.0→2.0 m/s→정지 · 4 진입(0 stand) → [ sprint1_subject4 16 s → ] stand · 5 직립(+0.48 s) · 서서 6 = 거부 «네발 자세에서만 들어간다 (mode5 에서 «네발 기기» x 를 먼저)» · x 네발 도착 +1.05 s(z_fk 0.47 · 46°) · 6 진입 → 전진 0.3 m/s 12 s(어깨·팔 |qd| 최대 8.2 rad/s = 사지를 실제로 든다) → 정지 → 회전 0.5 rad/s 9 s → 정지 · 5 → 직립 +1.49 s · 1 복귀. 안전 이벤트 0 · pos_clamp 0 · overrun 0. 🔴 |qd| 최대 21.7 rad/s (R_knee) = 4 의 sprint 재생 «중» 에 ] 로 stand 로 바꾼 직후 0.25 s(crit 19, 5 틱 연속이 아니라 안 걸림, 하드웨어 무릎 20) → 실기에선 달리는 클립 도중 stand 로 바꾸지 말 것(클립 끝·느린 구간에서). 기기 전진 속도는 CSV 에 몸통 위치가 없어 못 쟀다(학습 sim 고정 명령: 이 임시 head 는 vx 0.3/0.5 → 0.15/0.43 m/s). ② 앞 판(10-28 오후): mode1 램프 2.5 m/s · mode4 sprint · mode5 자세 7/7 전부 넘어짐 0, 저속 골반 11~13°(학습과 같음). (2026-10-28)",
     "real_robot": "미실행"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_final && /home/piene/.local/bin/uv run --no-sync --with onnxruntime==1.22.0 python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-10-23_13-02-11_stage2_v6final_m3all_cap1024_steps6_resume199k5_60k/keep_250000.pt --manifest motions/g1_flow_specialists_c3_m6.yaml --head 1=logs/rsl_rl/g1_student/2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k/keep_108998.pt --head 4=logs/rsl_rl/g1_student/2026-10-26_12-11-17_s4_mode4_m3all250k_resume227k_to250k/keep_249995.pt --head 5=logs/rsl_rl/g1_student/2026-10-26_01-05-42_s4_mode5_m3all250k_rebase115k_to140k_retry/keep_130000.pt --head 6=logs/rsl_rl/g1_student/2026-10-20_12-43-44_s4_mode6_v6final_rebase90k_to110k/rebase_m3all250k_109996.pt --sampling-steps 6 --out exported/261009_v7_f6_s1456_109k/policy.onnx",
@@ -88,14 +89,15 @@
   "modes": [
     1,
     4,
-    5
+    5,
+    6
   ],
   "mjlab_ws": "/home/piene/mjlab1.4/mjlab_g1_final",
   "clips": 58,
   "sim2sim": {
     "stars": 4,
-    "memo": "com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 9098a28, 대조군 v6 같은 세션). ① mode1 램프 0.5→1.0→1.5→2.0→2.5 m/s(11 s 씩)→정지→회전 0.8 rad/s 88 s: 안전 이벤트 0 · pos_clamp 0 · |qd| 최대 15.32 rad/s(L_ank_pitch, v6 15.35) · 기울기 최대 13.6°(v6 15.0°). 저속(0.5 m/s) 골반 기울기 11~13°(v6 3~4°) — mjlab 학습 sim 고정 명령에서도 109k 는 0.5/1.0/1.5/2.0 m/s 에 12.9/11.0/8.8/7.9°, 정지 2.4° 라 정책 자체의 자세(배포 불일치 아님). ② mode4: 0 stand → [ (목록 마지막 sprint1_subject4) 21 s 재생 → ] stand → 1: 안전 이벤트 0 · pos_clamp 0 · |qd| 15.28 · 기울기 34° (클립 62 칸 = stand·primary·light·demo6 + clips 58). ③ mode5 자세 고리(직립→네발→직립→앉기→직립→눕기→직립→mode1) 7/7 도착 0.49~3.21 s · 안전 이벤트 0 · pos_clamp 0 · |qd| 최대 19.72 rad/s(R_knee, 기립 중 순간 — crit 19 는 5 틱 연속이 아니라 안 걸림) · 기울기 93°(바닥 자세). 기동 줄: requires 12 전부 지원 · modes 1 4 5 · ref_limb_height 4×10 · 미리보기 있음 · clips 58 · pos_clamp ON · gait mode1 lut V2 cadence 1.15 settle 100 min_swing 0.08. 키 6 은 이 슬롯이 거부(사지 LUT 미포팅).",
-    "at": "2026-10-28T16:31",
-    "summary": "넘어짐 0 · mode1 램프·mode4 sprint 재생·mode5 자세 7/7 도착 · 저속 골반 13° 숙임(학습과 같음)"
+    "memo": "com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 단계 C). ① 사용자 흐름 116 s: 1 걷기 1.0→2.0 m/s→정지 · 4 진입(0 stand) → [ sprint1_subject4 16 s → ] stand · 5 직립(+0.48 s) · 서서 6 = 거부 «네발 자세에서만 들어간다 (mode5 에서 «네발 기기» x 를 먼저)» · x 네발 도착 +1.05 s(z_fk 0.47 · 46°) · 6 진입 → 전진 0.3 m/s 12 s(어깨·팔 |qd| 최대 8.2 rad/s = 사지를 실제로 든다) → 정지 → 회전 0.5 rad/s 9 s → 정지 · 5 → 직립 +1.49 s · 1 복귀. 안전 이벤트 0 · pos_clamp 0 · overrun 0. 🔴 |qd| 최대 21.7 rad/s (R_knee) = 4 의 sprint 재생 «중» 에 ] 로 stand 로 바꾼 직후 0.25 s(crit 19, 5 틱 연속이 아니라 안 걸림, 하드웨어 무릎 20) → 실기에선 달리는 클립 도중 stand 로 바꾸지 말 것(클립 끝·느린 구간에서). 기기 전진 속도는 CSV 에 몸통 위치가 없어 못 쟀다(학습 sim 고정 명령: 이 임시 head 는 vx 0.3/0.5 → 0.15/0.43 m/s). ② 앞 판(10-28 오후): mode1 램프 2.5 m/s · mode4 sprint · mode5 자세 7/7 전부 넘어짐 0, 저속 골반 11~13°(학습과 같음).",
+    "at": "2026-10-28T16:50",
+    "summary": "1 걷기·뛰기 → 4 재생 → 5 네발 → 6 무릎 기기 → 5 기립 → 1 전부 넘어짐 0 · 서서 6 은 거부"
   }
 }

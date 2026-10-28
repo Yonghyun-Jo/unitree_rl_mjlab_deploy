@@ -2,7 +2,7 @@
  "tool": "deploy/scripts/check_slot_parity.py",
  "tool_version": 1,
  "slot": "261009_v5_standfloor_67k5",
- "checked_at": "2026-10-28T16:31:14",
+ "checked_at": "2026-10-28T16:45:17",
  "verdict": "KNOWN",
  "counts": {
   "PASS": 40,
@@ -14,10 +14,10 @@
   "deploy_yaml_sha256": "fc9a8bf9972a7cdcfb28f868e18275ad72ac96701b542302263af01a2fbd1a17"
  },
  "context_sha256": {
-  "deploy/robots/g1/src/State_Mimic.cpp": "09e6b6a20eff12b5dabac63fd87188bcade329537153383f1aebd8b56f1b3cd9",
+  "deploy/robots/g1/src/State_Mimic.cpp": "3fd9d55ae275076538807757d6e994343babe52b1ee3f0b3972b187f2061ee12",
   "deploy/include/isaaclab/envs/mdp/observations/observations.h": "6b3fb08a75ef44600aa222ef131b66d4404968c0f2b0f9879bd091920a4ee5e5",
   "deploy/robots/g1/include/ModeTable.h": "22e62587418c853972d78f4295d661790682bb13c321c648abbdfd8ce1f08ea6",
-  "deploy/robots/g1/include/DeployFeatures.h": "4eeafc7f9137bd9cd4c2801262600388d1f330f6c78181a69673917195d4bcdc",
+  "deploy/robots/g1/include/DeployFeatures.h": "563c267fef02b0cc0e20d1c4c83d4abb6d39b2ec67adb4300c8601afe74d4727",
   "deploy/robots/g1/include/MaskedLocoController.h": "3e9e2fd4ec7c06ebbdf2df88edd35d07c9120ee3d6d0df2bffbaa43163a642be",
   "deploy/robots/g1/include/GaitLut.h": "617944f093d821f1d31c7886f7a12ccb577564465bb195f769196de11bf22c35",
   "simulate/config.yaml": "2990b4779256d5e2319bafe133de46a1ad987b39b334e3fd4583b14262003a18",
@@ -30,7 +30,7 @@
   "mode3": "f22eab592412732c9793dc4cc3d911fa8c17bc4d"
  },
  "mjlab": "/home/piene/mjlab1.4/mjlab_g1_motion",
- "deploy_repo_head": "9098a28",
+ "deploy_repo_head": "368a48a",
  "known_used": [
   {
    "id": "K1",
@@ -467,7 +467,7 @@
    "id": "cfg.requires",
    "item": "requires ⊆ 이 소스가 아는 기능",
    "train": "deploy.yaml requires 6개",
-   "deploy": "DeployFeatures.h known() 13개",
+   "deploy": "DeployFeatures.h known() 14개",
    "verdict": "PASS",
    "note": ""
   },
