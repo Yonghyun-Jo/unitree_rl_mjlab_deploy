@@ -32,6 +32,7 @@ DEPLOY_NAME = {
     "actions": ("last_action", "{}"),
     "base_vel": ("base_vel_command", "{}"),
     "foot_z": ("ref_foot_height", "{}"),
+    "limb_z": ("ref_limb_height", "{}"),
     "mode5_cmd": ("mode5_command", "{}"),
     "preview_on": ("motion_preview_on", "{}"),
     "preview_k1": ("motion_preview_k1", "{}"),

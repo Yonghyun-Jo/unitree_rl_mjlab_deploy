@@ -648,6 +648,14 @@ REGISTER_OBSERVATION(mode5_command)
 {
     return std::vector<float>(g_m5_cmd.begin(), g_m5_cmd.end());
 }
+// 사지 높이 명령 4칸 (학습 `limb_z`, mode_spec.LIMB_Z_DIM = 손 L·R + 무릎 L·R, robot_spec.CRAWL_LIMB_BODIES 순).
+// v6final 이후 base 는 모든 모드에서 이 칸을 받는다. limb_z_live 가 아닌 모드 = 정확히 0 — 학습
+// (`G1MimicEnv.calc_ref_limb_height`)이 그 모드에서 0 으로 마스킹한다. mode6 의 사지 LUT 가 채운다.
+static std::array<float, 4> g_limb_z{};
+REGISTER_OBSERVATION(ref_limb_height)
+{
+    return std::vector<float>(g_limb_z.begin(), g_limb_z.end());
+}
 // 클립 미래 미리보기 (학습 `motion` 그룹: preview_on 1 · preview_k1 35 · preview 700). history 1.
 REGISTER_OBSERVATION(motion_preview_on)
 {

@@ -56,6 +56,9 @@ inline const std::vector<std::string>& known()
         //   최근 1 s 에 섰음(z_fk ≥ 0.65 ∧ 기울기 < 57.3°)» · 명령에 자세가 없는 모드 = 판정 안 함.
         //   qd_warn 은 낮거나 기운 자세(z_fk < 0.65 ∨ 기울기 ≥ 30°)면 Passive. UprightOnly 는 종전 그대로.
         "ground_safety",
+        // 2026-10-28: 관측 항 ref_limb_height(4, 학습 `limb_z`) — v6final 이후 base 의 계약. mode6 이 아니면 0.
+        //   모르는 바이너리는 obs 계약 대조에서 «모르는 항» 으로 죽지만, 거동 기능이라 이름으로도 막는다.
+        "limb_z_obs",
     };
     return k;
 }
