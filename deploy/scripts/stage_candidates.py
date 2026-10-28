@@ -421,6 +421,8 @@ def render_multihead_yaml(tmpl_text, cand, slot, cfg, fg_train, obs_lines, clip_
         add.append("  - limb_z_obs        # 🔴 관측 항 ref_limb_height(4) — v6final 이후 base 의 계약\n")
     if clip_names and "clip_list" not in have:
         add.append("  - clip_list         # 🔴 clips: 목록. 옛 바이너리는 조용히 무시하고 config.yaml 의 클립만 보인다\n")
+    if 6 in modes and "mode6_crawl" not in have:
+        add.append("  - mode6_crawl       # 🔴 기는 모드: 사지 LUT · 그 모드의 명령 봉투 · 네발에서만 진입. 옛 바이너리는 사지 칸 0\n")
     text = text[:m.end()] + "".join(add) + text[m.end():]
     text, n = re.subn(r"^modes: \[[^\]]*\]", "modes: [%s]" % ", ".join(str(x) for x in modes), text, count=1, flags=re.M)
     if n != 1:
@@ -706,15 +708,37 @@ def run_parity(slot, dry):
     return r.returncode == 0
 
 
-def stage_multihead(c, cfg, slot, root, day, dry, npz_dir, first_slot):
-    """새 형식 후보 하나 → 슬롯. 반환 "ok" · "fail"(패리티 FAIL) · None(export 실패로 건너뜀)."""
+def stage_multihead(c, cfg, slot, root, day, dry, npz_dir, first_slot, rerender=False):
+    """새 형식 후보 하나 → 슬롯. 반환 "ok" · "fail"(패리티 FAIL) · None(export 실패로 건너뜀).
+    `rerender`: 이미 있는 슬롯의 deploy.yaml 을 후보 파일(modes 등)로 다시 그리고 META 의 modes·requires 를 맞춘다
+    (ONNX·클립은 그대로 — 생성물만 다시 쓴다)."""
     cc = cand_cfg(cfg, c)
     heads = cand_heads(c)
     modes = [int(m) for m in (c.get("modes") or sorted(heads))]
     with mjlab_ws(c.get("mjlab")):
         log("\n■ %s  (multihead 헤드 %s · 모드 %s · %s)" % (slot, ",".join(map(str, sorted(heads))), modes, MJLAB))
         if os.path.exists(os.path.join(root, "ONNX_META.json")) and os.path.exists(os.path.join(root, "exported", "policy.onnx")):
-            log("   이미 있다 — 건너뜀 (별칭만 갱신)")
+            if rerender and not dry:
+                slot_onnx = os.path.join(root, "exported", "policy.onnx")
+                meta_onnx = onnx_metadata(slot_onnx)
+                want = str(c.get("clips", "manifest"))
+                clip_srcs = manifest_mode4_clips(cc["manifest"]) if (4 in modes and want == "manifest") else []
+                clip_names = place_clips(root, clip_srcs, dry) if clip_srcs else []
+                tmpl_text = open(os.path.join(SLOTDIR, cc["template_slot"], "params", "deploy.yaml"), encoding="utf-8").read()
+                text, parity_note = render_multihead_yaml(tmpl_text, c, slot, cc, foot_gen_at(training_commit(heads[1])),
+                                                          gen_obs_block_lines(slot_onnx), clip_names,
+                                                          meta_onnx.get("obs_contract", ""))
+                open(os.path.join(root, "params", "deploy.yaml"), "w", encoding="utf-8").write(text)
+                mp = os.path.join(root, "ONNX_META.json")
+                meta = json.load(open(mp, encoding="utf-8"))
+                meta["modes"], meta["requires"] = modes, requires_of(text)
+                meta["summary"] = str(c.get("summary") or meta.get("summary") or "").strip()
+                meta["watch"] = [str(w).strip() for w in (c.get("watch") or meta.get("watch") or []) if str(w).strip()][:3]
+                meta["note"] = c.get("note", meta.get("note", ""))
+                json.dump(meta, open(mp, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+                log("   이미 있다 — deploy.yaml 다시 그림 (modes %s · requires %d)  %s" % (modes, len(meta["requires"]), parity_note))
+            else:
+                log("   이미 있다 — 건너뜀 (별칭만 갱신)")
             return "ok" if run_parity(slot, dry) else "fail"
         fg_train = foot_gen_at(training_commit(heads[1]))
         try:
@@ -753,9 +777,12 @@ def main():
     ap.add_argument("--robot", action="store_true", help="가중치 rsync + robot.sh deploy 까지")
     ap.add_argument("--rerender-yaml", action="store_true",
                     help="이미 있는 슬롯의 params/deploy.yaml 을 템플릿에서 다시 그린다(생성물이라 안전)")
+    ap.add_argument("--rerender-alias", default="",
+                    help="이 별칭(쉼표로 여러 개)만 deploy.yaml 을 다시 그린다 — 같은 날의 다른 슬롯은 손대지 않는다")
     a = ap.parse_args()
     dry = a.dry_run
 
+    rr_aliases = {x.strip() for x in a.rerender_alias.split(",") if x.strip()}
     cfg = load_yaml(a.candidates)
     day = str(cfg.get("day") or _dt.date.today().strftime("%y%m%d"))
     cands = cfg.get("candidates") or []
@@ -811,7 +838,8 @@ def main():
         slot = "%s_%s_%s" % (day, c["alias"], c["label"])
         root = os.path.join(SLOTDIR, slot)
         if is_multihead(c):
-            res = stage_multihead(c, cfg, slot, root, day, dry, npz_dir, first_slot)
+            res = stage_multihead(c, cfg, slot, root, day, dry, npz_dir, first_slot,
+                                  rerender=a.rerender_yaml or c["alias"] in rr_aliases)
             if res == "fail":
                 parity_failed.append(slot)
                 log("🔴 패리티 FAIL — 이 후보는 ACTIVE·커밋에서 뺀다 (표: %s/PARITY.md)" % os.path.relpath(root, REPO))

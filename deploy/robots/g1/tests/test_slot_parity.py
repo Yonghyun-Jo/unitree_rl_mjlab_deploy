@@ -194,6 +194,27 @@ def test_known_values_must_match_and_stale_entries_warn():
         assert _rows(rep)["known.K9"]["verdict"] == "WARN", _rows(rep).get("known.K9")
 
 
+def test_crawl_slot_without_mode6_crawl_requires_fails():
+    """기는 모드(6)를 내놓는 슬롯에서 requires 의 mode6_crawl 을 빼면 FAIL — 옛 바이너리는 사지 칸 0 · mode1 봉투로 조용히 돈다.
+    기는 모드 행(봉투·사지 칸·LUT 표)은 6 을 내놓을 때만 평가된다(6 을 빼면 행 자체가 없다)."""
+    crawl = [s for s in _active_slots()
+             if 6 in (yaml.safe_load(open(s / "params/deploy.yaml", encoding="utf-8")).get("modes") or [])]
+    if not crawl:
+        return                                                     # 6 을 내놓는 활성 슬롯이 없으면 시험할 것이 없다
+    with tempfile.TemporaryDirectory() as td:
+        root = _clone(crawl[0], td)
+        base = csp.check_slot(str(root))
+        for rid in ("cmd.mode6", "cmd.limb_z_src", "gait.limb_lut"):
+            assert _rows(base)[rid]["verdict"] == "PASS", _rows(base)[rid]
+        _edit_yaml(root, lambda d: d.__setitem__("requires", [r for r in d["requires"] if r != "mode6_crawl"]))
+        _expect_fail(csp.check_slot(str(root)), "cmd.limb_z_src")
+    with tempfile.TemporaryDirectory() as td:
+        root = _clone(crawl[0], td)
+        _edit_yaml(root, lambda d: d.__setitem__("modes", [m for m in d["modes"] if m != 6]))
+        rows = _rows(csp.check_slot(str(root)))
+        assert "cmd.mode6" not in rows and "gait.limb_lut" not in rows, sorted(rows)
+
+
 def test_outputs_written_only_to_given_slot_and_gate_sees_them():
     """PARITY.* 는 넘겨준 슬롯 폴더에만 쓰이고, 내용이 같으면 다시 안 쓴다. policy_slot 게이트가 그 파일을 읽는다."""
     with tempfile.TemporaryDirectory() as td:

@@ -61,7 +61,7 @@ SLOTDIR = os.path.join(POLICY, "mimic_masked")
 KNOWN_DEFAULT = os.path.join(POLICY, "parity_known.yaml")
 CACHE = os.environ.get("G1_PARITY_CACHE", os.path.expanduser("~/.cache/g1_slot_parity"))
 TOOL_VERSION = 1
-TRUTH_VERSION = 2          # _extract_truth 의 출력 형식 (2 = motion 그룹 항 추가, 2026-10-28). 바꾸면 올린다(캐시가 같이 무효가 된다)
+TRUTH_VERSION = 3          # _extract_truth 의 출력 형식 (2 = motion 그룹 항 · 3 = stage4 mode1~6·mode_flags, 2026-10-28). 바꾸면 올린다(캐시가 같이 무효가 된다)
 
 # 판정에 쓴 «배포 쪽» 파일 (repo 상대). 판정 뒤에 이것이 바뀌면 PARITY.json 의 근거가 낡은 것이다 —
 # 게이트(policy_slot·verify_deploy)가 WARN 으로 알린다. ONNX·deploy.yaml 은 따로(하드) 본다.
@@ -263,7 +263,7 @@ def _extract_truth(src, out):
         res["foot_gen_defaults"] = None
         res["foot_gen_defaults_error"] = repr(e)[:200]
     st = {}
-    for m in (1, 2, 3):
+    for m in (1, 2, 3, 4, 5, 6):
         try:
             M = _il.import_module("mjlab_g1_motion.tasks.stage4_mode%d_env_cfg" % m)
             st[str(m)] = dict(present=True, has_foot_gen=hasattr(M, "FOOT_GEN"),
@@ -271,6 +271,13 @@ def _extract_truth(src, out):
         except Exception as e:                                # noqa: BLE001 — base commit 에는 없을 수 있다
             st[str(m)] = dict(present=False, error=repr(e)[:200])
     res["stage4"] = st
+    try:                                          # 모드 표의 학습 쪽 성질 (기는 모드 판정 = limb_z_live·crawl_cmd_live)
+        from mjlab_g1_motion import mode_spec as MS
+        res["mode_flags"] = {str(m): {k: bool(getattr(r, k, False)) for k in ("limb_z_live", "crawl_cmd_live", "base_vel_live")}
+                             for m, r in MS.MODES.items()}
+    except Exception as e:                                    # noqa: BLE001
+        res["mode_flags"] = None
+        res["mode_flags_error"] = repr(e)[:200]
     from mjlab.envs.mdp import observations as MO
     res["last_action_src"] = inspect.getsource(MO.last_action)
     res["imported_from"] = here
@@ -465,6 +472,11 @@ def cpp_facts():
         for k in ("VX_MAX_FWD", "VX_MAX_BWD", "KB_MAXVY", "KB_MAXW"):
             m = re.search(r"static constexpr float %s\s*=\s*([0-9.]+)f?;" % k, sm)
             caps[k] = float(m.group(1)) if m else None
+        crawl = {}
+        for k in ("CRAWL_VX_FWD", "CRAWL_VX_BWD", "CRAWL_MAXVY", "CRAWL_MAXW"):   # 기는 모드 봉투 (기능 mode6_crawl)
+            m = re.search(r"static constexpr float %s\s*=\s*([0-9.]+)f?;" % k, sm)
+            crawl[k] = float(m.group(1)) if m else None
+        f["crawl_caps"] = crawl
         m = re.search(r'n\["source"\]\s*\?\s*n\["source"\]\.as<std::string>\(\)\s*:\s*"(\w+)"', sm)
         f["gait_source_default"] = m.group(1) if m else None
         m = re.search(r"REGISTER_OBSERVATION\(command_mask\)\s*\{(.*?)\n\}", sm, re.S)
@@ -481,7 +493,8 @@ def cpp_facts():
             g = m.groups()
             rows[int(g[0])] = dict(name=g[1], bits=[float(x.strip().rstrip("f")) for x in g[3].split(",")],
                                    track_upper=g[4] == "true", track_lower=g[5] == "true",
-                                   base_vel_live=g[6] == "true", foot_z=g[12], gait_key=g[13])
+                                   base_vel_live=g[6] == "true", crawl_cmd_live=g[10] == "true",
+                                   foot_z=g[12], gait_key=g[13])
     f["mode_rows"] = rows
     known = None
     if df:
@@ -1030,6 +1043,72 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
                                                                   _short((t or {}).get("commit"))),
                 "C++ vx %s vy %s wz %s (모드 공통)" % (_fmt(dvs["vx"]), _fmt(dvs["vy"]), _fmt(dvs["wz"])), v, note)
 
+    # 기는 모드(mode6) — 슬롯이 내놓을 때만. ① 명령 봉투 = 그 head 의 stage4_mode6 CMD_BASE_VEL ② 사지 높이 칸을 켜는
+    # 모드 = 학습 limb_z_live (배포는 crawl_cmd_live 행에서 LUT 를 돈다) ③ LimbLut.h 의 표 = 그 head commit 의 limb_lut_data.
+    offered = [int(x) for x in ((dep or {}).get("modes") or [])]
+    names_c = [c[0] for c in contract]
+    crawl_modes = [m for m in head_modes if m in offered and (rows_mt.get(m) or {}).get("crawl_cmd_live")]
+    ccaps = cf.get("crawl_caps") or {}
+    for m in crawl_modes:
+        rid = "cmd.mode%d" % m
+        t = truths.get("mode%d" % m)
+        cb = (((t or {}).get("stage4") or {}).get(str(m)) or {}).get("CMD_BASE_VEL")
+        if not cb or not ccaps or None in ccaps.values():
+            rep.add(G, rid, "mode%d 명령 범위 (기는 모드 봉투)" % m, _fmt(cb), _fmt(ccaps), V_FAIL,
+                    "학습 CMD_BASE_VEL 또는 C++ CRAWL_* 상한을 못 읽음")
+        else:
+            dvs = {"vx": [-ccaps["CRAWL_VX_BWD"], ccaps["CRAWL_VX_FWD"]], "vy": [-ccaps["CRAWL_MAXVY"], ccaps["CRAWL_MAXVY"]],
+                   "wz": [-ccaps["CRAWL_MAXW"], ccaps["CRAWL_MAXW"]]}
+            tvs = {"vx": cb.get("vx_range"), "vy": cb.get("vy_range"), "wz": cb.get("wz_range")}
+            mism = [(k, tvs[k], dvs[k]) for k in ("vx", "vy", "wz") if not _same(tvs[k], dvs[k])]
+            rep.row_train[rid] = dict(tvs)
+            v, note = judge_mismatches(rid, mism, known, used)
+            rep.add(G, rid, "mode%d 명령 범위 (기는 모드 봉투 = 그 head 의 학습 범위)" % m,
+                    "stage4_mode%d CMD_BASE_VEL vx %s vy %s wz %s @%s" % (m, _fmt(tvs["vx"]), _fmt(tvs["vy"]), _fmt(tvs["wz"]),
+                                                                      _short((t or {}).get("commit"))),
+                    "C++ CRAWL vx %s vy %s wz %s" % (_fmt(dvs["vx"]), _fmt(dvs["vy"]), _fmt(dvs["wz"])), v, note)
+    if crawl_modes or "limb_z" in names_c:
+        reqs_c = (dep or {}).get("requires") or []
+        bt = base_t or {}
+        flags = bt.get("mode_flags") or {}
+        probs = []
+        if not flags:
+            probs.append("학습 mode_spec 의 모드 성질을 못 읽음: %s" % bt.get("mode_flags_error", "?"))
+        t_live = sorted(int(k) for k, v in flags.items() if v.get("limb_z_live"))
+        d_live = sorted(m for m, r in rows_mt.items() if r.get("crawl_cmd_live"))
+        if flags and t_live != d_live:
+            probs.append("학습 limb_z_live 모드 %s ≠ 배포 crawl_cmd_live 행 %s (배포는 crawl 행에서만 LUT 를 돈다)" % (t_live, d_live))
+        if crawl_modes and "mode6_crawl" not in reqs_c:
+            probs.append("기는 모드를 내놓는데 requires 에 mode6_crawl 이 없다(옛 바이너리는 사지 칸 0·mode1 봉투로 조용히 돈다)")
+        if "limb_z" in names_c and "limb_z_obs" not in reqs_c:
+            probs.append("계약에 limb_z 가 있는데 requires 에 limb_z_obs 가 없다")
+        rep.add(G, "cmd.limb_z_src", "사지 높이 칸을 켜는 모드 (학습 limb_z_live ↔ 배포 crawl 행)",
+                "limb_z_live 모드 %s @%s" % (t_live, _short(bt.get("commit"))), "crawl_cmd_live 행 %s · 내놓는 기는 모드 %s" %
+                (d_live, crawl_modes), V_FAIL if probs else V_PASS, " · ".join(probs))
+    for m in crawl_modes:
+        t = truths.get("mode%d" % m) or {}
+        rid = "gait.limb_lut"
+        try:
+            import gen_limb_lut_header as gll
+            src = _git(mjlab, "show", "%s:%s" % (t.get("commit"), gll.DATA_REL)).stdout if t.get("commit") else ""
+            if not src:
+                raise RuntimeError("그 commit 에 %s 가 없다" % gll.DATA_REL)
+            with tempfile.TemporaryDirectory() as td:
+                dp = os.path.join(td, gll.DATA_REL)
+                os.makedirs(os.path.dirname(dp))
+                open(dp, "w", encoding="utf-8").write(src)
+                d_ = gll.load_data(type(gll.HEADER)(td))
+            want = gll.generated_block(d_)
+            hdr = gll.HEADER.read_text()
+            have = hdr[hdr.index(gll.BEGIN):hdr.index(gll.END) + len(gll.END)]
+            strip = lambda x: "\n".join(l for l in x.splitlines() if "원장 = mjlab" not in l)   # noqa: E731
+            ok_ = strip(want) == strip(have)
+            rep.add(G, rid, "LimbLut.h 표 == 그 head 의 limb_lut_data (mode%d)" % m,
+                    "limb_lut_data.py @%s (NB %s · 주기 %s s)" % (_short(t.get("commit")), d_.get("NB"), d_.get("PERIOD_S")),
+                    "LimbLut.h GENERATED 구역", V_PASS if ok_ else V_FAIL,
+                    "" if ok_ else "학습 commit 의 사지 표와 배포 표가 다르다 — gen_limb_lut_header --write 로 맞추거나 head 를 다시 볼 것")
+        except Exception as e:                                # noqa: BLE001
+            rep.add(G, rid, "LimbLut.h 표 == 그 head 의 limb_lut_data (mode%d)" % m, "-", "-", V_FAIL, "못 읽음: %s" % e)
     # 발-z 생성 조건: 학습 = 그 head commit 의 enable_foot_gen 기본값 위에 stage4_modeN.FOOT_GEN.
     #                배포 = deploy.yaml gait: 위에 C++ 기본값(MaskedLocoController.h·load_gait_cfg).
     hdr = glh.HEADER.read_text() if glh.HEADER.exists() else ""
