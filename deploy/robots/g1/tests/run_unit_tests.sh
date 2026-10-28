@@ -11,7 +11,7 @@ run() {  # run <name> <g++ 인자...>
   else echo "FAIL $n"; tail -5 "$OUT/$n.log" "$OUT/$n.out" 2>/dev/null; fail=1; fi
 }
 for t in test_gait_lut test_gait_lut_v2 test_gait_min_swing test_joint_safety test_loco_gait_modes \
-         test_masked_loco_controller test_settle_stop test_deploy_features test_cmd_slew; do
+         test_masked_loco_controller test_settle_stop test_deploy_features test_cmd_slew test_limb_lut; do
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -I../include $t.cpp
 done
 # StateDump 는 쓰기 스레드(std::thread)가 있어 링크에 -pthread 가 필요하다 — 위 루프와 갈라 둔다.
@@ -77,6 +77,15 @@ if [ -x "$HOME/.local/bin/uv" ] && [ -f "$MJLAB/src/mjlab_g1_motion/mode5_preset
   else echo "FAIL gen_preview_golden"; tail -5 "$OUT/pv.out"; fail=1; fi
 else
   echo "skip uv 생성기 검사 (mjlab uv 환경 없음)"
+fi
+
+# mode6 사지 LUT(LimbLut.h · golden_limb_lut.inc) == 학습 limb_lut (final_v6 워크트리 · 그 venv 의 torch 로 골든을 다시 낸다).
+LIMB_MJLAB="${G1_LIMB_MJLAB:-$HOME/mjlab1.4/mjlab_g1_final}"
+if [ -f "$LIMB_MJLAB/src/mjlab_g1_motion/tasks/mdp/limb_lut_data.py" ] && [ -x "$LIMB_MJLAB/.venv/bin/python" ]; then
+  if python3 ../../../scripts/gen_limb_lut_header.py --check --mjlab "$LIMB_MJLAB" >"$OUT/limb.out" 2>&1; then echo "ok   gen_limb_lut_header"
+  else echo "FAIL gen_limb_lut_header"; tail -5 "$OUT/limb.out"; fail=1; fi
+else
+  echo "skip gen_limb_lut_header (final_v6 워크트리 없음: $LIMB_MJLAB)"
 fi
 
 # 슬롯 패리티 표(deploy/scripts/check_slot_parity.py)의 변이시험 — 고장을 심은 슬롯에서 그 행이 FAIL 하는지,

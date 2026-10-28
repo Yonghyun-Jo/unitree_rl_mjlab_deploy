@@ -91,7 +91,9 @@ int main() {
         CHK(m5.begin_stay(1) == nullptr && m5.mode() == 5);
     }
     rt.set_supported({1, 2, 3, 4, 5, 6});
-    CHK(rt.request(5).accepted && rt.request(6).accepted && rt.request(1).accepted);   // 6 도 언제나 나간다(표가 always)
+    ExitContext q6; q6.z_fk = 0.40f; q6.tilt_deg = 51.f;
+    // 6 은 네발 자세에서 들어가고(진입 가드, 2026-10-28) 언제나 나간다(표의 exit 가 always)
+    CHK(rt.request(5).accepted && rt.request(6, q6).accepted && rt.request(1).accepted);
 
     // 클립 전환 에지 — 모드 전환과 같은 모양(정책 루프가 한 틱에 한 번 소비해 전환 처리를 태운다)
     {
@@ -123,6 +125,24 @@ int main() {
         CHK(e.mode() == 2 && !e.consume_switch());        // 전환 아님
         CHK(e.request(3).accepted);
         CHK(e.consume_switch() && !e.consume_switch());   // 한 번만
+    }
+    // ── 기는 모드(crawl_cmd_live = mode6)는 «네발 자세» 에서만 들어간다 (2026-10-28) ──
+    {
+        ModeRuntime c; c.set_supported({1, 4, 5, 6});
+        ExitContext quad;  quad.z_fk = 0.40f;  quad.tilt_deg = 51.f;     // sim2sim mode5 «네발» 도착값
+        ExitContext bank;  bank.z_fk = 0.354f; bank.tilt_deg = 67.f;     // 시작 은행 중앙값
+        ExitContext sit;   sit.z_fk = 0.07f;   sit.tilt_deg = 83.f;      // 바닥 앉기
+        ExitContext up;    up.z_fk = 0.76f;    up.tilt_deg = 4.f;        // 직립
+        CHK(mode_table::row(6).crawl_cmd_live && !mode_table::row(5).crawl_cmd_live);
+        CHK(c.request(5, up).accepted);
+        ModeResult r6 = c.request(6, up);
+        CHK(!r6.accepted && std::strstr(r6.reason, "네발") && c.mode() == 5);   // 서서는 거부 — 이유가 «네발»
+        CHK(!c.request(6, sit).accepted && c.mode() == 5);
+        CHK(!c.request(6, ExitContext{}).accepted);                           // 자세 모름(기본값 = 서 있음) = 거부
+        CHK(c.request(6, quad).accepted && c.mode() == 6);
+        CHK(c.request(5, quad).accepted && c.request(6, bank).accepted);
+        CHK(c.request(1, quad).accepted && c.mode() == 1);                    // 나가는 것은 표의 exit(always) 그대로
+        CHK(enter_allowed(mode_table::row(4), up) && enter_allowed(mode_table::row(5), sit));   // 다른 모드는 그대로
     }
     std::printf(fail ? "FAILED (%d)\n" : "OK test_mode_runtime\n", fail);
     return fail ? 1 : 0;

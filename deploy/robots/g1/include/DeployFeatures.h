@@ -62,6 +62,10 @@ inline const std::vector<std::string>& known()
         // 2026-10-28: 슬롯 deploy.yaml 의 clips: (클립 재생 모드가 고를 클립 목록, 고정 칸 «demo6» 뒤). 옛 바이너리는
         //   이 키를 «조용히 무시» 하고 config.yaml 의 클립 셋만 보여 준다 -> 목록을 쓰는 슬롯은 이 기능을 요구해야 한다.
         "clip_list",
+        // 2026-10-28: 기는 모드(mode6) — ref_limb_height 를 사지 LUT(LimbLut.h, 학습 limb_lut 1:1)로 채우고, 명령 봉투를
+        //   그 모드의 학습 범위(vx −0.3~0.5 · vy ±0.3 · wz ±1.0)로 자르고, 네발 자세에서만 들어가게 한다(ModeRuntime).
+        //   옛 바이너리는 사지 칸을 0 으로 두고 mode1 봉투(2.5 m/s)를 준다 -> modes: 에 6 을 둔 슬롯은 이 기능을 요구한다.
+        "mode6_crawl",
     };
     return k;
 }

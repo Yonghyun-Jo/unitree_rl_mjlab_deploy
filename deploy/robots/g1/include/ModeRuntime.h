@@ -19,6 +19,11 @@ struct ModeResult { bool accepted; const char* reason; };
 
 inline constexpr float EXIT_MIN_Z = 0.65f;          // spec §4.6
 inline constexpr float EXIT_MAX_TILT_DEG = 30.f;
+// 🔴 기는 모드(crawl_cmd_live)의 진입 자세 — «네발» 에서만 (2026-10-28). 그 head 는 mode5 «네발 기기» 도착 상태
+//    (시작 은행 m5graphC90k_v2: 골반 0.32~0.50 m · 기울기 33~85°, 중앙 0.35 m · 67°)와 기기 클립 프레임에서만
+//    시작해 봤다. 서서(0.76 m)·앉아서·누워서(0.07 m) 들어가면 학습 밖 시작이다 → 거부하고 mode5 «x» 를 먼저 하라고 답한다.
+inline constexpr float CRAWL_ENTER_MIN_Z = 0.25f, CRAWL_ENTER_MAX_Z = 0.55f;
+inline constexpr float CRAWL_ENTER_MIN_TILT_DEG = 30.f, CRAWL_ENTER_MAX_TILT_DEG = 85.f;
 
 // ── 이탈·진입 조건의 «판정만» (순수 함수) ────────────────────────────────────────────────
 // 표의 행 두 개와 실측 자세만 본다. ModeRuntime::request 가 이것을 부른다.
@@ -55,10 +60,17 @@ inline bool exit_allowed(const mode_table::Row& from, const mode_table::Row& to,
   return false;                                   // 도달 불가(위 switch 가 전부 반환) — fail-closed
 }
 
+inline bool crawl_pose_of(const ExitContext& ctx) {
+  return ctx.z_fk >= CRAWL_ENTER_MIN_Z && ctx.z_fk <= CRAWL_ENTER_MAX_Z &&
+         ctx.tilt_deg >= CRAWL_ENTER_MIN_TILT_DEG && ctx.tilt_deg <= CRAWL_ENTER_MAX_TILT_DEG;
+}
+
 // 목적지(to)로 들어가도 되나. exit == Upright 인 모드는 «직립에서만 나가는» 모드라 들어갈 때도 직립이어야
 // 한다: 바닥에서 들어가면 스스로 일어서는 명령이 없고 이탈도 거부돼 출구가 p 뿐이다 (Ruling 34, I-1).
+// 기는 모드(crawl_cmd_live)는 표의 exit 열과 별개로 «네발 자세» 를 요구한다(위 CRAWL_ENTER_*).
 inline bool enter_allowed(const mode_table::Row& to, const ExitContext& ctx) {
   using mode_table::Exit;
+  if (to.crawl_cmd_live && !crawl_pose_of(ctx)) return false;
   switch (to.exit) {
     case Exit::Upright:
       return upright_of(ctx);
@@ -85,7 +97,9 @@ class ModeRuntime {
     if (m != mode_) {
       const char* why = "알 수 없는 이탈 조건";
       if (!exit_allowed(row(), mode_table::row(m), ctx, &why)) return {false, why};
-      if (!enter_allowed(mode_table::row(m), ctx)) return {false, "직립에서만 들어간다 (높이·기울기 조건)"};
+      if (!enter_allowed(mode_table::row(m), ctx))
+        return {false, mode_table::row(m).crawl_cmd_live ? "네발 자세에서만 들어간다 (mode5 에서 «네발 기기» x 를 먼저)"
+                                                         : "직립에서만 들어간다 (높이·기울기 조건)"};
       mode_ = m;
     }
     requested_ = m;

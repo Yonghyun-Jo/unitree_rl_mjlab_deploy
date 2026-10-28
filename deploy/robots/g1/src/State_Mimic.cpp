@@ -9,7 +9,8 @@
 #include "Mode5Driver.h"
 #include "MotionPreview.h"
 #include "SafetyPolicy.h"           // 넘어짐·qd_warn 을 표의 안전 등급 + 명령·자세로 가른다
-#include "CmdSlew.h"                // base_vel 명령 필터 = 선형 slew 1.5 (유일한 필터)
+#include "CmdSlew.h"
+#include "LimbLut.h"                // mode6 사지 높이 명령 (학습 limb_lut 1:1, gen_limb_lut_header.py)                // base_vel 명령 필터 = 선형 slew 1.5 (유일한 필터)
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include <atomic>
@@ -45,6 +46,10 @@ static g1::TiltFilter g_tilt;                                // 걸러진 기울
 static g1::safety::RecentHigh g_recent_high;                 // 최근 1 s 안에 «섰음»(명령 직립 ∧ z ≥ 0.65 ∧ 원시·걸러진 기울기 < 57.3°) (넘어짐 관문 — mode5 행. 클립 행은 안 묻는다)
 static g1::Mode5Driver g_m5;                                 // mode5 자세 버튼 상태
 static g1::Mode5Driver::Cmd g_m5_cmd{};                      // mode5_cmd_live 가 아니면 전부 0
+// 사지 높이 명령 4칸(관측 ref_limb_height) — 정책 루프가 틱마다 채우고 관측 항이 읽는다. 기는 모드가 아니면 0.
+static std::array<float, 4> g_limb_z{};
+static g1::limb_lut::Clock g_limb_clock;           // mode6 에 들어올 때마다 위상 0 에서 (학습은 에피소드마다 무작위 위상)
+static bool g_limb_prev = false;                   // 지난 틱이 기는 모드였나 (들어온 에지 = 시계 reset)
 static std::vector<float> g_motion_block(g1::preview::DIM, 0.f);   // motion_preview 가 아니면 전부 0
 // 지금 들어간 슬롯이 미리보기 관측 항(motion_preview_on/_k1/motion_preview)을 «선언» 했나.
 // 생성자가 State_Mimic::obs_has_preview_ 에 담고 enter() 가 건다(slot_modes_ 와 같은 이유 — 인스턴스가 둘).
@@ -190,6 +195,13 @@ static constexpr float VX_MAX_FWD  = 2.5f;   // 전진 상한
 static constexpr float VX_MAX_BWD  = 1.5f;   // 후진 상한(크기)
 static constexpr float KB_MAXVY    = 0.8f;
 static constexpr float KB_MAXW     = 2.0f;
+// 🔴 기는 모드(crawl_cmd_live = mode6) 명령 봉투 = 학습 stage4_mode6_env_cfg.CMD_BASE_VEL
+//    vx(-0.3, 0.5) · vy(-0.3, 0.3) · wz(-1.0, 1.0) (2026-10-28). 위의 mode1 봉투를 그대로 쓰면 풀스틱 전진이 학습의
+//    5배(2.5 m/s)다. 그 모드에선 풀스틱 = 이 봉투의 끝이고, 키보드·GUI·VR 합도 여기서 자른다(g_joystick_base_vel).
+static constexpr float CRAWL_VX_FWD = 0.5f;
+static constexpr float CRAWL_VX_BWD = 0.3f;
+static constexpr float CRAWL_MAXVY  = 0.3f;
+static constexpr float CRAWL_MAXW   = 1.0f;
 // vx 전용 비대칭 클램프. 이 함수 밖에서 vx 를 clamp 하지 말 것(대칭으로 새기 쉽다).
 static inline float clamp_vx(float v) { return std::clamp(v, -VX_MAX_BWD, VX_MAX_FWD); }
 
@@ -507,10 +519,20 @@ static std::array<float, 3> g_joystick_base_vel(isaaclab::ManagerBasedRLEnv* env
         auto dz = [](float v, float d) { return std::abs(v) < d ? 0.0f : v; };
         // 풀스틱 = 학습 봉투의 끝. vx 는 미는 방향에 따라 스케일이 다르다(전진 2.5 / 후진 1.5).
         const float sx = dz(joy->ly(), DEAD);
-        jx =  sx * (sx >= 0.0f ? VX_MAX_FWD : VX_MAX_BWD);
-        jy = -KB_MAXVY * dz(joy->lx(), DEAD);
-        jw = -KB_MAXW  * dz(joy->rx(), DEAD);
+        if (g_mode.row().crawl_cmd_live) {               // 기는 모드: 풀스틱 = 그 모드의 학습 봉투 끝
+            jx =  sx * (sx >= 0.0f ? CRAWL_VX_FWD : CRAWL_VX_BWD);
+            jy = -CRAWL_MAXVY * dz(joy->lx(), DEAD);
+            jw = -CRAWL_MAXW  * dz(joy->rx(), DEAD);
+        } else {
+            jx =  sx * (sx >= 0.0f ? VX_MAX_FWD : VX_MAX_BWD);
+            jy = -KB_MAXVY * dz(joy->lx(), DEAD);
+            jw = -KB_MAXW  * dz(joy->rx(), DEAD);
+        }
     }
+    if (g_mode.row().crawl_cmd_live)
+        return { std::clamp(g_kb_vx + jx, -CRAWL_VX_BWD, CRAWL_VX_FWD),
+                 std::clamp(g_kb_vy + jy, -CRAWL_MAXVY, CRAWL_MAXVY),
+                 std::clamp(g_kb_wz + jw, -CRAWL_MAXW, CRAWL_MAXW) };
     return { clamp_vx(g_kb_vx + jx),
              std::clamp(g_kb_vy + jy, -KB_MAXVY, KB_MAXVY),
              std::clamp(g_kb_wz + jw, -KB_MAXW, KB_MAXW) };
@@ -655,7 +677,6 @@ REGISTER_OBSERVATION(mode5_command)
 // 사지 높이 명령 4칸 (학습 `limb_z`, mode_spec.LIMB_Z_DIM = 손 L·R + 무릎 L·R, robot_spec.CRAWL_LIMB_BODIES 순).
 // v6final 이후 base 는 모든 모드에서 이 칸을 받는다. limb_z_live 가 아닌 모드 = 정확히 0 — 학습
 // (`G1MimicEnv.calc_ref_limb_height`)이 그 모드에서 0 으로 마스킹한다. mode6 의 사지 LUT 가 채운다.
-static std::array<float, 4> g_limb_z{};
 REGISTER_OBSERVATION(ref_limb_height)
 {
     return std::vector<float>(g_limb_z.begin(), g_limb_z.end());
@@ -1759,6 +1780,19 @@ void State_Mimic::enter()
                     g1::preview::block(*c->loader, c->loader->frame, true, g_motion_block);
                 else
                     std::fill(g_motion_block.begin(), g_motion_block.end(), 0.f);
+            }
+            // 사지 높이 4칸(ref_limb_height): 기는 모드면 사지 LUT, 아니면 정확히 0 (학습 calc_ref_limb_height 의 마스킹).
+            //   입력 = 정책이 보는 base_vel 명령(g_loco.base_vel) — 학습 advance_limb 와 같은 입력·같은 순서(위상 먼저).
+            {
+                const bool crawl = g_mode.row().crawl_cmd_live;
+                if (crawl && !g_limb_prev) g_limb_clock.reset();
+                if (crawl) {
+                    const auto& lbv = g_loco.base_vel;
+                    g_limb_z = g_limb_clock.tick(lbv[0], lbv[1], lbv[2]);
+                } else {
+                    g_limb_z.fill(0.f);
+                }
+                g_limb_prev = crawl;
             }
             const auto d_t_ctrl = clock::now();
             env->step();
