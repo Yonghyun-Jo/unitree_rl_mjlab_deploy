@@ -40,6 +40,10 @@ private:
     std::shared_ptr<MotionLoader_> motion_stand_; // stand 칸 로더 (owns; enter() 가 로봇 기본 자세로 짓는다)
     std::shared_ptr<MotionLoader_> motion_light_; // light 클립 로더 (owns; motion_light aliases this)
     std::shared_ptr<MotionLoader_> motion_demo6_; // demo6 클립 로더 (owns; motion_demo6 aliases this)
+    // 슬롯 deploy.yaml `clips:` 의 클립 로더들(기능 clip_list) — 칸 «demo6» 뒤에 이 순서로. 생성자가 싣고 enter() 가
+    // 건다(slot_modes_ 와 같은 이유 — 인스턴스가 둘이라 정적에 바로 걸면 남의 목록을 덮는다). 이름 = 파일 stem.
+    std::vector<std::shared_ptr<MotionLoader_>> clip_list_;
+    std::vector<std::string> clip_list_names_;
 
     // 이 슬롯(ONNX)이 아는 모드. 생성자가 deploy.yaml 의 modes: 를 «여기» 에 담고, enter() 가
     // ModeRuntime 에 건다. 🔴 전역에 바로 걸면 안 된다 — State_Mimic 은 FSM 상태마다 하나씩

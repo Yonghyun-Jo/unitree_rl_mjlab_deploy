@@ -59,6 +59,9 @@ inline const std::vector<std::string>& known()
         // 2026-10-28: 관측 항 ref_limb_height(4, 학습 `limb_z`) — v6final 이후 base 의 계약. mode6 이 아니면 0.
         //   모르는 바이너리는 obs 계약 대조에서 «모르는 항» 으로 죽지만, 거동 기능이라 이름으로도 막는다.
         "limb_z_obs",
+        // 2026-10-28: 슬롯 deploy.yaml 의 clips: (클립 재생 모드가 고를 클립 목록, 고정 칸 «demo6» 뒤). 옛 바이너리는
+        //   이 키를 «조용히 무시» 하고 config.yaml 의 클립 셋만 보여 준다 -> 목록을 쓰는 슬롯은 이 기능을 요구해야 한다.
+        "clip_list",
     };
     return k;
 }

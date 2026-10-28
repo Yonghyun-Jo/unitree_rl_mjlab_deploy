@@ -103,6 +103,61 @@ CLIPS, CLIPS_DETAIL = _clip_labels(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "config.yaml"))
 
 
+def _slot_clip_stems(g1_dir: str) -> list:
+    """활성 슬롯 deploy.yaml 의 clips: (제어기 기능 clip_list) — 파일 stem 목록, 없으면 [].
+    슬롯 = 런처가 넘긴 G1_POLICY_SLOT(실제 슬롯 이름으로 풀린 값), 없으면 config.yaml 의 Mimic_Masked policy_dir.
+    제어기와 같은 원천(그 슬롯의 deploy.yaml)이다. PyYAML 없이 줄 단위로 읽는다."""
+    slot = os.environ.get("G1_POLICY_SLOT", "").strip()
+    if slot:
+        sdir = os.path.join(g1_dir, "config", "policy", "mimic_masked", slot)
+    else:
+        sdir, inside = "", False
+        try:
+            lines = open(os.path.join(g1_dir, "config", "config.yaml"), encoding="utf-8").read().splitlines()
+        except OSError:
+            return []
+        for ln in lines:
+            if re.match(r"^  Mimic_Masked:", ln):
+                inside = True
+                continue
+            if inside and ln.strip() and not ln.startswith("   "):
+                break
+            m = re.match(r"^    policy_dir:\s*(\S+)", ln) if inside else None
+            if m:
+                sdir = os.path.join(g1_dir, m.group(1))
+        if not sdir:
+            return []
+    try:
+        lines = open(os.path.join(sdir, "params", "deploy.yaml"), encoding="utf-8").read().splitlines()
+    except OSError:
+        return []
+    out, inside = [], False
+    for ln in lines:
+        if re.match(r"^clips:\s*(#.*)?$", ln):
+            inside = True
+            continue
+        if inside:
+            m = re.match(r"^\s+-\s*(\S+)", ln)
+            if m:
+                out.append(os.path.splitext(os.path.basename(m.group(1)))[0])
+            elif ln.strip() and not ln.lstrip().startswith("#"):
+                break
+    return out
+
+
+def _slot_clip_labels(stems: list, offset: int) -> tuple:
+    """slot clips 의 «i 짧은이름» 라벨 — 번호는 고정 칸(CLIPS) 바로 뒤부터(g_build_clips 와 같은 순서)."""
+    short = [_short_clip(s) for s in stems]
+    for i, s in enumerate(short):
+        if short.count(s) > 1:
+            short[i] = stems[i]
+    return tuple(f"{offset + i} {s}" for i, s in enumerate(short))
+
+
+SLOT_CLIPS = _slot_clip_labels(_slot_clip_stems(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")),
+                               len(CLIPS))
+
+
 def _clamp(x, lo, hi):
     return gui_shm.clamp(x, lo, hi)
 
@@ -166,6 +221,15 @@ def main() -> None:
         button_rows("Select clip", CLIPS, _on_clip)
         if CLIPS_DETAIL:
             g.add_markdown(CLIPS_DETAIL)
+        # 슬롯 deploy.yaml 의 clips: (수십 개라 버튼 대신 목록 + 재생 버튼). 번호 = 고정 칸 뒤부터.
+        if SLOT_CLIPS:
+            pick = g.add_dropdown(f"Slot clips ({len(SLOT_CLIPS)})", SLOT_CLIPS, initial_value=SLOT_CLIPS[0])
+
+            def _on_slot_clip(_ev) -> None:
+                state["clip_req"] = int(str(pick.value).split(" ")[0])
+                _write(); refresh()
+
+            g.add_button("▶ select this clip").on_click(_on_slot_clip)
 
     with g.add_folder("base_vel (yaw-local)"):
         vx = g.add_slider("vx", -VXCAP_BWD, VXCAP, 0.01, 0.0)   # 전진 2.5 / 후진 1.5

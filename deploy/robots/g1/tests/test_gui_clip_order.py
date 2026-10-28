@@ -26,7 +26,7 @@ NEEDS_KEY = {"motion_stand": None, "motion": "motion_file",
 def controller_slots() -> list:
     """State_Mimic.cpp 의 g_build_clips() 에서 (로더 심볼, 칸 이름) 을 «쓰인 순서대로»."""
     src = open(os.path.join(G1, "src", "State_Mimic.cpp"), encoding="utf-8").read()
-    body = src[src.index("static void g_build_clips()"):]
+    body = src[src.index("static void g_build_clips("):]
     body = body[:body.index("\n}")]
     out = []
     for sym, name in re.findall(r"g_clips\.push_back\(\{State_Mimic::(\w+),\s*(G1_STAND_CLIP|\"[^\"]+\")", body):
@@ -74,7 +74,32 @@ def main() -> int:
         if name == "stand" and "stand" not in label:
             print(f"FAIL: GUI 0번이 stand 칸이 아니다 — {label!r}")
             return 1
-    print(f"ok: 클립 칸 {len(expect)}개 일치 — 제어기 {expect} / GUI {labels}")
+    # 슬롯 deploy.yaml 의 clips:(기능 clip_list) — 제어기는 고정 칸 «뒤» 에 목록 순서대로 붙이고, GUI 는 그 번호를
+    # 고정 칸 수부터 매긴다. 둘 중 하나만 바뀌면 목록 클립이 한 칸씩 밀려 엉뚱한 클립이 재생된다.
+    src = open(os.path.join(G1, "src", "State_Mimic.cpp"), encoding="utf-8").read()
+    body = src[src.index("static void g_build_clips("):]
+    body = body[:body.index("\n}")]
+    i_demo6, i_extra = body.find('"demo6"'), body.find("extra_names[i].c_str()")
+    if not (0 <= i_demo6 < i_extra):
+        print("FAIL: g_build_clips 가 slot clips(extra) 를 고정 칸(demo6) 뒤에 붙이지 않는다")
+        return 1
+    stems = ["g1_run1_subject2", "g1_walk1_subject1", "g1_dance1_subject1"]
+    got = masked_gui._slot_clip_labels(stems, len(labels))
+    if [g.split(" ")[0] for g in got] != [str(len(labels) + k) for k in range(len(stems))]:
+        print(f"FAIL: GUI slot clip 번호가 고정 칸 수({len(labels)})부터가 아니다 — {got}")
+        return 1
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        sd = os.path.join(td, "config", "policy", "mimic_masked", "s1", "params")
+        os.makedirs(sd)
+        open(os.path.join(sd, "deploy.yaml"), "w").write(
+            "modes: [1, 4]\nclips:   # 클립 목록\n  - g1_run1_subject2.npz\n  # 주석\n  - g1_walk1_subject1.npz\nsafety:\n")
+        os.environ["G1_POLICY_SLOT"] = "s1"
+        if masked_gui._slot_clip_stems(td) != ["g1_run1_subject2", "g1_walk1_subject1"]:
+            print(f"FAIL: deploy.yaml clips: 를 못 읽었다 — {masked_gui._slot_clip_stems(td)}")
+            return 1
+        os.environ.pop("G1_POLICY_SLOT")
+    print(f"ok: 클립 칸 {len(expect)}개 일치 — 제어기 {expect} / GUI {labels} · slot clips 는 {len(labels)}번부터")
     return 0
 
 

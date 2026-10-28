@@ -89,12 +89,16 @@ static std::vector<ClipSlot> g_clips;
 // 않게, 그리고 재생 중에 언제든 돌아올 자리를 주려고(재생 중 클립 교체는 직립에서만 되는데, 그 직립으로
 // 되돌아오는 수단이 이 칸이다). 없을 수 없다(enter() 가 로봇 기본 자세로 짓는다) — 없으면 옛 배치 그대로.
 static constexpr const char* G1_STAND_CLIP = "stand";
-static void g_build_clips() {
+static void g_build_clips(const std::vector<std::shared_ptr<State_Mimic::MotionLoader_>>& extra,
+                          const std::vector<std::string>& extra_names) {
     g_clips.clear();
     if (State_Mimic::motion_stand) g_clips.push_back({State_Mimic::motion_stand, G1_STAND_CLIP, false, 0.f, false});
     if (State_Mimic::motion)       g_clips.push_back({State_Mimic::motion,       "primary", false, 0.f, true});
     if (State_Mimic::motion_light) g_clips.push_back({State_Mimic::motion_light, "light",   false, 0.f, false});
     if (State_Mimic::motion_demo6) g_clips.push_back({State_Mimic::motion_demo6, "demo6",   true,  0.f, false});
+    // 슬롯 deploy.yaml 의 clips: (기능 clip_list) — 고정 칸 뒤에 목록 순서대로. 들어올 때마다 처음부터(demo6 와 같다).
+    for (size_t i = 0; i < extra.size() && i < extra_names.size(); ++i)
+        if (extra[i]) g_clips.push_back({extra[i], extra_names[i].c_str(), true, 0.f, false});
     // 슬롯이 줄어들 수 있다(State_Mimic 은 두 번 만들어지고 enter() 마다 주 클립이 다시 묶인다)
     // -> 고른 칸이 사라졌으면 주 클립으로 되돌린다. 범위 안이면 고른 그대로 둔다.
     if (g_mode.clip_id() >= (int)g_clips.size()) g_mode.select_clip(0, (int)g_clips.size());
@@ -1015,6 +1019,27 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     //    (Mimic_Masked 인스턴스에선 enter() 가 짓는 클립 칸 g_clips 가 이 세 로더다. 선택 클립을 안 싣는 인스턴스
     //     (Mimic_Dance1_subject2)의 enter() 는 주 클립만 자기 것이고 나머지 칸은 정적 motion_light/motion_demo6 —
     //     마지막으로 그것을 실은 인스턴스의 로더 — 가 채운다. 그 칸의 미리보기는 정책 루프의 has_preview 가드가 0 으로 막는다.)
+    // 🔴 슬롯 deploy.yaml 의 clips: — 클립 재생 모드가 고를 클립 목록(기능 clip_list, 2026-10-28). 경로 = 슬롯 params/ 기준.
+    //    파일이 없거나 목록 모양이 틀리면 여기서(PD 를 걸기 전) 기동을 거부한다.
+    std::vector<std::string> clip_list_paths;
+    if (dcfg["clips"]) {
+        if (!dcfg["clips"].IsSequence()) {
+            spdlog::critical("[clip] 슬롯 '{}' 의 deploy.yaml 에 clips: 가 목록이 아니다", slot_name);
+            die_startup();
+        }
+        for (const auto& n : dcfg["clips"]) {
+            std::filesystem::path p = n.as<std::string>();
+            if (!p.is_absolute()) p = policy_dir / "params" / p;
+            if (!std::filesystem::exists(p)) {
+                spdlog::critical("[clip] 슬롯 '{}' 의 clips: 파일이 없다 — {}", slot_name, p.string());
+                die_startup();
+            }
+            clip_list_.push_back(std::make_shared<MotionLoader_>(p.string()));
+            clip_list_names_.push_back(p.stem().string());
+            clip_list_paths.push_back(p.string());
+        }
+        spdlog::info("[clip] 슬롯 '{}' clips: {} 개 — 클립 칸 «demo6» 뒤에 이 순서로", slot_name, clip_list_.size());
+    }
     if (obs_has_preview_) {
         auto need_preview = [&](const std::shared_ptr<MotionLoader_>& l, const char* name, const std::string& path) {
             if (!l || l->has_preview) return;
@@ -1026,6 +1051,8 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
         need_preview(motion_, "primary", motion_file.string());
         need_preview(motion_light_, "light", light_path);
         need_preview(motion_demo6_, "demo6", demo6_path);
+        for (size_t i = 0; i < clip_list_.size(); ++i)
+            need_preview(clip_list_[i], clip_list_names_[i].c_str(), clip_list_paths[i]);
     }
     load_safety_cfg(dcfg["safety"]);   // fail-safe: 없거나/이상하면 전부 비활성 (아래 정의)
     load_gait_cfg(dcfg["gait"]);       // fail-safe: 없으면 종전 quintic 기본값 유지 (아래 정의)
@@ -1319,7 +1346,7 @@ void State_Mimic::enter()
                      G1_STAND_CLIP, z_stand);
     }
     motion_stand = motion_stand_;
-    g_build_clips();
+    g_build_clips(clip_list_, clip_list_names_);
     // 같은 이유로 «이 슬롯이 아는 모드» 도 여기서 건다 — 지금 들어가는 정책의 것이어야 한다.
     g_mode.set_supported(slot_modes_);
     // 지난 체류의 모드로 이 체류를 시작해도 되나 — 행을 읽는 어떤 코드(아래 mode5 블록 · 정책 루프)보다 먼저.
