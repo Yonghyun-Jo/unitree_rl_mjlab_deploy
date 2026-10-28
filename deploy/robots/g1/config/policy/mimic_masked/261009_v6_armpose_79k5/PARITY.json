@@ -2,7 +2,7 @@
  "tool": "deploy/scripts/check_slot_parity.py",
  "tool_version": 1,
  "slot": "261009_v6_armpose_79k5",
- "checked_at": "2026-10-13T11:17:34",
+ "checked_at": "2026-10-28T16:31:15",
  "verdict": "KNOWN",
  "counts": {
   "PASS": 40,
@@ -14,14 +14,14 @@
   "deploy_yaml_sha256": "b55123578bf7f2c827df9616d01c689b9cb2d68e136c673b5d4c70866b1d9bc0"
  },
  "context_sha256": {
-  "deploy/robots/g1/src/State_Mimic.cpp": "5b1534a2895dd110aabf41ce20d06228cd8c8ef71a266fc9f6d98adf9ab9aed6",
+  "deploy/robots/g1/src/State_Mimic.cpp": "09e6b6a20eff12b5dabac63fd87188bcade329537153383f1aebd8b56f1b3cd9",
   "deploy/include/isaaclab/envs/mdp/observations/observations.h": "6b3fb08a75ef44600aa222ef131b66d4404968c0f2b0f9879bd091920a4ee5e5",
   "deploy/robots/g1/include/ModeTable.h": "22e62587418c853972d78f4295d661790682bb13c321c648abbdfd8ce1f08ea6",
-  "deploy/robots/g1/include/DeployFeatures.h": "a2e6c8e8788f142818b6e861e8effdfd10246920d6edcc46f4e0a454e1ce0fb3",
+  "deploy/robots/g1/include/DeployFeatures.h": "4eeafc7f9137bd9cd4c2801262600388d1f330f6c78181a69673917195d4bcdc",
   "deploy/robots/g1/include/MaskedLocoController.h": "3e9e2fd4ec7c06ebbdf2df88edd35d07c9120ee3d6d0df2bffbaa43163a642be",
   "deploy/robots/g1/include/GaitLut.h": "617944f093d821f1d31c7886f7a12ccb577564465bb195f769196de11bf22c35",
   "simulate/config.yaml": "2990b4779256d5e2319bafe133de46a1ad987b39b334e3fd4583b14262003a18",
-  "deploy/robots/g1/config/policy/parity_known.yaml": "c7583a07ed71a7e291219d8958f3384b133f25741216d23564edda096e2a9b8a"
+  "deploy/robots/g1/config/policy/parity_known.yaml": "a9d2f81a56873f644339a00bd3f852d6902af855ec6073ca983473dd9e246690"
  },
  "commits": {
   "base": "c8c3ea642adf755ff1376f489b1143cdc76923ad",
@@ -30,7 +30,7 @@
   "mode3": "f22eab592412732c9793dc4cc3d911fa8c17bc4d"
  },
  "mjlab": "/home/piene/mjlab1.4/mjlab_g1_motion",
- "deploy_repo_head": "7bdd3ea",
+ "deploy_repo_head": "9098a28",
  "known_used": [
   {
    "id": "K1",
@@ -49,7 +49,7 @@
    "where": "deploy/robots/g1/src/State_Mimic.cpp 의 VX_MAX_* 위 주석 (≈182행, «모드별 봉투 분리는 별건으로 남겨 둔다»)"
   }
  ],
- "elapsed_s": 3.85,
+ "elapsed_s": 0.16,
  "rows": [
   {
    "no": "1.1",
@@ -467,7 +467,7 @@
    "id": "cfg.requires",
    "item": "requires ⊆ 이 소스가 아는 기능",
    "train": "deploy.yaml requires 6개",
-   "deploy": "DeployFeatures.h known() 11개",
+   "deploy": "DeployFeatures.h known() 13개",
    "verdict": "PASS",
    "note": ""
   },

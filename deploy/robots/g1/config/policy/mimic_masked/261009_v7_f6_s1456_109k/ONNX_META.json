@@ -1,0 +1,101 @@
+{
+  "exported_at": "2026-10-28",
+  "slot": "261009_v7_f6_s1456_109k",
+  "trial": "v7",
+  "trial_day": "2026-10-09",
+  "summary": "final_v6 공유 base 위 skill 1·4·5 한 ONNX — 모드 키로 갈아탄다 (6 은 잠금)",
+  "watch": [
+    "1: 걷기·멈춤 자세가 261009 v1~v6 과 비슷한가 (전진 상한 2.5)",
+    "4: 클립 재생 — 고른 클립 따라가다 넘어지지 않나",
+    "5: 자세 버튼 기립·네발·눕기 도착"
+  ],
+  "note": "공유 flow base v6final-m3all 250k(mjlab final_v6) 위 head 4개를 한 ONNX(obs 3006 = policy 2270 + 미리보기 736, limb_z 4칸 포함)로 묶었다. skill1 = s4_mode1_m3all250k_resume89k_to109k 108,998 (표 A 생존 94.6 % · vx RMS 0.472 · 고정 3.0 m/s 명령 2.70 m/s — 학습은 vx 3.0 까지, 배포 상한 2.5 = KNOWN K3). skill4 = 249,995 (head_probe4 완주 92.6 %, 58 클립 mode4). skill5 = 130,000 (edge_rollout 6 간선 strict 99.8/100/100/99.8/97.0/100 %). skill6 = 임시판 rebase_m3all250k_109996 — 이 슬롯은 modes [1,4,5] 라 키 6 을 거부한다(사지 LUT C++ 미포팅). 키: 1 걷기 · 4 클립 재생(0 stand 에서 시작, [ ] 또는 GUI 목록으로 58 클립 중 선택) · 5 자세(z x c b n h). skill5·6 head 는 도지에서 학습해 launch commit 기록이 없다 — 패리티 표는 launch 시각 직전 final_v6 커밋으로 추정(WARN).",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint",
+    "mode_table",
+    "obs_contract_v2",
+    "mode5_driver",
+    "ground_safety",
+    "limb_z_obs",
+    "clip_list"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "3006",
+  "obs_contract_version": "2",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:8:10,foot_z:2:10,limb_z:4:10,mode5_cmd:53:10,preview_on:1:1,preview_k1:35:1,preview:700:1",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-10-23_13-02-11_stage2_v6final_m3all_cap1024_steps6_resume199k5_60k/keep_250000.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k/keep_108998.pt",
+  "mode1_run": "2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k",
+  "mode1_launch_commit": "640aae0598e95d2062c1a950d77f864ec94507c1",
+  "mode2_ckpt": "none",
+  "mode3_ckpt": "none",
+  "manifest": "motions/g1_flow_specialists_c3_m6.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 8.583e-06 (tol 0.0001) OK · modes 1,2,3,4,5,6",
+    "graph": "그래프 검증 OK — GEMM 72 = enc 4 + motion 2 + actor 5×6 + heads 36",
+    "obs_contract_sum": "obs 계약 15항 합=3006 == obs 3006  OK",
+    "mask_slice": "mask slice (1672, 1680) == env.command_mask()  OK",
+    "heads_pairing": [
+      "head mode1: base 짝 OK · cmd_mode 1 (2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k)",
+      "head mode4: base 짝 OK · cmd_mode 4 (2026-10-26_12-11-17_s4_mode4_m3all250k_resume227k_to250k)",
+      "head mode5: base 짝 OK — 정책 쪽 비트 동일, critic 만 다른 판 (keep_250000_privc.pt) · cmd_mode 5 (2026-10-26_01-05-42_s4_mode5_m3all250k_rebase115k_to140k_retry)",
+      "head mode6: base 짝 OK — 헤드에 든 얼린 base 사본이 이 base 와 같다 (rebase 판, run 원장의 base 는 keep_199498_privc.pt) · cmd_mode 6 (2026-10-20_12-43-44_s4_mode6_v6final_rebase90k_to110k)"
+    ],
+    "onnx_md5": "ec8802500368ad5c9acdfd17ffcdf90b",
+    "sim2sim_walk": "★★★★☆ com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 9098a28, 대조군 v6 같은 세션). ① mode1 램프 0.5→1.0→1.5→2.0→2.5 m/s(11 s 씩)→정지→회전 0.8 rad/s 88 s: 안전 이벤트 0 · pos_clamp 0 · |qd| 최대 15.32 rad/s(L_ank_pitch, v6 15.35) · 기울기 최대 13.6°(v6 15.0°). 저속(0.5 m/s) 골반 기울기 11~13°(v6 3~4°) — mjlab 학습 sim 고정 명령에서도 109k 는 0.5/1.0/1.5/2.0 m/s 에 12.9/11.0/8.8/7.9°, 정지 2.4° 라 정책 자체의 자세(배포 불일치 아님). ② mode4: 0 stand → [ (목록 마지막 sprint1_subject4) 21 s 재생 → ] stand → 1: 안전 이벤트 0 · pos_clamp 0 · |qd| 15.28 · 기울기 34° (클립 62 칸 = stand·primary·light·demo6 + clips 58). ③ mode5 자세 고리(직립→네발→직립→앉기→직립→눕기→직립→mode1) 7/7 도착 0.49~3.21 s · 안전 이벤트 0 · pos_clamp 0 · |qd| 최대 19.72 rad/s(R_knee, 기립 중 순간 — crit 19 는 5 틱 연속이 아니라 안 걸림) · 기울기 93°(바닥 자세). 기동 줄: requires 12 전부 지원 · modes 1 4 5 · ref_limb_height 4×10 · 미리보기 있음 · clips 58 · pos_clamp ON · gait mode1 lut V2 cadence 1.15 settle 100 min_swing 0.08. 키 6 은 이 슬롯이 거부(사지 LUT 미포팅). (2026-10-28)",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_final && /home/piene/.local/bin/uv run --no-sync --with onnxruntime==1.22.0 python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-10-23_13-02-11_stage2_v6final_m3all_cap1024_steps6_resume199k5_60k/keep_250000.pt --manifest motions/g1_flow_specialists_c3_m6.yaml --head 1=logs/rsl_rl/g1_student/2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k/keep_108998.pt --head 4=logs/rsl_rl/g1_student/2026-10-26_12-11-17_s4_mode4_m3all250k_resume227k_to250k/keep_249995.pt --head 5=logs/rsl_rl/g1_student/2026-10-26_01-05-42_s4_mode5_m3all250k_rebase115k_to140k_retry/keep_130000.pt --head 6=logs/rsl_rl/g1_student/2026-10-20_12-43-44_s4_mode6_v6final_rebase90k_to110k/rebase_m3all250k_109996.pt --sampling-steps 6 --out exported/261009_v7_f6_s1456_109k/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "export_commit": {
+    "head": "0b421bf47ce0513879b2dc0db868303c901af364",
+    "dirty": [],
+    "at": "2026-10-28T16:11:13"
+  },
+  "heads": {
+    "1": "logs/rsl_rl/g1_student/2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k/keep_108998.pt",
+    "4": "logs/rsl_rl/g1_student/2026-10-26_12-11-17_s4_mode4_m3all250k_resume227k_to250k/keep_249995.pt",
+    "5": "logs/rsl_rl/g1_student/2026-10-26_01-05-42_s4_mode5_m3all250k_rebase115k_to140k_retry/keep_130000.pt",
+    "6": "logs/rsl_rl/g1_student/2026-10-20_12-43-44_s4_mode6_v6final_rebase90k_to110k/rebase_m3all250k_109996.pt"
+  },
+  "modes": [
+    1,
+    4,
+    5
+  ],
+  "mjlab_ws": "/home/piene/mjlab1.4/mjlab_g1_final",
+  "clips": 58,
+  "sim2sim": {
+    "stars": 4,
+    "memo": "com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 9098a28, 대조군 v6 같은 세션). ① mode1 램프 0.5→1.0→1.5→2.0→2.5 m/s(11 s 씩)→정지→회전 0.8 rad/s 88 s: 안전 이벤트 0 · pos_clamp 0 · |qd| 최대 15.32 rad/s(L_ank_pitch, v6 15.35) · 기울기 최대 13.6°(v6 15.0°). 저속(0.5 m/s) 골반 기울기 11~13°(v6 3~4°) — mjlab 학습 sim 고정 명령에서도 109k 는 0.5/1.0/1.5/2.0 m/s 에 12.9/11.0/8.8/7.9°, 정지 2.4° 라 정책 자체의 자세(배포 불일치 아님). ② mode4: 0 stand → [ (목록 마지막 sprint1_subject4) 21 s 재생 → ] stand → 1: 안전 이벤트 0 · pos_clamp 0 · |qd| 15.28 · 기울기 34° (클립 62 칸 = stand·primary·light·demo6 + clips 58). ③ mode5 자세 고리(직립→네발→직립→앉기→직립→눕기→직립→mode1) 7/7 도착 0.49~3.21 s · 안전 이벤트 0 · pos_clamp 0 · |qd| 최대 19.72 rad/s(R_knee, 기립 중 순간 — crit 19 는 5 틱 연속이 아니라 안 걸림) · 기울기 93°(바닥 자세). 기동 줄: requires 12 전부 지원 · modes 1 4 5 · ref_limb_height 4×10 · 미리보기 있음 · clips 58 · pos_clamp ON · gait mode1 lut V2 cadence 1.15 settle 100 min_swing 0.08. 키 6 은 이 슬롯이 거부(사지 LUT 미포팅).",
+    "at": "2026-10-28T16:31",
+    "summary": "넘어짐 0 · mode1 램프·mode4 sprint 재생·mode5 자세 7/7 도착 · 저속 골반 13° 숙임(학습과 같음)"
+  }
+}

@@ -1,0 +1,519 @@
+{
+ "tool": "deploy/scripts/check_slot_parity.py",
+ "tool_version": 1,
+ "slot": "261009_v7_f6_s1456_109k",
+ "checked_at": "2026-10-28T16:31:17",
+ "verdict": "KNOWN",
+ "counts": {
+  "PASS": 42,
+  "WARN": 2,
+  "SKIP": 2,
+  "KNOWN": 1
+ },
+ "fresh": {
+  "onnx_md5": "ec8802500368ad5c9acdfd17ffcdf90b",
+  "deploy_yaml_sha256": "e2f4eaa0bcdc30c4bc3ee6b0396181220b24c6d43cf8e1d92ffdbf23d72ac9ad"
+ },
+ "context_sha256": {
+  "deploy/robots/g1/src/State_Mimic.cpp": "09e6b6a20eff12b5dabac63fd87188bcade329537153383f1aebd8b56f1b3cd9",
+  "deploy/include/isaaclab/envs/mdp/observations/observations.h": "6b3fb08a75ef44600aa222ef131b66d4404968c0f2b0f9879bd091920a4ee5e5",
+  "deploy/robots/g1/include/ModeTable.h": "22e62587418c853972d78f4295d661790682bb13c321c648abbdfd8ce1f08ea6",
+  "deploy/robots/g1/include/DeployFeatures.h": "4eeafc7f9137bd9cd4c2801262600388d1f330f6c78181a69673917195d4bcdc",
+  "deploy/robots/g1/include/MaskedLocoController.h": "3e9e2fd4ec7c06ebbdf2df88edd35d07c9120ee3d6d0df2bffbaa43163a642be",
+  "deploy/robots/g1/include/GaitLut.h": "617944f093d821f1d31c7886f7a12ccb577564465bb195f769196de11bf22c35",
+  "simulate/config.yaml": "2990b4779256d5e2319bafe133de46a1ad987b39b334e3fd4583b14262003a18",
+  "deploy/robots/g1/config/policy/parity_known.yaml": "a9d2f81a56873f644339a00bd3f852d6902af855ec6073ca983473dd9e246690"
+ },
+ "commits": {
+  "base": "d84f487c070854d44fb94551d19c678d967b709f",
+  "mode1": "640aae0598e95d2062c1a950d77f864ec94507c1",
+  "mode4": "77b6aa0e1fa0de691ab9ff75e0084a9e8803a712",
+  "mode5": "640aae0598e95d2062c1a950d77f864ec94507c1",
+  "mode6": "88edb2f2e88646b96a7f45fc2ba3655faa394e10"
+ },
+ "mjlab": "/home/piene/mjlab1.4/mjlab_g1_final",
+ "deploy_repo_head": "9098a28",
+ "known_used": [
+  {
+   "id": "K3",
+   "row": "cmd.mode1",
+   "key": "vx",
+   "reason": "final_v6 skill1 head(공유 base m3all 250k 위, s4_mode1_m3all250k_resume89k_to109k)는 stage4_mode1 CMD_BASE_VEL vx (-1.5, 3.0)(mjlab beac041, 10-22)로 학습했는데 배포 전진 상한(VX_MAX_FWD)은 2.5 다. 조이스틱 끝 = 2.5 m/s 라 학습 봉투 «안쪽» 만 쓴다(OOD 아님) — 2.5~3.0 m/s 구간을 실기에서 안 쓸 뿐이다. 후진 1.5 · vy · wz 는 같다.",
+   "decision": "사용자 결정 (2026-10-28): 첫 실기는 전진 상한 2.5 유지",
+   "where": "deploy/robots/g1/src/State_Mimic.cpp 의 VX_MAX_FWD · mjlab_g1_final stage4_mode1_env_cfg.CMD_BASE_VEL"
+  }
+ ],
+ "elapsed_s": 2.38,
+ "rows": [
+  {
+   "no": "1.1",
+   "group": "1 출처·동일성",
+   "id": "id.onnx_md5",
+   "item": "ONNX md5 == META 기록",
+   "train": "ec8802500368",
+   "deploy": "ec8802500368",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "1.2",
+   "group": "1 출처·동일성",
+   "id": "id.onnx_meta",
+   "item": "ONNX 메타(base·head·steps·계약) == ONNX_META.json",
+   "train": "ONNX metadata",
+   "deploy": "ONNX_META.json",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "1.3",
+   "group": "1 출처·동일성",
+   "id": "id.onnx_io",
+   "item": "ONNX 입출력",
+   "train": "계약 합 3006",
+   "deploy": "obs[1, 3006] → actions[1, 29]",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "1.4",
+   "group": "1 출처·동일성",
+   "id": "src.base",
+   "item": "base 학습 원장",
+   "train": "2026-10-23_13-02-11_stage2_v6final_m3all @d84f487",
+   "deploy": "ONNX_META base",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "1.5",
+   "group": "1 출처·동일성",
+   "id": "src.mode1",
+   "item": "mode1 학습 원장",
+   "train": "2026-10-27_18-37-42_s4_mode1_m3all250k_r @640aae0",
+   "deploy": "ONNX_META mode1",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "1.6",
+   "group": "1 출처·동일성",
+   "id": "src.mode4",
+   "item": "mode4 학습 원장",
+   "train": "2026-10-26_12-11-17_s4_mode4_m3all250k_r @77b6aa0",
+   "deploy": "ONNX_META mode4",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "1.7",
+   "group": "1 출처·동일성",
+   "id": "src.mode5",
+   "item": "mode5 학습 원장",
+   "train": "2026-10-26_01-05-42_s4_mode5_m3all250k_r @640aae0",
+   "deploy": "ONNX_META mode5",
+   "verdict": "WARN",
+   "note": "⚠ 원격(dogi) 학습 run — training_meta.json 없음. launch 시각 2026-10-26 01:05:42 직전 final_v6 커밋 640aae0 로 추정(branch = 수확 기록의 branch · 서버 sync 는 com1 작업 트리를 보낸다 — 미커밋 변경은 모른다) · ⚠ 학습 manifest logs/_motion_data/mode5_gen/_subset_graphC_v2.yaml ≠ export manifest motions/g1_flow_specialists_c3_m6.yaml"
+  },
+  {
+   "no": "1.8",
+   "group": "1 출처·동일성",
+   "id": "src.mode6",
+   "item": "mode6 학습 원장",
+   "train": "2026-10-20_12-43-44_s4_mode6_v6final_reb @88edb2f",
+   "deploy": "ONNX_META mode6",
+   "verdict": "WARN",
+   "note": "⚠ 원격(dogi) 학습 run — training_meta.json 없음. launch 시각 2026-10-20 12:43:44 직전 final_v6 커밋 88edb2f 로 추정(branch = 수확 기록 워크트리 mjlab_g1_final 의 브랜치 · 서버 sync 는 com1 작업 트리를 보낸다 — 미커밋 변경은 모른다) · ⚠ 학습 manifest logs/_motion_data/mode6_gen/_subset_ground1_subject5.yaml ≠ export manifest motions/g1_flow_specialists_c3_m6.yaml"
+  },
+  {
+   "no": "1.9",
+   "group": "1 출처·동일성",
+   "id": "id.obs_same",
+   "item": "base·head 의 obs 그룹이 같은가",
+   "train": "base@d84f487 · mode1@640aae0 · mode4@77b6aa0 · mode5@640aae0 · mode6@88edb2f",
+   "deploy": "하나의 obs 벡터·하나의 작동을 공유",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "1.10",
+   "group": "1 출처·동일성",
+   "id": "id.act_same",
+   "item": "base·head 의 작동 상수(관절 순서·기본자세·PD·scale·dt)가 같은가",
+   "train": "base@d84f487 · mode1@640aae0 · mode4@77b6aa0 · mode5@640aae0 · mode6@88edb2f",
+   "deploy": "하나의 obs 벡터·하나의 작동을 공유",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "1.11",
+   "group": "1 출처·동일성",
+   "id": "id.export_commit",
+   "item": "export 시점 mjlab commit",
+   "train": "-",
+   "deploy": "0b421bf",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.1",
+   "group": "2 obs 배치",
+   "id": "obs.base_ang_vel",
+   "item": "1. base_ang_vel",
+   "train": "base_ang_vel ← base_ang_vel · 3×10 · scale 없음(=1) · clip 없음",
+   "deploy": "base_ang_vel · train_term=base_ang_vel · 3×10 · scale [1, 1, 1] · clip 없음",
+   "verdict": "PASS",
+   "note": "학습 노이즈 UniformNoiseCfg(-0.2, 0.2) — 배포엔 없음(정상)"
+  },
+  {
+   "no": "2.2",
+   "group": "2 obs 배치",
+   "id": "obs.projected_gravity",
+   "item": "2. projected_gravity",
+   "train": "projected_gravity ← projected_gravity · 3×10 · scale 없음(=1) · clip 없음",
+   "deploy": "projected_gravity · train_term=projected_gravity · 3×10 · scale [1, 1, 1] · clip 없음",
+   "verdict": "PASS",
+   "note": "학습 노이즈 UniformNoiseCfg(-0.05, 0.05) — 배포엔 없음(정상)"
+  },
+  {
+   "no": "2.3",
+   "group": "2 obs 배치",
+   "id": "obs.command",
+   "item": "3. command",
+   "train": "command ← masked_joint_command · 58×10 · scale 없음(=1) · clip 없음",
+   "deploy": "masked_joint_command · train_term=command · 58×10 · scale [1]×58 · clip 없음",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.4",
+   "group": "2 obs 배치",
+   "id": "obs.motion_root_ori_b",
+   "item": "4. motion_root_ori_b",
+   "train": "motion_root_ori_b ← masked_root_ori_b · 6×10 · scale 없음(=1) · clip 없음",
+   "deploy": "masked_root_ori_b · train_term=motion_root_ori_b · 6×10 · scale [1, 1, 1, 1, 1, 1] · clip 없음",
+   "verdict": "PASS",
+   "note": "학습 노이즈 UniformNoiseCfg(-0.05, 0.05) — 배포엔 없음(정상)"
+  },
+  {
+   "no": "2.5",
+   "group": "2 obs 배치",
+   "id": "obs.joint_pos",
+   "item": "5. joint_pos",
+   "train": "joint_pos ← joint_pos_rel · 29×10 · scale 없음(=1) · clip 없음",
+   "deploy": "joint_pos_rel · train_term=joint_pos · 29×10 · scale [1]×29 · clip 없음",
+   "verdict": "PASS",
+   "note": "학습 노이즈 UniformNoiseCfg(-0.01, 0.01) — 배포엔 없음(정상)"
+  },
+  {
+   "no": "2.6",
+   "group": "2 obs 배치",
+   "id": "obs.joint_vel",
+   "item": "6. joint_vel",
+   "train": "joint_vel ← joint_vel_rel · 29×10 · scale 없음(=1) · clip 없음",
+   "deploy": "joint_vel_rel · train_term=joint_vel · 29×10 · scale [1]×29 · clip 없음",
+   "verdict": "PASS",
+   "note": "학습 노이즈 UniformNoiseCfg(-0.5, 0.5) — 배포엔 없음(정상)"
+  },
+  {
+   "no": "2.7",
+   "group": "2 obs 배치",
+   "id": "obs.actions",
+   "item": "7. actions",
+   "train": "actions ← last_action · 29×10 · scale 없음(=1) · clip 없음",
+   "deploy": "last_action · train_term=actions · 29×10 · scale [1]×29 · clip 없음",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.8",
+   "group": "2 obs 배치",
+   "id": "obs.base_vel",
+   "item": "8. base_vel",
+   "train": "base_vel ← base_vel_command · 3×10 · scale 없음(=1) · clip 없음",
+   "deploy": "base_vel_command · train_term=base_vel · 3×10 · scale [1, 1, 1] · clip 없음",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.9",
+   "group": "2 obs 배치",
+   "id": "obs.mask",
+   "item": "9. mask",
+   "train": "mask ← command_mask · 8×10 · scale 없음(=1) · clip 없음",
+   "deploy": "mode_mask · train_term=mask · 8×10 · scale [1]×8 · clip 없음",
+   "verdict": "PASS",
+   "note": "학습 함수 command_mask ↔ 배포 항 mode_mask (대응표로 잇는다)"
+  },
+  {
+   "no": "2.10",
+   "group": "2 obs 배치",
+   "id": "obs.foot_z",
+   "item": "10. foot_z",
+   "train": "foot_z ← ref_foot_height · 2×10 · scale 없음(=1) · clip 없음",
+   "deploy": "ref_foot_height · train_term=foot_z · 2×10 · scale [1, 1] · clip 없음",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.11",
+   "group": "2 obs 배치",
+   "id": "obs.limb_z",
+   "item": "11. limb_z",
+   "train": "limb_z ← ref_limb_height · 4×10 · scale 없음(=1) · clip 없음",
+   "deploy": "ref_limb_height · train_term=limb_z · 4×10 · scale [1, 1, 1, 1] · clip 없음",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.12",
+   "group": "2 obs 배치",
+   "id": "obs.mode5_cmd",
+   "item": "12. mode5_cmd",
+   "train": "mode5_cmd ← mode5_cmd · 53×10 · scale 없음(=1) · clip 없음",
+   "deploy": "mode5_command · train_term=mode5_cmd · 53×10 · scale [1]×53 · clip 없음",
+   "verdict": "PASS",
+   "note": "학습 함수 mode5_cmd ↔ 배포 항 mode5_command (대응표로 잇는다)"
+  },
+  {
+   "no": "2.13",
+   "group": "2 obs 배치",
+   "id": "obs.preview_on",
+   "item": "13. preview_on",
+   "train": "preview_on ← motion_preview_on · 1×1 · scale 없음(=1) · clip 없음",
+   "deploy": "motion_preview_on · train_term=preview_on · 1×1 · scale [1] · clip 없음",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.14",
+   "group": "2 obs 배치",
+   "id": "obs.preview_k1",
+   "item": "14. preview_k1",
+   "train": "preview_k1 ← motion_preview_k1 · 35×1 · scale 없음(=1) · clip 없음",
+   "deploy": "motion_preview_k1 · train_term=preview_k1 · 35×1 · scale [1]×35 · clip 없음",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.15",
+   "group": "2 obs 배치",
+   "id": "obs.preview",
+   "item": "15. preview",
+   "train": "preview ← motion_preview · 700×1 · scale 없음(=1) · clip 없음",
+   "deploy": "motion_preview · train_term=preview · 700×1 · scale [1]×700 · clip 없음",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.16",
+   "group": "2 obs 배치",
+   "id": "obs.sum",
+   "item": "합 = ONNX 입력 = META obs_dim",
+   "train": "계약 3006",
+   "deploy": "deploy 3006 · ONNX 3006 · META 3006",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.17",
+   "group": "2 obs 배치",
+   "id": "obs.layout",
+   "item": "history 배치",
+   "train": "mjlab: 항마다 history(오래된→최신)를 펴서 항 순서로 잇는다",
+   "deploy": "use_gym_history 미설정 → term-major",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "2.18",
+   "group": "2 obs 배치",
+   "id": "obs.mask_slice",
+   "item": "head 선택 mask 위치 (ONNX 그래프가 실제로 자르는 곳)",
+   "train": "그래프 Slice [1672:1680]",
+   "deploy": "배포 배치의 최신 mask = [-1334:-1326]",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "3.1",
+   "group": "3 작동",
+   "id": "act.joint_order",
+   "item": "관절 순서",
+   "train": "JOINT_ORDER 29 (left_hip_pitch_joint … right_wrist_yaw_joint)",
+   "deploy": "joint_ids_map 항등 · 장면 src/assets/robots/unitree_g1/xmls/scene_g1.xml",
+   "verdict": "PASS",
+   "note": "실기 SDK 모터 순서 = 이 장면 순서라는 전제(유니트리 G1 29dof 정의)"
+  },
+  {
+   "no": "3.2",
+   "group": "3 작동",
+   "id": "act.default_pos",
+   "item": "기본 자세 default_joint_pos",
+   "train": "29값 [-0.312, 0, 0, 0.669, -0.363, 0, …]",
+   "deploy": "29값 [-0.312, 0, 0, 0.669, -0.363, 0, …]",
+   "verdict": "PASS",
+   "note": "최대 |Δ| 0.0e+00 (허용 1e-06)"
+  },
+  {
+   "no": "3.3",
+   "group": "3 작동",
+   "id": "act.offset",
+   "item": "action offset",
+   "train": "29값 [-0.312, 0, 0, 0.669, -0.363, 0, …]",
+   "deploy": "29값 [-0.312, 0, 0, 0.669, -0.363, 0, …]",
+   "verdict": "PASS",
+   "note": "최대 |Δ| 0.0e+00 (허용 1e-06) · 학습 use_default_offset=True"
+  },
+  {
+   "no": "3.4",
+   "group": "3 작동",
+   "id": "act.scale",
+   "item": "action scale",
+   "train": "29값 [0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386, …]",
+   "deploy": "29값 [0.5475, 0.3507, 0.5475, 0.3507, 0.4386, 0.4386, …]",
+   "verdict": "PASS",
+   "note": "최대 상대오차 1.1e-04 (허용 0.001)"
+  },
+  {
+   "no": "3.5",
+   "group": "3 작동",
+   "id": "act.kp",
+   "item": "PD stiffness",
+   "train": "29값 [40.1792, 99.0984, 40.1792, 99.0984, 28.5012, 28.5012, …]",
+   "deploy": "29값 [40.179, 99.098, 40.179, 99.098, 28.501, 28.501, …]",
+   "verdict": "PASS",
+   "note": "최대 상대오차 2.6e-05 (허용 0.001)"
+  },
+  {
+   "no": "3.6",
+   "group": "3 작동",
+   "id": "act.kd",
+   "item": "PD damping",
+   "train": "29값 [2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144, …]",
+   "deploy": "29값 [2.5579, 6.3088, 2.5579, 6.3088, 1.8144, 1.8144, …]",
+   "verdict": "PASS",
+   "note": "최대 상대오차 3.9e-05 (허용 0.001)"
+  },
+  {
+   "no": "3.7",
+   "group": "3 작동",
+   "id": "act.step_dt",
+   "item": "정책 주기 step_dt",
+   "train": "0.005 × 4 = 0.02",
+   "deploy": "0.02",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "3.8",
+   "group": "3 작동",
+   "id": "act.clip",
+   "item": "action clip (배포 전용 기계한계)",
+   "train": "학습 clip 없음 (EnvelopeJointPositionActionCfg)",
+   "deploy": "29쌍 · 기본자세 포함 예 · safety pos_min/max 와 같다",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "3.9",
+   "group": "3 작동",
+   "id": "act.last_action",
+   "item": "last_action = 정책 raw 출력",
+   "train": "mjlab last_action → raw_action",
+   "deploy": "observations.h last_action → action_manager->action()",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "4.1",
+   "group": "4 명령·gait",
+   "id": "cmd.mask",
+   "item": "모드 → mask 비트",
+   "train": "mask 8칸 (계약 v2)",
+   "deploy": "-",
+   "verdict": "SKIP",
+   "note": "계약 v2 mode_mask 대조는 gen_mode_table_header --check 몫"
+  },
+  {
+   "no": "4.2",
+   "group": "4 명령·gait",
+   "id": "cmd.mode1",
+   "item": "mode1 명령 범위 (조이스틱 끝 = 학습 범위의 끝)",
+   "train": "stage4_mode1 CMD_BASE_VEL vx [-1.5, 3] vy [-0.8, 0.8] wz [-2, 2] @640aae0",
+   "deploy": "C++ vx [-1.5, 2.5] vy [-0.8, 0.8] wz [-2, 2] (모드 공통)",
+   "verdict": "KNOWN",
+   "note": "vx: 학습 [-1.5, 3] ≠ 배포 [-1.5, 2.5] — K3 (사용자 결정 (2026-10-28): 첫 실기는 전진 상한 2.5 유지)"
+  },
+  {
+   "no": "4.3",
+   "group": "4 명령·gait",
+   "id": "gait.reader",
+   "item": "FOOT_GEN 판독기 두 벌이 같은 값을 읽는가 (계측기 자기검증)",
+   "train": "import (그 commit 의 cfg 모듈)",
+   "deploy": "stage_candidates.foot_gen_at (META gait_parity 를 쓴 판독기)",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "4.4",
+   "group": "4 명령·gait",
+   "id": "gait.mode1",
+   "item": "mode1 발-z 생성 조건 (foot_z obs 의 값)",
+   "train": "FOOT_GEN@640aae0: source=lut cadence=1.15 settle_steps=100 min_swing=0.08 stand_deadzone=0 turn_k=0.3 walk_max=1.2 run_min=1.7 table=2 turn_asym=True settle_eff=0.15 settle_phase=0.07",
+   "deploy": "deploy gait: source=lut cadence=1.15 settle_steps=100 min_swing=0.08 stand_deadzone=0 turn_k=0.3 walk_max=1.2 run_min=1.7 table=2 turn_asym=True settle_eff=0.15 settle_phase=0.07",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "4.5",
+   "group": "4 명령·gait",
+   "id": "cmd.mode4_clips",
+   "item": "mode4 클립 = 학습 manifest(mode4) 클립 (OOD·다른 리타겟판 없음)",
+   "train": "manifest mode4 58 개",
+   "deploy": "slot clips 58 개 · requires clip_list 있음",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "4.6",
+   "group": "4 명령·gait",
+   "id": "gait.lut_header",
+   "item": "GaitLut.h 배열 == 학습 gait_lut_data",
+   "train": "gait_lut_data.py (V1=d94c7d9~1 · V2=워킹트리)",
+   "deploy": "GaitLut.h GENERATED 구역",
+   "verdict": "PASS",
+   "note": "gen_gait_lut_header --check: 표는 같다 (숫자 바이트 동일)."
+  },
+  {
+   "no": "4.7",
+   "group": "4 명령·gait",
+   "id": "cfg.imu_cal",
+   "item": "IMU 보정 (projected_gravity 를 바꾼다)",
+   "train": "학습: 보정 없음",
+   "deploy": "config.yaml imu_cal pitch 0° roll 0°",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "4.8",
+   "group": "4 명령·gait",
+   "id": "cfg.requires",
+   "item": "requires ⊆ 이 소스가 아는 기능",
+   "train": "deploy.yaml requires 12개",
+   "deploy": "DeployFeatures.h known() 13개",
+   "verdict": "PASS",
+   "note": ""
+  },
+  {
+   "no": "4.9",
+   "group": "4 명령·gait",
+   "id": "tierb.stamp",
+   "item": "추적 패리티 (sim2sim obs 덤프 vs 학습 함수)",
+   "train": "-",
+   "deploy": "-",
+   "verdict": "SKIP",
+   "note": "Tier B 미도입"
+  }
+ ]
+}
