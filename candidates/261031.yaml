@@ -1,0 +1,17 @@
+# 실기 후보 — 2026-10-31 (stage_candidates.py 입력). 슬롯 이름 = <day>_<alias>_<label>
+day: 261031
+base: logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt
+manifest: motions/g1_flow_specialists_v2.yaml
+mode2_ckpt: logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt
+mode3_ckpt: logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt
+sampling_steps: 6
+template_slot: 261009_v1_schedobs_stepw12_27k5   # 10-28 실기 1 위(★4) 슬롯 — 같은 base·manifest·obs·FOOT_GEN(min_swing 0.08)
+candidates:
+  - alias: v1
+    label: pelvisfloor0_arate0p15_32k
+    mode1_ckpt: logs/rsl_rl/g1_student/2026-10-31_01-49-37_s4_mode1_comfloor5_pelvisfloor0_arate0p15_resume30k_to35k/keep_cand_32000.pt
+    # ↑ keep_32000.pt 와 같은 바이트(md5 c0faa595). model_32000.pt 는 학습 끝 정리로 지워졌다.
+    min_swing: 0.08
+    summary: "261009_v1 + CoM 하한 · 멈출 때 골반 하한 · action rate −0.15 — 멈춘 뒤 뒤로 기우뚱 줄임 (32k)"
+    watch: ["걷다 멈출 때 뒤로 기우뚱·뒷걸음이 261009_v1 보다 줄었나", "서 있을 때 몸이 뒤로 기울어 보이지 않나", "걷기·뛰기가 261009_v1 만큼 부드러운가"]
+    note: "계보: 261009_v1(14차 27.5k, launch a68f735, 10-28 실기 ★4 «멈춘 뒤 쏠림이 줄었음») → B run(resume27k5_to35k, v1 reward + stand_com_floor: 정지·저속 CoM 이 발목 중점 앞 5 cm 보다 뒤면 w −30, 0.5 m/s 에서 0, 2e24efc) 의 30k → 이 run(c6278f9, B 30k 에서 이어감): ① stop_pelvis_floor = 멈출 때 골반 pitch 0° 하한(1° 미달 1 s 당 0.3, 정지 명령에서 전부 · 0.5 m/s 에서 0 · 후진 명령이면 0) ② action_rate −0.1 → −0.15 (500 iter 마다, 1000 iter 에 도달, edffb85) 의 32k. base·manifest·steps·obs·FOOT_GEN(min_swing 0.08) = 261009_v1 과 동일 — 바뀐 건 mode1 head 의 reward 뿐. sim 실측(com1 GPU, play env 결정적, 4 속도 0.5/1.0/1.5/2.0 m/s 에서 멈춤 × 16 env, 괄호 = B 30k · 261009_v1): 멈출 때 뒤로 젖힘 적분 0.19 °·s(1.99 · 4.18) · 멈출 때 골반 최저 −2.4°(−5.7 · −7.8) · 서 있을 때 골반/몸통 +2.6/+24.1°(+2.5/+26.1 · +1.6/+24.8) · 뒷걸음 env 1/64(4/64) · 서기 무릎 33.4°(31.6) · 골반 76.3 cm(76.5) · 걷기 action 변화량 @1.0 0.525(0.585, −10 %) · @2.5 1.212(1.337) · 케이던스 @1.0 2.81 걸음/s(2.95) · 2.5 m/s 명령 실제 2.38(2.41) · 모션별 성공률 92.8 %(92.8). 이 run 은 33k 이후 서 있을 때 몸통이 내려간다(35k +15°) — 항 없이 이어간 B 35k 도 +17° 라 이어학습 자체의 표류, 그래서 몸통이 아직 +24° 인 32k. 🔴 약점·불확실: ① 실기는 sim 보다 골반이 2~3° 더 뒤 → sim −2.4° 가 실기 −5° 쯤일 수 있다(추정) ② 0.6 m/s 에서 멈춘 직후 CoM p10 +0.4 cm(B 30k +1.2) — 1.0 m/s 에서는 같음 ③ 출발 순간 몸통 최저 12.4°(15.0). **실기 관전(우선순, 261009_v1 과 A/B 가 가장 잘 갈린다)**: ① 걷다 멈출 때 뒤로 기우뚱·뒷걸음 ② 서 있을 때 뒤로 기울어 보이지 않나 ③ 걷기·뛰기 부드러움. 상세 = AI_workspace experiments 261029_indep1_v1reward_start «10-31 아침 — pelvisfloor run 판정»."
