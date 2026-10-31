@@ -69,7 +69,7 @@
     ],
     "onnx_md5": "ec8802500368ad5c9acdfd17ffcdf90b",
     "sim2sim_walk": "★★★★☆ com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 단계 C). ① 사용자 흐름 116 s: 1 걷기 1.0→2.0 m/s→정지 · 4 진입(0 stand) → [ sprint1_subject4 16 s → ] stand · 5 직립(+0.48 s) · 서서 6 = 거부 «네발 자세에서만 들어간다 (mode5 에서 «네발 기기» x 를 먼저)» · x 네발 도착 +1.05 s(z_fk 0.47 · 46°) · 6 진입 → 전진 0.3 m/s 12 s(어깨·팔 |qd| 최대 8.2 rad/s = 사지를 실제로 든다) → 정지 → 회전 0.5 rad/s 9 s → 정지 · 5 → 직립 +1.49 s · 1 복귀. 안전 이벤트 0 · pos_clamp 0 · overrun 0. 🔴 |qd| 최대 21.7 rad/s (R_knee) = 4 의 sprint 재생 «중» 에 ] 로 stand 로 바꾼 직후 0.25 s(crit 19, 5 틱 연속이 아니라 안 걸림, 하드웨어 무릎 20) → 실기에선 달리는 클립 도중 stand 로 바꾸지 말 것(클립 끝·느린 구간에서). 기기 전진 속도는 CSV 에 몸통 위치가 없어 못 쟀다(학습 sim 고정 명령: 이 임시 head 는 vx 0.3/0.5 → 0.15/0.43 m/s). ② 앞 판(10-28 오후): mode1 램프 2.5 m/s · mode4 sprint · mode5 자세 7/7 전부 넘어짐 0, 저속 골반 11~13°(학습과 같음). (2026-10-28)",
-    "real_robot": "미실행"
+    "real_robot": "★★★★☆ 전반적으로 괜찮음. (수동 기록 · 회수 데이터 없음, 2026-10-28)"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_final && /home/piene/.local/bin/uv run --no-sync --with onnxruntime==1.22.0 python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-10-23_13-02-11_stage2_v6final_m3all_cap1024_steps6_resume199k5_60k/keep_250000.pt --manifest motions/g1_flow_specialists_c3_m6.yaml --head 1=logs/rsl_rl/g1_student/2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k/keep_108998.pt --head 4=logs/rsl_rl/g1_student/2026-10-26_12-11-17_s4_mode4_m3all250k_resume227k_to250k/keep_249995.pt --head 5=logs/rsl_rl/g1_student/2026-10-26_01-05-42_s4_mode5_m3all250k_rebase115k_to140k_retry/keep_130000.pt --head 6=logs/rsl_rl/g1_student/2026-10-20_12-43-44_s4_mode6_v6final_rebase90k_to110k/rebase_m3all250k_109996.pt --sampling-steps 6 --out exported/261009_v7_f6_s1456_109k/policy.onnx",
   "deployed": {
@@ -99,5 +99,11 @@
     "memo": "com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 단계 C). ① 사용자 흐름 116 s: 1 걷기 1.0→2.0 m/s→정지 · 4 진입(0 stand) → [ sprint1_subject4 16 s → ] stand · 5 직립(+0.48 s) · 서서 6 = 거부 «네발 자세에서만 들어간다 (mode5 에서 «네발 기기» x 를 먼저)» · x 네발 도착 +1.05 s(z_fk 0.47 · 46°) · 6 진입 → 전진 0.3 m/s 12 s(어깨·팔 |qd| 최대 8.2 rad/s = 사지를 실제로 든다) → 정지 → 회전 0.5 rad/s 9 s → 정지 · 5 → 직립 +1.49 s · 1 복귀. 안전 이벤트 0 · pos_clamp 0 · overrun 0. 🔴 |qd| 최대 21.7 rad/s (R_knee) = 4 의 sprint 재생 «중» 에 ] 로 stand 로 바꾼 직후 0.25 s(crit 19, 5 틱 연속이 아니라 안 걸림, 하드웨어 무릎 20) → 실기에선 달리는 클립 도중 stand 로 바꾸지 말 것(클립 끝·느린 구간에서). 기기 전진 속도는 CSV 에 몸통 위치가 없어 못 쟀다(학습 sim 고정 명령: 이 임시 head 는 vx 0.3/0.5 → 0.15/0.43 m/s). ② 앞 판(10-28 오후): mode1 램프 2.5 m/s · mode4 sprint · mode5 자세 7/7 전부 넘어짐 0, 저속 골반 11~13°(학습과 같음).",
     "at": "2026-10-28T16:50",
     "summary": "1 걷기·뛰기 → 4 재생 → 5 네발 → 6 무릎 기기 → 5 기립 → 1 전부 넘어짐 0 · 서서 6 은 거부"
+  },
+  "real_robot_manual": {
+    "stars": 4,
+    "memo": "우선 네발기기에서 기립, 크롭자세에서 기립도 좋았고 특히 skill6 crawling이 아주 잘됬음.",
+    "at": "2026-10-28T19:35",
+    "summary": "전반적으로 괜찮음."
   }
 }
