@@ -43,7 +43,7 @@
 | `261009_v5_standfloor_67k5` | — | 보관 | 2026-10-12_00-25-25_s4_mode1_standfloor_resume55k_to75k/model_67500.pt | ★★★☆☆ 헤드리스 램프(v1~v4 와 같은 대본 ramp_cmd.csv 59 s), 밴드 풀림 확인(발목  | ★★☆☆☆ 여기도 안좋음. 팔을 휘저음. 오히려 좀 어색함. (수동 기록 |
 | `261009_v6_armpose_79k5` | — | 보관 | 2026-10-12_21-56-44_s4_mode1_armpose_resume65k_to80k/keep_cand_79500.pt | ★★★★☆ 헤드리스 램프 59 s + 걷다 멈춤 22 s (밴드 해제 확인, 대조군 v4 같은 세션): 낙상 | ★★☆☆☆ suck (수동 기록 · 회수 데이터 없음, 2026-10-2 |
 | `261009_v7_f6_s1456_109k` | — | 보관 | 2026-10-27_18-37-42_s4_mode1_m3all250k_resume89k_to109k/keep_108998.pt | ★★★★☆ com1 헤드리스(밴드 해제 확인, 바이너리 = final_v6_deploy 단계 C). ① 사용 | ★★★★☆ 전반적으로 괜찮음. (수동 기록 · 회수 데이터 없음, 202 |
-| `261031_v1_pelvisfloor0_arate0p15_32k` | v1 | 활성 | 2026-10-31_01-49-37_s4_mode1_comfloor5_pelvisfloor0_arate0p15_resume30k_to35k/keep_cand_32000.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `261031_v1_pelvisfloor0_arate0p15_32k` | v1 | 활성 | 2026-10-31_01-49-37_s4_mode1_comfloor5_pelvisfloor0_arate0p15_resume30k_to35k/keep_cand_32000.pt | ★★★★☆ 헤드리스 램프(ramp_cmd.csv 59 s, 10-07·10-09 와 같은 대본), 밴드 풀림 | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |
