@@ -1,0 +1,20 @@
+# 실기 후보 — 2026-11-03 (stage_candidates.py 입력). 슬롯 이름 = <day>_<alias>_<label>
+# skill5 독립 policy(Indep-5 base + 바닥 다양화 head) 한 ONNX. mode1 head 가 없는 «한 skill 슬롯» —
+# 안전 폴백(체류 시작 · qd_warn)이 mode5 «직립» 버튼이다(C++ 기능 slot_fallback, ModeRuntime.h slot_fallback_mode).
+day: 261103
+candidates:
+  - alias: v1
+    label: i5_groundvar_90k
+    mjlab: ~/mjlab1.4/mjlab_g1_final
+    base: logs/rsl_rl/g1_student/2026-10-17_09-29-32_indep_s2_m5only_c2_cap1024_steps6/keep_119999.pt
+    # ↑ Indep-5 base (정책 쪽 = head 가 학습한 keep_119999_privc.pt 와 비트 동일, critic 만 다름 — export 는 critic 을 안 싣는다)
+    manifest: motions/g1_flow_specialists_c2.yaml          # Indep-5 base 의 학습 manifest (export env 를 짓는 데만 쓴다)
+    sampling_steps: 6
+    template_slot: 260922_dev_v5_m45       # 계약 v2(미리보기·mode5 버튼·바닥 안전) 슬롯 — 작동 상수·safety 를 가져온다 (v7 과 같은 템플릿)
+    heads:
+      5: logs/rsl_rl/g1_student/2026-11-02_01-28-28_indep_s4_m5_groundvar_from60k/keep_89999.pt
+    # ↑ model_89999.pt 의 같은 바이트 사본(md5 473312bc).
+    modes: [5]                             # 한 skill 슬롯 — 1~4 칸은 학습 안 한 base 라 내놓지 않는다
+    summary: "Indep-5 + 바닥 다양화(자갈·요철·굴곡) 30k — 실기 눕→기립이 되나 (90k)"
+    watch: ["눕기(n) → 직립(z) 기립이 끝까지 되나", "네발(x)·앉기(b) → 직립(z)", "직립 유지 중 흔들림·발 구름"]
+    note: "skill5 독립 policy 한 ONNX (obs 2966 = policy 2230 + 미리보기 736, limb_z 없음 · GEMM 45). base = Indep-5 keep_119999(c2, mode5 전용) · head = indep_s4_m5_groundvar_from60k 89,999 (부모 Indep-5 head 60k 에서 +30k, com3 · final_v6 da5f3b6). 바뀐 것 = 학습 바닥: 평지 30 % · 자갈 0~1 cm 30 % · 요철 실제 ~2 cm 20 % · 굴곡 0~3 cm 20 %(높이맵 바닥 두께 50 배·난이도 0.2~1) + 로봇 접촉 timeconst 0.02~0.05(물렁한 반응) + 지면 기준 높이 보상. sim 중간 평가(88k · strict · 256 env · 눕→직립/네발→직립/앉기→직립): 평지 100/100/100 % · 지형 99.8/100/100 % (부모 60k 평지 99.7/100/100 · 지형 99.6/99.1/100 — 부모는 요철 97.8 · 굴곡 97.5 % 에서 네발→직립 실패). 네발→직립 시간 1.14 → 0.90 s. 최종 평가(6 간선 1024 env · PD ±20 % · 안전 지표)는 아직 없다. 🔴 한 skill 슬롯: 키 1~4 는 거부된다(«이 슬롯이 모르는 모드»). m 으로 들어가면 바로 mode5 «직립» 으로 시작하고, qd_warn 이 걸리면 직립 버튼을 눌러 직립 유지에 도착할 때까지 잡는다(낮거나 기운 자세면 Passive — 종전 mode5 와 같다). 10-28 실기 v7(공유 base skill5 130k)과 같은 자세 키(z 직립 · x 네발 · b 앉기 · n 드러누움)로 A/B 하면 갈린다. ⚠ 09-29 실기 기립 실패의 주 원인은 토크·overshoot 쪽이었다(바닥 아님) — 이 판이 그 부분을 고친 것은 아니다."
