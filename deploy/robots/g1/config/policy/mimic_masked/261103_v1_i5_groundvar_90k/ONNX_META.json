@@ -1,0 +1,66 @@
+{
+  "exported_at": "2026-11-03",
+  "slot": "261103_v1_i5_groundvar_90k",
+  "trial": "v1",
+  "trial_day": "2026-11-03",
+  "summary": "Indep-5 + 바닥 다양화(자갈·요철·굴곡) 30k — 실기 눕→기립이 되나 (90k)",
+  "watch": [
+    "눕기(n) → 직립(z) 기립이 끝까지 되나",
+    "네발(x)·앉기(b) → 직립(z)",
+    "직립 유지 중 흔들림·발 구름"
+  ],
+  "note": "skill5 독립 policy 한 ONNX (obs 2966 = policy 2230 + 미리보기 736, limb_z 없음 · GEMM 45). base = Indep-5 keep_119999(c2, mode5 전용) · head = indep_s4_m5_groundvar_from60k 89,999 (부모 Indep-5 head 60k 에서 +30k, com3 · final_v6 da5f3b6). 바뀐 것 = 학습 바닥: 평지 30 % · 자갈 0~1 cm 30 % · 요철 실제 ~2 cm 20 % · 굴곡 0~3 cm 20 %(높이맵 바닥 두께 50 배·난이도 0.2~1) + 로봇 접촉 timeconst 0.02~0.05(물렁한 반응) + 지면 기준 높이 보상. sim 중간 평가(88k · strict · 256 env · 눕→직립/네발→직립/앉기→직립): 평지 100/100/100 % · 지형 99.8/100/100 % (부모 60k 평지 99.7/100/100 · 지형 99.6/99.1/100 — 부모는 요철 97.8 · 굴곡 97.5 % 에서 네발→직립 실패). 네발→직립 시간 1.14 → 0.90 s. 최종 평가(6 간선 1024 env · PD ±20 % · 안전 지표)는 아직 없다. 🔴 한 skill 슬롯: 키 1~4 는 거부된다(«이 슬롯이 모르는 모드»). m 으로 들어가면 바로 mode5 «직립» 으로 시작하고, qd_warn 이 걸리면 직립 버튼을 눌러 직립 유지에 도착할 때까지 잡는다(낮거나 기운 자세면 Passive — 종전 mode5 와 같다). 10-28 실기 v7(공유 base skill5 130k)과 같은 자세 키(z 직립 · x 네발 · b 앉기 · n 드러누움)로 A/B 하면 갈린다. ⚠ 09-29 실기 기립 실패의 주 원인은 토크·overshoot 쪽이었다(바닥 아님) — 이 판이 그 부분을 고친 것은 아니다.",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint",
+    "mode_table",
+    "obs_contract_v2",
+    "mode5_driver",
+    "ground_safety",
+    "slot_fallback"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "2966",
+  "obs_contract_version": "2",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:8:10,foot_z:2:10,mode5_cmd:53:10,preview_on:1:1,preview_k1:35:1,preview:700:1",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-10-17_09-29-32_indep_s2_m5only_c2_cap1024_steps6/keep_119999.pt",
+  "mode1_ckpt": "none",
+  "mode1_run": "",
+  "mode1_launch_commit": "",
+  "mode2_ckpt": "none",
+  "mode3_ckpt": "none",
+  "manifest": "motions/g1_flow_specialists_c2.yaml",
+  "deploy_min_swing": 0.0,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {},
+    "min_swing": "mode1 없음 (한 skill 슬롯) — FOOT_GEN·min_swing 해당 없음"
+  },
+  "verify": {
+    "onnx_md5": "9cc16f1d1a78ebc5ea61a06125f9a37a",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_final && /home/piene/.local/bin/uv run --no-sync --with onnxruntime==1.22.0 python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-10-17_09-29-32_indep_s2_m5only_c2_cap1024_steps6/keep_119999.pt --manifest motions/g1_flow_specialists_c2.yaml --head 5=logs/rsl_rl/g1_student/2026-11-02_01-28-28_indep_s4_m5_groundvar_from60k/keep_89999.pt --sampling-steps 6 --out exported/261103_v1_i5_groundvar_90k/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "export_commit": {
+    "head": null,
+    "note": "export 건너뜀 — 이미 있던 ONNX(메타 동일)를 썼다"
+  },
+  "heads": {
+    "5": "logs/rsl_rl/g1_student/2026-11-02_01-28-28_indep_s4_m5_groundvar_from60k/keep_89999.pt"
+  },
+  "modes": [
+    5
+  ],
+  "mjlab_ws": "/home/piene/mjlab1.4/mjlab_g1_final",
+  "clips": 0
+}
