@@ -66,6 +66,10 @@ inline const std::vector<std::string>& known()
         //   그 모드의 학습 범위(vx −0.3~0.5 · vy ±0.3 · wz ±1.0)로 자르고, 네발 자세에서만 들어가게 한다(ModeRuntime).
         //   옛 바이너리는 사지 칸을 0 으로 두고 mode1 봉투(2.5 m/s)를 준다 -> modes: 에 6 을 둔 슬롯은 이 기능을 요구한다.
         "mode6_crawl",
+        // 2026-11-03: 표의 첫 행(mode1)이 없는 «한 skill 슬롯» — 안전 폴백(체류 시작 · qd_warn)이 그 슬롯의 첫 모드(직립
+        //   버튼이 있는 mode5)가 된다(ModeRuntime.h slot_fallback_mode). 옛 바이너리는 «modes: 에 폴백 모드가 없다» 로
+        //   기동을 거부하지만, 거부 이유가 «재빌드» 로 읽히도록 이름으로도 막는다.
+        "slot_fallback",
     };
     return k;
 }

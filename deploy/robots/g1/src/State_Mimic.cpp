@@ -985,17 +985,25 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
             }
             ms.push_back(m);
         }
-        if (std::find(ms.begin(), ms.end(), G1_FALLBACK_MODE) == ms.end()) {
-            spdlog::critical("[mode] 슬롯 '{}' 의 modes: 에 폴백 모드 {} 가 없다 — qd 안전 래치를 조작자가 풀 수 없다 "
-                             "(rules/ADDING_A_MODE.md 함정 (a))", slot_name, G1_FALLBACK_MODE);
+        // 폴백 = 표의 첫 행. 그 행이 없는 «한 skill 슬롯» 은 첫 모드가 직립 버튼(mode5_cmd_live)을 가질 때만
+        // 받는다(ModeRuntime.h slot_fallback_mode, 2026-11-03).
+        if (g1::slot_fallback_mode(ms) == 0) {
+            spdlog::critical("[mode] 슬롯 '{}' 의 modes: 에 폴백 모드 {} 가 없고, 첫 모드도 스스로 서는 명령(자세 버튼)이 없다 "
+                             "— qd 안전 래치를 조작자가 풀 수 없다 (rules/ADDING_A_MODE.md 함정 (a))",
+                             slot_name, G1_FALLBACK_MODE);
             die_startup();
         }
         slot_modes_ = ms;
     }
+    fallback_mode_ = g1::slot_fallback_mode(slot_modes_);
     {
         std::string s; for (int m : slot_modes_) s += std::to_string(m) + " ";
         spdlog::info("[mode] {} (슬롯 '{}') 이 아는 모드: {}  — 거는 것은 enter()",
                      state_string, slot_name, s);
+        if (fallback_mode_ != G1_FALLBACK_MODE)
+            spdlog::warn("[mode] 슬롯 '{}' 은 mode{} 가 없는 한 skill 슬롯 — 안전 폴백 = mode{} «{}» "
+                         "(체류는 직립 버튼으로 시작 · qd_warn 은 직립 버튼, 직립 유지에 도착하면 풀린다)",
+                         slot_name, G1_FALLBACK_MODE, fallback_mode_, m5::PRESETS[m5::ENTER_PRESET].name);
     }
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
         dcfg,
@@ -1381,9 +1389,9 @@ void State_Mimic::enter()
     // 둘 다 표의 첫 행(안전 폴백)으로 내린다.
     {
         const int prev = g_mode.mode();
-        if (const char* why = g_mode.begin_stay(G1_FALLBACK_MODE))
+        if (const char* why = g_mode.begin_stay(fallback_mode_))
             spdlog::warn("[mode] 직전 모드 {} ({}) 는 {} -> mode{} 로 내린다",
-                         prev, mode_table::row(prev).name, why, G1_FALLBACK_MODE);
+                         prev, mode_table::row(prev).name, why, fallback_mode_);
     }
     // 미리보기 항 선언도 «지금 들어가는 슬롯» 의 것으로 (생성자가 담아 둔 값). 클립 속도 배열 검사는
     // 생성자가 이미 했다(모터 전 — 여기서 죽이면 PD 가 걸린 채 lowcmd 가 끊긴다).
@@ -1637,7 +1645,10 @@ void State_Mimic::enter()
                 if (!crit_before && crit_l)
                     g1::SafetyLog::shared().event("qd_crit", qd_j, jname(qd_j), qd_now, (qd_j>=0&&qd_j<29)?js_qd_crit_v_[qd_j]:js_qd_crit_, "-> Passive");
                 // warn 수동복귀: 조작자가 폴백 모드(X/'1')를 명시하면 해제(qd 아직 높으면 다음 sustained서 재래치).
-                if (js_qd_warn_latched_ && reqd == G1_FALLBACK_MODE) js_qd_warn_latched_ = false;
+                // 직립 버튼이 폴백인 한 skill 슬롯은 «직립 유지 도착» 에서 푼다(ModeRuntime.h qd_warn_may_release).
+                const mode_table::Row& fb_row = mode_table::row(fallback_mode_);
+                if (js_qd_warn_latched_ && g1::qd_warn_may_release(fb_row, reqd, g_m5.standing_hold()))
+                    js_qd_warn_latched_ = false;
                 // g_poll_vr 뒤에 덮어써 폴백 모드 유지(soft).
                 if (js_qd_warn_latched_) {
                     // 처분은 «그 순간의 모드» 행으로 정한다(SafetyPolicy.h qd_warn_action): UprightOnly 는 종전
@@ -1657,9 +1668,15 @@ void State_Mimic::enter()
                                           g_mode.row().id, g_z_fk, g_tilt.value());
                             g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
                         } else {
-                            spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> 폴백 모드 강제. 복귀=키 '1'",
-                                         qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
-                            g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 폴백 모드 강제");
+                            if (fb_row.mode5_cmd_live) {
+                                spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> 직립 버튼 강제. 복귀=직립 유지 도착",
+                                             qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
+                                g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 직립 버튼 강제");
+                            } else {
+                                spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과) -> 폴백 모드 강제. 복귀=키 '1'",
+                                             qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_);
+                                g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 폴백 모드 강제");
+                            }
                         }
                     }
                     if (to_passive) {
@@ -1670,7 +1687,15 @@ void State_Mimic::enter()
                             g1::SafetyLog::shared().event("qd_warn_lowpose", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
                         }
                     } else {
-                        g_mode.force(G1_FALLBACK_MODE);
+                        g_mode.force(fallback_mode_);
+                        // 직립 버튼이 폴백이면(한 skill 슬롯) 모드 강제는 제자리라 «직립» 을 눌러 둔다 — 조작자가 같은 틱에
+                        // 다른 자세를 눌렀어도 덮는다(위 force 가 모드 요청을 덮는 것과 같다). 이미 직립이면 다시 누르지
+                        // 않는다(누르면 t_goal 이 0 으로 돌아가 가던 길을 처음부터 다시 간다).
+                        if (fb_row.mode5_cmd_live && g_m5.preset() != m5::ENTER_PRESET) {
+                            g_m5.press(m5::ENTER_PRESET);
+                            printf("\r\n[m5] qd_warn → «%s» 강제 (직립 유지에 도착하면 풀린다)\r\n", m5::PRESETS[m5::ENTER_PRESET].name);
+                            fflush(stdout);
+                        }
                     }
                 }
                 // crit은 아래 registered_check가 Passive로 전이시킴(여기선 latch만).

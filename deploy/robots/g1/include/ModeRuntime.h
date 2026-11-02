@@ -82,6 +82,26 @@ inline bool enter_allowed(const mode_table::Row& to, const ExitContext& ctx) {
   return false;                                   // 도달 불가 — fail-closed
 }
 
+// ── 슬롯의 안전 폴백 모드 (2026-11-03) ─────────────────────────────────────────────────────
+// 안전 폴백(체류 시작 begin_stay · qd_warn 강제)이 돌아갈 모드. 표의 첫 행(명령만으로 서서 걷는 모드)을 아는
+// 슬롯은 종전 그대로 그 행이다. 첫 행이 없는 «한 skill 슬롯»(예: skill5 독립 policy — 그 ONNX 의 첫 행 칸은
+// 학습 안 한 base 다)은 슬롯 목록의 첫 모드를 쓰되, 그 모드가 스스로 서는 명령(자세 버튼 = 직립, mode5_cmd_live)을
+// 가질 때만이다. 0 = 쓸 폴백이 없다 → 기동 거부 (rules/ADDING_A_MODE.md 함정 (a)).
+inline int slot_fallback_mode(const std::vector<int>& slot_modes) {
+  const int first_row = mode_table::ROWS[0].id;
+  if (std::find(slot_modes.begin(), slot_modes.end(), first_row) != slot_modes.end()) return first_row;
+  if (!slot_modes.empty() && mode_table::valid(slot_modes.front()) &&
+      mode_table::row(slot_modes.front()).mode5_cmd_live)
+    return slot_modes.front();
+  return 0;
+}
+// qd_warn 래치를 풀어도 되나. 폴백이 자세 버튼 모드가 아니면 종전 그대로 «조작자가 폴백 모드를 요청»(키 '1').
+// 자세 버튼 모드가 폴백이면 그 슬롯의 요청 모드는 늘 폴백이라 종전 규칙은 래치를 같은 틱에 풀어 버린다(낮은 자세
+// Passive 까지 지운다) → «직립 자세에 도착해 유지 중» 일 때만 푼다. 래치 중엔 호출자가 직립 버튼을 다시 누른다.
+inline bool qd_warn_may_release(const mode_table::Row& fallback, int requested, bool m5_standing_hold) {
+  return fallback.mode5_cmd_live ? m5_standing_hold : requested == fallback.id;
+}
+
 class ModeRuntime {
  public:
   void set_supported(const std::vector<int>& modes) { supported_ = modes; }

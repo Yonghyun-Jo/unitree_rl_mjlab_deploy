@@ -755,6 +755,18 @@ def check_slot(slot_root, known_path=KNOWN_DEFAULT):
         commits[label] = info.get("commit")
         notes = list(info["notes"])
         probs = list(info["problems"])
+        # 학습 빌더의 run 인자도 obs 를 바꾼다: `limb_z_obs` 가 꺼지면(기본 False) student_mimic_env_cfg 가 정책 그룹의
+        # limb_z 항을 뺀다(cfg.observations["policy"].terms.pop("limb_z")). 진실은 commit 의 «클래스» 에서 읽으므로 그
+        # 빌더 처리를 여기서 같게 건다 — 그 run 의 train_args.json 이 원장이고, 없으면(옛 run) 손대지 않는다. (2026-11-03,
+        # Indep-5 base = limb_z 를 아는 commit 에서 limb_z_obs false 로 학습)
+        ta_lz = os.path.join(run_dir, "train_args.json")
+        if t is not None and os.path.exists(ta_lz) and any(x.get("name") == "limb_z" for x in t.get("obs_terms") or []):
+            try:
+                if not json.load(open(ta_lz, encoding="utf-8")).get("limb_z_obs", False):
+                    t = dict(t, obs_terms=[x for x in t["obs_terms"] if x.get("name") != "limb_z"])
+                    notes.append("limb_z_obs false → 학습 정책 그룹에 limb_z 항 없음(빌더가 뺀다)")
+            except Exception as e:                            # noqa: BLE001
+                notes.append("train_args.json 을 못 읽음(limb_z_obs): %s" % e)
         if hk != "base":
             ta_p = os.path.join(run_dir, "train_args.json")
             if os.path.exists(ta_p):

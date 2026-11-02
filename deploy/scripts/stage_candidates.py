@@ -393,8 +393,15 @@ def render_multihead_yaml(tmpl_text, cand, slot, cfg, fg_train, obs_lines, clip_
     «이 슬롯이 무엇인가» 를 말하는 칸은 전부 새로 쓴다: 머리 주석 · requires · modes · observations · gait 주석 ·
     mode1 줄(min_swing — 옛 render_deploy_yaml 그대로) · clips."""
     heads = cand_heads(cand)
-    text, parity = render_deploy_yaml(tmpl_text, dict(cand, mode1_ckpt=heads[1]), slot, cfg, fg_train)
     modes = [int(m) for m in (cand.get("modes") or sorted(heads))]
+    if 1 in heads:
+        text, parity = render_deploy_yaml(tmpl_text, dict(cand, mode1_ckpt=heads[1]), slot, cfg, fg_train)
+    else:
+        # 한 skill 슬롯(mode1 head 없음, 2026-11-03) — 발 생성기·min_swing 은 이 슬롯과 무관하다. 템플릿의 gait 블록은
+        # 그대로 남지만 mode1 을 내놓지 않으므로(modes:) 읽히지 않는다. 안전 폴백은 C++ 가 첫 모드(직립 버튼)로 잡는다.
+        if 1 in modes:
+            raise RuntimeError("modes 에 1 이 있는데 heads 에 mode1 head 가 없다 — mode1 칸은 학습 안 한 base 다")
+        text, parity = tmpl_text, "mode1 없음 (한 skill 슬롯) — FOOT_GEN·min_swing 해당 없음"
     names = [c.split(":")[0] for c in contract.split(",") if c.strip()]
     hdr = ["# mjlab_g1_motion multihead 슬롯 %s — stage_candidates.py 가 후보 파일로 생성 (%s). 손으로 고치지 말 것" %
            (slot, _dt.date.today().isoformat()),
@@ -421,6 +428,8 @@ def render_multihead_yaml(tmpl_text, cand, slot, cfg, fg_train, obs_lines, clip_
         add.append("  - limb_z_obs        # 🔴 관측 항 ref_limb_height(4) — v6final 이후 base 의 계약\n")
     if clip_names and "clip_list" not in have:
         add.append("  - clip_list         # 🔴 clips: 목록. 옛 바이너리는 조용히 무시하고 config.yaml 의 클립만 보인다\n")
+    if 1 not in modes and "slot_fallback" not in have:
+        add.append("  - slot_fallback     # 🔴 mode1 없는 한 skill 슬롯 — 안전 폴백 = 첫 모드의 직립 버튼. 옛 바이너리는 기동 거부\n")
     if 6 in modes and "mode6_crawl" not in have:
         add.append("  - mode6_crawl       # 🔴 기는 모드: 사지 LUT · 그 모드의 명령 봉투 · 네발에서만 진입. 옛 바이너리는 사지 칸 0\n")
     text = text[:m.end()] + "".join(add) + text[m.end():]
@@ -441,9 +450,10 @@ def render_multihead_yaml(tmpl_text, cand, slot, cfg, fg_train, obs_lines, clip_
     g0 = text.index("# ── 모드별 발-z 생성 조건")
     g1 = text.index("\ngait:", g0)
     gc = ["# ── 모드별 발-z 생성 조건 (MaskedLocoController; State_Mimic::load_gait_cfg 가 로드) ──",
-          "#   mode1 = %s @launch %s -> stage4_mode1_env_cfg.FOOT_GEN: %s" % (
+          ("#   mode1 = %s @launch %s -> stage4_mode1_env_cfg.FOOT_GEN: %s" % (
               os.path.basename(os.path.dirname(heads[1])), (training_commit(heads[1]) or "?")[:7],
-              ", ".join("%s %s" % (k, v) for k, v in fg_train.items()) or "(launch 커밋을 못 읽음)"),
+              ", ".join("%s %s" % (k, v) for k, v in fg_train.items()) or "(launch 커밋을 못 읽음)")
+           if 1 in heads else "#   mode1 = 없음 (한 skill 슬롯 — 아래 gait 블록은 템플릿 그대로, 이 슬롯은 읽지 않는다)"),
           "#   mode4 = 참조(클립) 발-z, mode5·6 = 0 — 생성기를 안 쓴다 → 줄 없음(= C++ 기본값)."]
     text = text[:g0] + "\n".join(gc) + text[g1:]
     if clip_names:
@@ -602,8 +612,9 @@ def place_weights(slot_root, onnx_src, tmpl_params, first_slot, slot, dry):
 def write_meta(slot_root, slot, cand, cfg, day, export_cmd, verify, onnx_meta, fg_train, parity_note,
                requires, onnx_path, dry, export_info=None):
     ck = cand["mode1_ckpt"]
-    run = os.path.basename(os.path.dirname(ck))
-    commit = training_commit(ck)
+    no_m1 = str(ck).lower() == "none"                  # 한 skill 슬롯(mode1 head 없음)
+    run = "" if no_m1 else os.path.basename(os.path.dirname(ck))
+    commit = "" if no_m1 else training_commit(ck)
     meta = {
         "exported_at": _dt.date.today().isoformat(),
         "slot": slot,
@@ -725,7 +736,8 @@ def stage_multihead(c, cfg, slot, root, day, dry, npz_dir, first_slot, rerender=
                 clip_srcs = manifest_mode4_clips(cc["manifest"]) if (4 in modes and want == "manifest") else []
                 clip_names = place_clips(root, clip_srcs, dry) if clip_srcs else []
                 tmpl_text = open(os.path.join(SLOTDIR, cc["template_slot"], "params", "deploy.yaml"), encoding="utf-8").read()
-                text, parity_note = render_multihead_yaml(tmpl_text, c, slot, cc, foot_gen_at(training_commit(heads[1])),
+                text, parity_note = render_multihead_yaml(tmpl_text, c, slot, cc,
+                                                          foot_gen_at(training_commit(heads[1])) if 1 in heads else {},
                                                           gen_obs_block_lines(slot_onnx), clip_names,
                                                           meta_onnx.get("obs_contract", ""))
                 open(os.path.join(root, "params", "deploy.yaml"), "w", encoding="utf-8").write(text)
@@ -740,7 +752,7 @@ def stage_multihead(c, cfg, slot, root, day, dry, npz_dir, first_slot, rerender=
             else:
                 log("   이미 있다 — 건너뜀 (별칭만 갱신)")
             return "ok" if run_parity(slot, dry) else "fail"
-        fg_train = foot_gen_at(training_commit(heads[1]))
+        fg_train = foot_gen_at(training_commit(heads[1])) if 1 in heads else {}
         try:
             onnx_abs, export_cmd, verify, export_info = export_onnx_multihead(cc, c, slot, dry)
         except RuntimeError as e:
@@ -762,7 +774,7 @@ def stage_multihead(c, cfg, slot, root, day, dry, npz_dir, first_slot, rerender=
         open(os.path.join(root, "params", "deploy.yaml"), "w", encoding="utf-8").write(text)
         log("   params/deploy.yaml  (템플릿 %s · modes %s · clips %d · min_swing %s)  %s"
             % (cc["template_slot"], modes, len(clip_names), c.get("min_swing", 0), parity_note))
-        write_meta(root, slot, dict(c, mode1_ckpt=heads[1], _n_clips=len(clip_names)), cc, day, export_cmd, verify,
+        write_meta(root, slot, dict(c, mode1_ckpt=heads.get(1, "none"), _n_clips=len(clip_names)), cc, day, export_cmd, verify,
                    meta_onnx, fg_train, parity_note, requires_of(text), slot_onnx, dry, export_info=export_info)
         return "ok" if run_parity(slot, dry) else "fail"
 
@@ -799,8 +811,11 @@ def main():
         for k in ("base", "manifest", "template_slot"):
             if not cc.get(k):
                 die("새 형식 후보 %s 에 %s 가 없다" % (c.get("alias"), k))
-        if 1 not in cand_heads(c):
-            die("새 형식 후보 %s 에 heads 1(mode1) 이 없다 — gait 줄·폴백 모드가 mode1 이다" % c.get("alias"))
+        _modes = [int(m) for m in (c.get("modes") or sorted(cand_heads(c)))]
+        if 1 not in cand_heads(c) and (1 in _modes or 5 not in _modes[:1]):
+            # mode1 head 없는 한 skill 슬롯은 첫 모드가 직립 버튼 모드(5)일 때만 — C++ slot_fallback_mode 와 같은 규칙
+            die("새 형식 후보 %s 에 heads 1(mode1) 이 없다 — 한 skill 슬롯이면 modes 를 [5, …] 로 (첫 모드 = 직립 버튼 폴백)"
+                % c.get("alias"))
         with mjlab_ws(c.get("mjlab")):
             for p_ in [cc["base"], cc["manifest"]] + list(cand_heads(c).values()):
                 if not os.path.exists(os.path.join(MJLAB, p_)):

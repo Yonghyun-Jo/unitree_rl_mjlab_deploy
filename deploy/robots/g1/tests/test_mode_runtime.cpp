@@ -144,6 +144,30 @@ int main() {
         CHK(c.request(1, quad).accepted && c.mode() == 1);                    // 나가는 것은 표의 exit(always) 그대로
         CHK(enter_allowed(mode_table::row(4), up) && enter_allowed(mode_table::row(5), sit));   // 다른 모드는 그대로
     }
+    // ── 슬롯의 안전 폴백 (2026-11-03): 첫 행이 있으면 종전 그대로, 없는 한 skill 슬롯은 직립 버튼 모드 ──
+    {
+        const int first = mode_table::ROWS[0].id;
+        CHK(slot_fallback_mode({1, 2, 3, 4}) == first);                  // 계약 v1 기본
+        CHK(slot_fallback_mode({1, 4, 5, 6}) == first);                  // v7 같은 슬롯
+        CHK(slot_fallback_mode({4, 5, 1}) == first);                     // 순서 무관 — 첫 행이 있으면 그 행
+        CHK(slot_fallback_mode({5}) == 5 && mode_table::row(5).mode5_cmd_live);   // skill5 독립 슬롯
+        CHK(slot_fallback_mode({5, 6}) == 5);
+        CHK(slot_fallback_mode({4, 5}) == 0);                            // 첫 모드(클립 재생)는 스스로 못 선다
+        CHK(slot_fallback_mode({6, 5}) == 0);                            // 기기도 못 선다 — 첫 모드만 본다
+        CHK(slot_fallback_mode({}) == 0);
+        // 래치 풀기: 첫 행 폴백 = «조작자가 폴백 요청» (종전과 같다, 직립 유지 여부 무관)
+        const mode_table::Row& r1 = mode_table::row(first);
+        CHK(qd_warn_may_release(r1, first, false) && qd_warn_may_release(r1, first, true));
+        CHK(!qd_warn_may_release(r1, 5, true) && !qd_warn_may_release(r1, 4, false));
+        // 직립 버튼 폴백 = 요청 모드가 늘 폴백이라 요청으로는 안 풀린다 — 직립 유지 도착에서만
+        const mode_table::Row& r5 = mode_table::row(5);
+        CHK(!qd_warn_may_release(r5, 5, false) && qd_warn_may_release(r5, 5, true));
+        // 체류 시작: 한 skill 슬롯은 시작 모드(기본 mode1)를 모른다 → 그 폴백으로 내린다
+        ModeRuntime s; s.set_supported({5});
+        CHK(s.begin_stay(slot_fallback_mode({5})) != nullptr && s.mode() == 5);
+        CHK(s.begin_stay(slot_fallback_mode({5})) == nullptr && s.mode() == 5);   // 두 번째 체류는 그대로
+        CHK(!s.request(1).accepted && s.mode() == 5);                    // 슬롯이 모르는 첫 행은 거부
+    }
     std::printf(fail ? "FAILED (%d)\n" : "OK test_mode_runtime\n", fail);
     return fail ? 1 : 0;
 }
