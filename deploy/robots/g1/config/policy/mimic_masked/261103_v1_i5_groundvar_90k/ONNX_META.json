@@ -44,7 +44,7 @@
   },
   "verify": {
     "onnx_md5": "9cc16f1d1a78ebc5ea61a06125f9a37a",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "sim2sim_walk": "★★★★☆ com1 헤드리스(sim2sim_headless.py, 밴드 해제 확인 발목 |tau| 4.68 Nm), 슬롯 261103_v1_i5_groundvar_90k, 바이너리 9204025(slot_fallback). 기동: [mode] 한 skill 슬롯 — 안전 폴백 = mode5 «직립» · 직전 모드 1 은 이 슬롯이 모른다 -> mode5 · [m5] 진입 → «직립». 자세 고리(키→첫 도착): 네발 x +1.01 s(z 0.47 · 59°) · 직립 z +1.36 s · 앉기 b +1.27 s(z 0.08) · 직립 z +2.51 s · 눕기 n +1.30 s(z 0.09 · 75°) · 직립 z +3.19 s(z 0.75 · 3°). 키 1 = «이 슬롯(ONNX)이 모르는 모드» 거부. 안전 이벤트 0(Passive·bad_orientation·qd_warn·qd_crit). 구간 |qd| 최대 14.9 rad/s(L_elbow, 눕기) · 14.1(R_ank_pitch, 네발) — qd_warn 12 를 순간 넘었지만 5틱 연속 아님. 정책 스레드 overrun 경고 창 9/116(com1 은 GPU 를 다른 작업과 나눠 씀 — 로봇 지연과 무관). 미검증: qd_warn 래치 경로(직립 버튼 강제)는 sim 에서 안 걸려 단위 테스트로만 봤다. (2026-11-03)",
     "real_robot": "미실행"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_final && /home/piene/.local/bin/uv run --no-sync --with onnxruntime==1.22.0 python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-10-17_09-29-32_indep_s2_m5only_c2_cap1024_steps6/keep_119999.pt --manifest motions/g1_flow_specialists_c2.yaml --head 5=logs/rsl_rl/g1_student/2026-11-02_01-28-28_indep_s4_m5_groundvar_from60k/keep_89999.pt --sampling-steps 6 --out exported/261103_v1_i5_groundvar_90k/policy.onnx",
@@ -62,5 +62,11 @@
     5
   ],
   "mjlab_ws": "/home/piene/mjlab1.4/mjlab_g1_final",
-  "clips": 0
+  "clips": 0,
+  "sim2sim": {
+    "stars": 4,
+    "memo": "com1 헤드리스(sim2sim_headless.py, 밴드 해제 확인 발목 |tau| 4.68 Nm), 슬롯 261103_v1_i5_groundvar_90k, 바이너리 9204025(slot_fallback). 기동: [mode] 한 skill 슬롯 — 안전 폴백 = mode5 «직립» · 직전 모드 1 은 이 슬롯이 모른다 -> mode5 · [m5] 진입 → «직립». 자세 고리(키→첫 도착): 네발 x +1.01 s(z 0.47 · 59°) · 직립 z +1.36 s · 앉기 b +1.27 s(z 0.08) · 직립 z +2.51 s · 눕기 n +1.30 s(z 0.09 · 75°) · 직립 z +3.19 s(z 0.75 · 3°). 키 1 = «이 슬롯(ONNX)이 모르는 모드» 거부. 안전 이벤트 0(Passive·bad_orientation·qd_warn·qd_crit). 구간 |qd| 최대 14.9 rad/s(L_elbow, 눕기) · 14.1(R_ank_pitch, 네발) — qd_warn 12 를 순간 넘었지만 5틱 연속 아님. 정책 스레드 overrun 경고 창 9/116(com1 은 GPU 를 다른 작업과 나눠 씀 — 로봇 지연과 무관). 미검증: qd_warn 래치 경로(직립 버튼 강제)는 sim 에서 안 걸려 단위 테스트로만 봤다.",
+    "at": "2026-11-03T02:24",
+    "summary": "넘어짐 0 · 자세 6개 전부 도착(눕→직립 3.2 s) · 키 1 거부 · 진입이 바로 직립"
+  }
 }
