@@ -1,0 +1,74 @@
+{
+  "exported_at": "2026-11-04",
+  "slot": "261103_v2_i5_groundvar2x_106k",
+  "trial": "v2",
+  "trial_day": "2026-11-03",
+  "summary": "v1 + 바닥 요철 ×2 로 16k 더 — 약한 PD·눕기 실패를 줄임 (106k)",
+  "watch": [
+    "눕기(n)·네발(x)·앉기(b) → 직립(z) 이 v1 보다 덜 버벅이나",
+    "직립 → 눕기(n) 가 넘어지지 않고 끝나나",
+    "직립 유지 중 흔들림·안전층 경고(qd_warn) 유무"
+  ],
+  "note": "skill5 독립 policy 한 ONNX (v1 과 같은 Indep-5 base keep_119999 · 같은 템플릿 · 같은 자세 키). head = indep_s4_m5_groundvar2x_from90k 106,000: v1 head(89,999)에서 바닥 요철만 ×2(자갈 0~2 · 요철 ~4 · 굴곡 0~6 cm, RSI 리프트 0~3 cm, --mode5-ground-scale 2.0)로 이어 학습 16k (com1, final_v6 a346e36). 11-04 최종 평가(실험 노트 261103_skill5_ground_x2_curriculum §7, 결정론 strict): 6 간선 실패 ×2 판 0.52 % · 평지 0.24 % (v1 1.99 · 1.34 %, 부모 60k 1.69 · 0.71 %) — 거의 전부 직립→눕기, 97.8 % (v1 92.6). 기립 세 간선은 v1 과 같이 99.8~100 %. PD 강성 ±20 % (5 자세 → 직립, 평지): 기준 99.96 · ×0.8 99.01 · ×1.2 99.98 % (v1 99.94 · 83.11 · 100, 과적합 판정) · ×0.8 안전층 트립 0.7 % (v1 14.4 %, 오른 hip_pitch 쏠림). 약점 = ×0.8 낮은 포복 97.5 %. 같은 run 마지막 119,998 은 W 98.4 · 간선 실패 0.90 % 로 조금 못해 106k 를 골랐다(두 체크포인트 중 고른 것이라 약간의 선택 편향). 왜 ×2 학습이 약한 PD 에 강해졌는지는 재 보지 않았다.",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint",
+    "mode_table",
+    "obs_contract_v2",
+    "mode5_driver",
+    "ground_safety",
+    "slot_fallback"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "2966",
+  "obs_contract_version": "2",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:8:10,foot_z:2:10,mode5_cmd:53:10,preview_on:1:1,preview_k1:35:1,preview:700:1",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-10-17_09-29-32_indep_s2_m5only_c2_cap1024_steps6/keep_119999.pt",
+  "mode1_ckpt": "none",
+  "mode1_run": "",
+  "mode1_launch_commit": "",
+  "mode2_ckpt": "none",
+  "mode3_ckpt": "none",
+  "manifest": "motions/g1_flow_specialists_c2.yaml",
+  "deploy_min_swing": 0.0,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {},
+    "min_swing": "mode1 없음 (한 skill 슬롯) — FOOT_GEN·min_swing 해당 없음"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 7.391e-06 (tol 0.0001) OK · modes 1,2,3,4,5",
+    "graph": "그래프 검증 OK — GEMM 45 = enc 4 + motion 2 + actor 5×6 + heads 9",
+    "obs_contract_sum": "obs 계약 14항 합=2966 == obs 2966  OK",
+    "mask_slice": "mask slice (1672, 1680) == env.command_mask()  OK",
+    "heads_pairing": [
+      "head mode5: base 짝 OK — 정책 쪽 비트 동일, critic 만 다른 판 (keep_119999_privc.pt) · cmd_mode 5 (2026-11-03_02-18-52_indep_s4_m5_groundvar2x_from90k)"
+    ],
+    "onnx_md5": "59a5b7929af1fc119851ab7f69264bc6",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_final && /home/piene/.local/bin/uv run --no-sync --with onnxruntime==1.22.0 python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-10-17_09-29-32_indep_s2_m5only_c2_cap1024_steps6/keep_119999.pt --manifest motions/g1_flow_specialists_c2.yaml --head 5=logs/rsl_rl/g1_student/2026-11-03_02-18-52_indep_s4_m5_groundvar2x_from90k/keep_106000.pt --sampling-steps 6 --out exported/261103_v2_i5_groundvar2x_106k/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "export_commit": {
+    "head": "a5d963ccae54b38a62cbd5cd8765078f538fba33",
+    "dirty": [],
+    "at": "2026-11-04T12:41:21"
+  },
+  "heads": {
+    "5": "logs/rsl_rl/g1_student/2026-11-03_02-18-52_indep_s4_m5_groundvar2x_from90k/keep_106000.pt"
+  },
+  "modes": [
+    5
+  ],
+  "mjlab_ws": "/home/piene/mjlab1.4/mjlab_g1_final",
+  "clips": 0
+}
