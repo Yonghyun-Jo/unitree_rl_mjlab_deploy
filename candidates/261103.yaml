@@ -18,3 +18,17 @@ candidates:
     summary: "Indep-5 + 바닥 다양화(자갈·요철·굴곡) 30k — 실기 눕→기립이 되나 (90k)"
     watch: ["눕기(n) → 직립(z) 기립이 끝까지 되나", "네발(x)·앉기(b) → 직립(z)", "직립 유지 중 흔들림·발 구름"]
     note: "skill5 독립 policy 한 ONNX (obs 2966 = policy 2230 + 미리보기 736, limb_z 없음 · GEMM 45). base = Indep-5 keep_119999(c2, mode5 전용) · head = indep_s4_m5_groundvar_from60k 89,999 (부모 Indep-5 head 60k 에서 +30k, com3 · final_v6 da5f3b6). 바뀐 것 = 학습 바닥: 평지 30 % · 자갈 0~1 cm 30 % · 요철 실제 ~2 cm 20 % · 굴곡 0~3 cm 20 %(높이맵 바닥 두께 50 배·난이도 0.2~1) + 로봇 접촉 timeconst 0.02~0.05(물렁한 반응) + 지면 기준 높이 보상. sim 중간 평가(88k · strict · 256 env · 눕→직립/네발→직립/앉기→직립): 평지 100/100/100 % · 지형 99.8/100/100 % (부모 60k 평지 99.7/100/100 · 지형 99.6/99.1/100 — 부모는 요철 97.8 · 굴곡 97.5 % 에서 네발→직립 실패). 네발→직립 시간 1.14 → 0.90 s. 최종 평가(6 간선 1024 env · PD ±20 % · 안전 지표)는 아직 없다. 🔴 한 skill 슬롯: 키 1~4 는 거부된다(«이 슬롯이 모르는 모드»). m 으로 들어가면 바로 mode5 «직립» 으로 시작하고, qd_warn 이 걸리면 직립 버튼을 눌러 직립 유지에 도착할 때까지 잡는다(낮거나 기운 자세면 Passive — 종전 mode5 와 같다). 10-28 실기 v7(공유 base skill5 130k)과 같은 자세 키(z 직립 · x 네발 · b 앉기 · n 드러누움)로 A/B 하면 갈린다. ⚠ 09-29 실기 기립 실패의 주 원인은 토크·overshoot 쪽이었다(바닥 아님) — 이 판이 그 부분을 고친 것은 아니다."
+  - alias: v2
+    label: i5_groundvar2x_106k
+    mjlab: ~/mjlab1.4/mjlab_g1_final
+    base: logs/rsl_rl/g1_student/2026-10-17_09-29-32_indep_s2_m5only_c2_cap1024_steps6/keep_119999.pt
+    manifest: motions/g1_flow_specialists_c2.yaml
+    sampling_steps: 6
+    template_slot: 260922_dev_v5_m45
+    heads:
+      5: logs/rsl_rl/g1_student/2026-11-03_02-18-52_indep_s4_m5_groundvar2x_from90k/keep_106000.pt
+    # ↑ 2단계 106,000 (TB 고점에 남긴 사본, md5 ac32669d — model_106000 은 정리 도구가 지웠다). 학습 커밋 final_v6 a346e36
+    modes: [5]
+    summary: "v1 + 바닥 요철 ×2 로 16k 더 — 약한 PD·눕기 실패를 줄임 (106k)"
+    watch: ["눕기(n)·네발(x)·앉기(b) → 직립(z) 이 v1 보다 덜 버벅이나", "직립 → 눕기(n) 가 넘어지지 않고 끝나나", "직립 유지 중 흔들림·안전층 경고(qd_warn) 유무"]
+    note: "skill5 독립 policy 한 ONNX (v1 과 같은 Indep-5 base keep_119999 · 같은 템플릿 · 같은 자세 키). head = indep_s4_m5_groundvar2x_from90k 106,000: v1 head(89,999)에서 바닥 요철만 ×2(자갈 0~2 · 요철 ~4 · 굴곡 0~6 cm, RSI 리프트 0~3 cm, --mode5-ground-scale 2.0)로 이어 학습 16k (com1, final_v6 a346e36). 11-04 최종 평가(실험 노트 261103_skill5_ground_x2_curriculum §7, 결정론 strict): 6 간선 실패 ×2 판 0.52 % · 평지 0.24 % (v1 1.99 · 1.34 %, 부모 60k 1.69 · 0.71 %) — 거의 전부 직립→눕기, 97.8 % (v1 92.6). 기립 세 간선은 v1 과 같이 99.8~100 %. PD 강성 ±20 % (5 자세 → 직립, 평지): 기준 99.96 · ×0.8 99.01 · ×1.2 99.98 % (v1 99.94 · 83.11 · 100, 과적합 판정) · ×0.8 안전층 트립 0.7 % (v1 14.4 %, 오른 hip_pitch 쏠림). 약점 = ×0.8 낮은 포복 97.5 %. 같은 run 마지막 119,998 은 W 98.4 · 간선 실패 0.90 % 로 조금 못해 106k 를 골랐다(두 체크포인트 중 고른 것이라 약간의 선택 편향). 왜 ×2 학습이 약한 PD 에 강해졌는지는 재 보지 않았다."
