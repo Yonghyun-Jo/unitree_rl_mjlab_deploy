@@ -4,6 +4,7 @@
 #include "JointSafety.h"
 #include "SafetyLog.h"
 #include "StateDump.h"
+#include "ObsDump.h"
 #include "ImuCal.h"
 #include "G1Articulation.h"
 #include <cnpy.h>
@@ -111,6 +112,15 @@ private:
     // 🔴 멤버로 안 둔다 — State_Mimic 은 FSM 상태마다 하나씩(Mimic_Masked/Mimic_Dance1_subject2)
     //    만들어지므로, 여기 뒀다간 전환마다 다른 인스턴스가 같은 G1_STATE_CSV 를 truncate 한다.
     //    g1::StateDump::shared() (프로세스에 하나) 를 쓴다 — StateDump.h 상단 주석 참고.
+    // 정책 틱 obs 덤프 (env G1_OBS_CSV 가 있을 때만 — g1_arcade P1 대조 계측. 기본 꺼짐 → 거동 변화 0).
+    //    StateDump 와 같은 이유로 프로세스 공유 g1::ObsDump::shared() 를 쓴다(ObsDump.h 머리 주석).
+    //    obs_dump_on_ = 이 체류가 기록하나(enter() 가 정한다 — 정책 스레드·run() 이 읽기만).
+    //    obs_dump_wrapped_ = env->alg 를 기록 감싸개(State_Mimic.cpp ObsDumpAlg)로 감쌌나(인스턴스마다 한 번).
+    bool obs_dump_enter_();
+    bool obs_dump_on_ = false;
+    bool obs_dump_wrapped_ = false;
+    g1::ObsDump::Meta obs_dump_meta_;   // 첫 감쌀 때 지은 머리(슬롯 · 계약 · 항 · 커밋) — 재진입은 이것으로 멱등 open
+    std::string slot_name_;   // 생성자가 정한 슬롯 이름(덤프 머리용)
     // IMU 장착 편향 보정 (config.yaml: imu_cal). 기본 0 = 꺼짐 = 종전 거동 비트 동일.
     g1::ImuCal imu_cal_;
     const char* mon_exit_reason_ = nullptr;   // null = 조작자 전이(p/v) 또는 정상 종료

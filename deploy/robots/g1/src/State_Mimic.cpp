@@ -28,6 +28,62 @@ extern std::string g_network_iface;   // main.cpp — 진단 부하 인터록 �
 #include <cstdio>      // printf (base_vel command readout)
 #include <cmath>       // std::isfinite (GUI 프레임의 비유한 값 거름)
 #include <cstdlib>     // std::getenv (G1_FOOTZ_SRC 진단 스위치)
+#include <mutex>
+#include <unordered_map>
+#include <utility>
+
+namespace g1 {
+const char* build_commit();   // src/BuildInfo.cpp (빌드마다 cmake/build_info.cmake 가 쓴 커밋)
+int build_dirty();
+}  // namespace g1
+
+namespace {
+// ── G1_OBS_CSV 기록 감싸개 (P1 대조 계측, 기본 꺼짐) ─────────────────────────────────────────────────────
+// env->alg(OrtRunner)를 감싸 «ONNX 에 실제로 넣은 obs» 와 «ONNX 원출력» 을 ObsDump 의 이 틱 칸에 복사한다 — 재계산이
+// 아니라 env->step() 이 alg->act() 에 넘긴 그 버퍼다. 덤프가 켜진 체류의 enter() 에서만 끼운다(obs_dump_enter_) —
+// 꺼져 있으면 env->alg 는 OrtRunner 그대로라 비용 0. 정책 스레드에서 할당 없음: obs 는 미리 잡은 칸에 memcpy,
+// 원출력은 크기가 같은 action 버퍼에 복사(추론 자체의 할당은 원래대로 OrtRunner 안).
+class ObsDumpAlg : public isaaclab::Algorithms
+{
+public:
+    ObsDumpAlg(std::unique_ptr<isaaclab::Algorithms> inner, std::vector<std::pair<std::string, int>> groups)
+    : inner_(std::move(inner)), groups_(std::move(groups))
+    {
+        action = inner_->action;
+    }
+
+    std::vector<float> act(std::unordered_map<std::string, std::vector<float>> obs) override
+    {
+        g1::ObsDump& d = g1::ObsDump::shared();
+        float* dst = d.stage_obs();
+        size_t off = 0;
+        for (const auto& g : groups_) {
+            const auto it = obs.find(g.first);
+            if (it != obs.end() && it->second.size() == size_t(g.second))
+                std::memcpy(dst + off, it->second.data(), sizeof(float) * size_t(g.second));
+            off += size_t(g.second);
+        }
+        std::vector<float> a = inner_->act(std::move(obs));
+        float* raw = d.stage().raw;
+        for (size_t i = 0; i < a.size() && i < size_t(g1::ObsDumpRow::NJ); ++i) raw[i] = a[i];
+        {
+            std::lock_guard<std::mutex> lk(act_mtx_);
+            if (action.size() == a.size()) std::copy(a.begin(), a.end(), action.begin());
+        }
+        return a;
+    }
+
+    void verify_inputs(const std::unordered_map<std::string, std::vector<float>>& obs,
+                       const std::vector<isaaclab::ObsTermSpec>& terms = {}) const override
+    {
+        inner_->verify_inputs(obs, terms);
+    }
+
+private:
+    std::unique_ptr<isaaclab::Algorithms> inner_;
+    std::vector<std::pair<std::string, int>> groups_;
+};
+}  // namespace
 
 static Eigen::Quaternionf init_quat;
 std::shared_ptr<State_Mimic::MotionLoader_> State_Mimic::motion = nullptr;
@@ -179,6 +235,9 @@ static void g_load_footz_src() {
 // Coexists with the joystick stick (base_vel_command sums them). Edge-triggered so one tap = one step.
 static float g_kb_vx = 0.0f, g_kb_vy = 0.0f, g_kb_wz = 0.0f;
 static std::string g_kb_last = "";
+// 이 틱에 g_poll_inputs 가 먹은 키(글자 코드, 없으면 0, 한 글자가 아니면 −바이트 수) — G1_OBS_CSV 기록 전용.
+// 정책 스레드만 쓰고 읽는다. 동작에는 쓰지 않는다.
+static int g_kb_event = 0;
 // deploy base_vel caps — set to the TRAINING base_vel range (20-motion manifest, yaw-local):
 //   vx p99=3.10 (max 5.4) → 3.0 (running OK);  vy |.|p99=1.88 (lateral sparse) → 1.5;
 //   wz |.|p99=4.88 → 2.0 (turning).
@@ -446,6 +505,7 @@ static void g_poll_vr()
 // Called every policy step (same thread as obs). Both input modes are always live.
 static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
 {
+    g_kb_event = 0;
     g_poll_gui();   // browser GUI (shared memory) overrides; no-op if the file is absent
     // --- joystick d-pad -> mode (avoids A/B used by FSM transitions) ---
     if (auto joy = env->robot->data.joystick) {
@@ -459,6 +519,7 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
     if (k == g_kb_last) return;
     g_kb_last = k;
     if (k.empty()) return;
+    g_kb_event = (k.size() == 1) ? int(static_cast<unsigned char>(k[0])) : -int(k.size());
     g_reject_last = G1_REJECT_NONE;   // 사람이 «누른» 입력에는 매번 한 줄 답한다 (중복 억제는 50 Hz 채널 전용)
     bool vel_changed = false;
     if      (k == "w") { g_kb_vx = clamp_vx(g_kb_vx + KB_STEP); vel_changed = true; }  // forward
@@ -865,6 +926,7 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     auto policy_dir = param::parser_policy_dir(policy_cfg);
     // 같은 이유로 filename() 도 빈 문자열이 된다 -> 후행 구분자를 뗀 뒤 이름을 뽑는다.
     if (slot_name.empty()) slot_name = trim_sep(policy_dir).filename().string();
+    slot_name_ = slot_name;   // G1_OBS_CSV 머리용
 
     // 🔴 파생을 쓴다 — env->step() 이 obs 직전에 robot->update() 를 «한 번 더» 부르므로
     //    루프에서 후처리하면 덮인다. update() 안에서 보정해야 어느 경로로든 따라간다.
@@ -1347,8 +1409,89 @@ void State_Mimic::load_gait_cfg(const YAML::Node& g)
     }
 }
 
+// ── G1_OBS_CSV 칸 채우기 (정책 스레드 전용) — 원본이 방금 쓴 값을 «그대로» 옮긴다(재계산 없음) ──
+// obs 를 만든 상태 = robot->data (env->step() · env->reset() 안 robot->update 직후)
+template <class Data>
+static void od_copy_state(g1::ObsDumpRow& r, const Data& d)
+{
+    const int n = std::min<int>(g1::ObsDumpRow::NJ, static_cast<int>(d.joint_pos.size()));
+    for (int i = 0; i < n; ++i) { r.q[i] = d.joint_pos[i]; r.dq[i] = d.joint_vel[i]; }
+    r.quat[0] = d.root_quat_w.w(); r.quat[1] = d.root_quat_w.x();
+    r.quat[2] = d.root_quat_w.y(); r.quat[3] = d.root_quat_w.z();
+    for (int i = 0; i < 3; ++i) { r.gyro[i] = d.root_ang_vel_b[i]; r.pg[i] = d.projected_gravity_b[i]; }
+}
+// 루프 첫머리 robot->update() 직후(z_fk · 기울기 · mode5 도착 판정이 본 상태) — env->step() 이 다시 읽으면 덮이므로 그 자리에서
+template <class Data>
+static void od_copy_first_read(g1::ObsDumpRow& r, const Data& d)
+{
+    const int n = std::min<int>(g1::ObsDumpRow::NJ, static_cast<int>(d.joint_pos.size()));
+    for (int i = 0; i < n; ++i) r.q1[i] = d.joint_pos[i];
+    r.quat1[0] = d.root_quat_w.w(); r.quat1[1] = d.root_quat_w.x();
+    r.quat1[2] = d.root_quat_w.y(); r.quat1[3] = d.root_quat_w.z();
+    for (int i = 0; i < 3; ++i) r.g1[i] = d.projected_gravity_b[i];
+}
+static void od_mode_now(g1::ObsDumpRow& r)
+{
+    r.mode = g_mode.mode();
+    r.mode_req = g_mode.requested();
+    r.clip = g_mode.clip_id();
+    r.init_quat[0] = init_quat.w(); r.init_quat[1] = init_quat.x();
+    r.init_quat[2] = init_quat.y(); r.init_quat[3] = init_quat.z();
+}
+static void od_m5_now(g1::ObsDumpRow& r)
+{
+    r.preset = g_m5.preset();
+    r.m5_hold = g_m5.holding() ? 1 : 0;
+}
+static void od_cmd_now(g1::ObsDumpRow& r)
+{
+    r.kb[0] = g_kb_vx; r.kb[1] = g_kb_vy; r.kb[2] = g_kb_wz;
+    r.gui_seq = static_cast<int32_t>(g_gui_last_seq);
+    r.vr = (State_Mimic::motion && State_Mimic::motion->vr_override) ? 1 : 0;
+}
+
+// G1_OBS_CSV 가 있을 때만(기본 꺼짐) — 덤프를 열고(멱등), 이 인스턴스의 env->alg 를 기록 감싸개로 한 번 감싸고,
+// 체류 시작을 표시한다. 반환 = 이 체류가 기록하나. FSM 스레드(enter) — 정책 스레드가 없을 때다.
+bool State_Mimic::obs_dump_enter_()
+{
+    const char* path = std::getenv("G1_OBS_CSV");
+    if (!path || !*path) return false;
+    if (!obs_dump_wrapped_) {
+        g1::ObsDump::Meta& m = obs_dump_meta_;
+        m.slot = slot_name_;
+        m.state = getStateString();
+        m.network = g_network_iface;
+        m.commit = g1::build_commit();
+        m.dirty = g1::build_dirty();
+        m.groups.clear();
+        for (const auto& kv : env->observation_manager->declared_sizes())
+            m.groups.emplace_back(kv.first, static_cast<int>(kv.second));
+        std::sort(m.groups.begin(), m.groups.end());   // ONNX 입력 이름 순 — 그룹이 하나면 "obs" 하나
+        if (const auto* ort = dynamic_cast<const isaaclab::OrtRunner*>(env->alg.get())) {
+            m.obs_contract = ort->obs_contract();
+            m.obs_contract_version = ort->obs_contract_version();
+        }
+        m.obs_terms.clear();
+        for (const auto& t : env->observation_manager->group_terms("obs"))
+            m.obs_terms += (m.obs_terms.empty() ? "" : ",") + t.name + ":" + t.train_name + ":" +
+                           std::to_string(t.dim()) + ":" + std::to_string(t.history_length);
+    }
+    if (!g1::ObsDump::shared().open_from_env("G1_OBS_CSV", obs_dump_meta_)) return false;
+    if (!obs_dump_wrapped_) {
+        env->alg = std::make_unique<ObsDumpAlg>(std::move(env->alg), obs_dump_meta_.groups);
+        obs_dump_wrapped_ = true;
+        spdlog::warn("[obs_dump] G1_OBS_CSV={} — {} (슬롯 '{}', obs {} 칸) 정책 틱마다 obs·원출력·q_des 를 기록한다 "
+                     "(P1 대조 계측, 커밋 {}{})", path, getStateString(), slot_name_,
+                     g1::ObsDump::shared().n_obs(), obs_dump_meta_.commit, obs_dump_meta_.dirty == 1 ? " +변경" : "");
+    }
+    g1::ObsDump::shared().mark_enter();
+    return true;
+}
+
 void State_Mimic::enter()
 {
+    // 계측(기본 꺼짐) — 게인을 싣기 «전» 에 열어 이 체류의 시작 시각(t_enter)을 잡는다.
+    obs_dump_on_ = obs_dump_enter_();
     // set gain
     for (int i = 0; i < env->robot->data.joint_stiffness.size(); i++)
     {
@@ -1509,6 +1652,22 @@ void State_Mimic::enter()
         auto robot_yaw = isaaclab::yawQuaternion(robot_quat_w(env.get())).toRotationMatrix();
         init_quat = robot_yaw * ref_yaw.transpose();
         env->reset();
+        // G1_OBS_CSV(기본 꺼짐): 체류 줄 — 이력 backfill(위 env->reset)이 본 상태와 그때의 명령·모드. 이 줄의 q_des 칸은
+        // 다음 틱 첫머리에 run() 의 마지막 기록으로 채워진다 = 첫 추론 «전» 에 나가던 값(새 프로세스면 processed 0).
+        const bool od = obs_dump_on_;
+        if (od) {
+            g1::ObsDump& d = g1::ObsDump::shared();
+            d.begin_row(0);
+            g1::ObsDumpRow& r = d.stage();
+            od_copy_state(r, env->robot->data);
+            od_mode_now(r);
+            od_m5_now(r);
+            od_cmd_now(r);
+            for (int i = 0; i < 3; ++i) r.base_vel[i] = g_loco.base_vel[i];
+            r.z_fk = g_z_fk; r.tilt = g_tilt.value(); r.tilt_raw = g_tilt.raw();
+            r.episode = env->episode_length;
+            d.publish_step();
+        }
 
         // ── 속도계 (LoopDiag.h). 로봇 동작은 안 바꾼다 — "지금 몇 ms 쓰나"만 본다.
         // 이 루프는 여태 한 바퀴가 몇 ms 인지 «아무도 안 재고 있었다»: sleep_until 뿐이고
@@ -1600,6 +1759,8 @@ void State_Mimic::enter()
         while (policy_thread_running)
         {
             const auto d_t0 = clock::now();
+            // G1_OBS_CSV: 앞 줄을 마무리(run() 이 그 action 을 lowcmd 에 실은 기록과 합쳐 링에) · 이 틱 줄을 연다
+            if (od) g1::ObsDump::shared().begin_row(1);
             env->robot->update();   // 보정은 G1Articulation::update() 안에서 이미 걸린다
             // 자세 추정(엔코더 + IMU 만): 이탈 조건·mode5 도착·안전 규칙이 같은 값을 본다.
             {
@@ -1617,8 +1778,18 @@ void State_Mimic::enter()
                                      g1::safety::upright_for_memory(grow.safety, cmd_upright));
                 orient_gate_.store(g1::safety::orientation_check_applies(grow, cmd_upright, g_recent_high.value()));
             }
+            if (od) {   // G1_OBS_CSV: 첫 읽기 — z_fk · 기울기 · mode5 도착이 본 상태
+                g1::ObsDumpRow& r = g1::ObsDump::shared().stage();
+                od_copy_first_read(r, env->robot->data);
+                r.z_fk = g_z_fk; r.tilt = g_tilt.value(); r.tilt_raw = g_tilt.raw();
+            }
             g_poll_inputs(env.get());   // joystick d-pad + keyboard (모드 키 + WASD/QE vel)
             g_poll_vr();                // VR teleop ref (overrides obs/base_vel/mode if active)
+            if (od) {   // G1_OBS_CSV: 이 틱의 입력(먹은 키 · 누적 속도 · GUI/VR 가 끼었나)
+                g1::ObsDumpRow& r = g1::ObsDump::shared().stage();
+                r.key = g_kb_event;
+                od_cmd_now(r);
+            }
             const auto d_t_poll = clock::now();
             // ── L3: 측정 qd 폭주 감지 (policy_thread 50Hz — g_mode/notify_mode_switch 같은 스레드) ──
             // 모니터링: |qd| 최댓값은 guard on/off 와 무관하게 항상 추적. 50Hz, I/O 없음.
@@ -1701,6 +1872,7 @@ void State_Mimic::enter()
                 // crit은 아래 registered_check가 Passive로 전이시킴(여기선 latch만).
             }
             const auto d_t_safe = clock::now();
+            if (od) g1::ObsDump::shared().stage().qd_warn = js_qd_warn_latched_ ? 1 : 0;   // G1_OBS_CSV
             // Controller: detect a mode switch (spline base_vel + mode1 arm-blend), then advance
             // one step so the obs (base_vel_command / ref_foot_height) see fresh values.
             // consume_switch() 는 «직전 consume 때의 모드와 지금» 을 견준다 — 조작 채널이 요청한
@@ -1772,11 +1944,20 @@ void State_Mimic::enter()
                                  fz[0], fz[1], g_loco.foot_z[0], g_loco.foot_z[1], g_footz_src_name);
                 }
             }
+            if (od) {   // G1_OBS_CSV: 전환 처리 결과(모드·요청·클립·재앵커)
+                g1::ObsDumpRow& r = g1::ObsDump::shared().stage();
+                r.switched = (mode_switched ? 1 : 0) | (clip_switched ? 2 : 0);
+                od_mode_now(r);
+            }
             // 명령 필터 = 선형 slew 1.5 (CmdSlew.h). 급한 조작이 걸음에 충격으로 가지 않게, 0 에는 정확히 닿게.
             {
                 auto bv = g_joystick_base_vel(env.get());
                 g1::cmd_slew::step(bv_f, bv, 0.02f);
                 g_loco.update(bv_f.x, g_mode.mode());
+                if (od) {   // G1_OBS_CSV: 봉투로 자른 명령 → slew → 컨트롤러가 정책에 보이는 base_vel
+                    g1::ObsDumpRow& r = g1::ObsDump::shared().stage();
+                    for (int i = 0; i < 3; ++i) { r.bv[i] = bv[i]; r.bvf[i] = bv_f.x[i]; r.base_vel[i] = g_loco.base_vel[i]; }
+                }
             }
             // 클립 시계: 0번 칸 = 주 클립(구간 오프셋), 그 뒤 = 자기 원점(되감는 칸은 진입 시각이 원점).
             {
@@ -1819,8 +2000,15 @@ void State_Mimic::enter()
                 }
                 g_limb_prev = crawl;
             }
+            if (od) od_m5_now(g1::ObsDump::shared().stage());   // G1_OBS_CSV: 이 틱 mode5 명령을 만든 뒤의 자세·도착
             const auto d_t_ctrl = clock::now();
             env->step();
+            if (od) {   // G1_OBS_CSV: obs 를 만든 상태(step 안 robot->update). obs·원출력은 감싸개가 이미 실었다
+                g1::ObsDump& d = g1::ObsDump::shared();
+                od_copy_state(d.stage(), env->robot->data);
+                d.stage().episode = env->episode_length;
+                d.publish_step();   // 이제부터 run() 의 기록에 이 줄 번호가 붙는다
+            }
             const auto d_t1 = clock::now();
 
             // ── 계측 (틱당 ~1 ns. 구간 셋은 env->step() 이 채워 둔 값을 읽기만 한다)
@@ -1861,6 +2049,7 @@ void State_Mimic::enter()
             std::this_thread::sleep_until(sleepTill);
             sleepTill += dt;
         }
+        if (od) g1::ObsDump::shared().flush_pending();   // G1_OBS_CSV: 이 체류의 마지막 줄
         load_run = false;
         if (load_th.joinable()) load_th.join();
         if (d_csv) std::fclose(d_csv);
@@ -1876,7 +2065,12 @@ void State_Mimic::enter()
 
 void State_Mimic::run()
 {
+    // G1_OBS_CSV(기본 꺼짐): processed_actions «전에» 읽는다 — 이 번호(정책 줄) 이상의 action 이 보인다.
+    const bool od = obs_dump_on_;
+    const int64_t od_from = od ? g1::ObsDump::shared().step_seq() : 0;
     auto action = env->action_manager->processed_actions();   // = raw*scale + offset (target q)
+    std::array<float, 29> od_proc{};
+    if (od) for (int i = 0; i < 29 && i < (int)action.size(); ++i) od_proc[i] = action[i];
     // mode1 arm-blend: ease the upper-joint TARGETS toward the default pose, then release.
     // Interpolate toward default_joint_pos (= the action offset; joint_names=[.*] so action
     // index == robot joint index). arm_scale is 1.0 except during a mode1 transition.
@@ -1921,6 +2115,16 @@ void State_Mimic::run()
         mon_track(mon_pre.data(), action.data(), mon_n, mon_rate_ticks_, mon_rate_max_, mon_rate_joint_);
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {
         lowcmd->msg_.motor_cmd()[env->robot->data.joint_ids_map[i]].q() = action[i];
+    }
+    // G1_OBS_CSV(기본 꺼짐): lowcmd 에 «실린» q · kp · kd 를 그대로 — 정책 스레드가 다음 틱 첫머리에 그 줄에 합친다.
+    if (od && action.size() == 29 && env->robot->data.joint_ids_map.size() == 29) {
+        std::array<float, 29> kp{}, kd{};
+        for (int i = 0; i < 29; ++i) {
+            const auto& mc = lowcmd->msg_.motor_cmd()[static_cast<int>(env->robot->data.joint_ids_map[i])];
+            kp[i] = mc.kp();
+            kd[i] = mc.kd();
+        }
+        g1::ObsDump::shared().record_out(od_from, od_proc.data(), action.data(), kp.data(), kd.data());
     }
     // 계측(기본 꺼짐). 명령을 다 실은 «뒤» 라 이 줄의 q_des 는 실제로 나가는 값과 같다.
     // g1::StateDump::shared() — 프로세스 공유 인스턴스. tick() 은 그 순간 활성인 이 State_Mimic

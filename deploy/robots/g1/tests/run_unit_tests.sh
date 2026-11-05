@@ -17,7 +17,8 @@ done
 # StateDump 는 쓰기 스레드(std::thread)가 있어 링크에 -pthread 가 필요하다 — 위 루프와 갈라 둔다.
 # Mimic 재진입(stay 를 여러 번 도는 것)에서 close() 없이 다시 열면 std::terminate 가 나던
 # 회귀(2026-09-22)를 여기서 잡는다.
-for t in test_state_dump_writer; do
+# ObsDump(G1_OBS_CSV — g1_arcade P1 대조 계측)도 같은 RT-안전 쓰기 구조 + 칸 대조·변이 시험·시퀀스 잠금.
+for t in test_state_dump_writer test_obs_dump_writer; do
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -I../include -pthread $t.cpp
 done
 # SafetyLog 도 같은 프로세스-공유 싱글턴 계약(멱등 open, 닫기는 소멸자에서만)을 잠근다 — 2026-09-22

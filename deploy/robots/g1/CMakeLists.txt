@@ -62,7 +62,19 @@ file(GLOB_RECURSE ADD_SRC_LIST
   ${PROJECT_SOURCE_DIR}/src/*.cpp
 )
 
+# 빌드 정보(커밋 · 고친 파일 여부) — 계측 CSV(G1_OBS_CSV) 머리에 싣는다. 빌드마다 git 을 읽고, 바뀌었을 때만 헤더를
+# 갈아 끼운다(같으면 src/BuildInfo.cpp 도 다시 컴파일하지 않는다). git 이 없으면 "unknown" — 빌드는 멈추지 않는다.
+set(G1_BUILD_INFO_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
+add_custom_target(g1_build_info
+  COMMAND ${CMAKE_COMMAND} -DSRC=${PROJECT_SOURCE_DIR} -DOUT=${G1_BUILD_INFO_DIR}/g1_build_info.h
+          -P ${PROJECT_SOURCE_DIR}/cmake/build_info.cmake
+  BYPRODUCTS ${G1_BUILD_INFO_DIR}/g1_build_info.h
+  COMMENT "g1 build info (commit)")
+file(MAKE_DIRECTORY ${G1_BUILD_INFO_DIR})
+
 add_library(${PROJECT_NAME}_lib ${ADD_SRC_LIST})
+add_dependencies(${PROJECT_NAME}_lib g1_build_info)
+target_include_directories(${PROJECT_NAME}_lib PRIVATE ${G1_BUILD_INFO_DIR})
 link_libraries(${PROJECT_NAME}_lib)
 
 add_executable(g1_ctrl main.cpp)
