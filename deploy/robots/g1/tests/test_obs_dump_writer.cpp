@@ -519,6 +519,11 @@ int main() {
         std::printf("  ⑦ 멱등 · 다른 배치 거부 · 꺼짐 no-op · shared()\n");
     }
 
+    // 쓴 파일을 지운다 — 한 판에 ~33 MB 다(com1 /tmp 는 여러 번 가득 찼다). 실패했으면 들여다볼 수 있게 남긴다.
+    if (!fail)
+        for (const char* f : {"/tmp/_todw.csv", "/tmp/_todw_mut.csv", "/tmp/_todw_mut2.csv", "/tmp/_todw_seq.csv",
+                              "/tmp/_todw_idem.csv", "/tmp/_todw_idem_other.csv"})
+            std::remove(f);
     std::printf(fail ? "test_obs_dump_writer: %d FAIL\n" : "test_obs_dump_writer: OK\n", fail);
     return fail ? 1 : 0;
 }
