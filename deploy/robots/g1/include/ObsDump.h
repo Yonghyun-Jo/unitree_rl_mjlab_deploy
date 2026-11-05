@@ -24,6 +24,11 @@
 //     (seqlock, 칸은 원자 변수)이라 정책 스레드가 반쯤 쓰인 기록을 읽지 않는다. 기록마다 «어느 줄의 action 이었나»
 //     (from)를 단다 — 받는 줄 번호와 다르면 out_from 이 그 차이를 그대로 보인다(숨기지 않는다).
 //   쓰기 스레드: 100 ms 마다 링을 비워 글자로 파일에 쓴다. 블록해도 제어는 안 멈춘다.
+//     🔴 첫 줄에서 자기를 SCHED_OTHER nice +10 으로 내린다 — enter() 를 부르는 FSM 스레드는 SCHED_FIFO 40
+//     (CtrlFSM.h run_)이고 std::thread 는 만든 스레드의 정책을 물려받는다(glibc PTHREAD_INHERIT_SCHED). 안 내리면 글자
+//     변환(줄당 ~3300 칸 snprintf)이 RT 우선순위로 1 kHz 안전 루프·50 Hz 정책과 CPU 를 다툰다. 관례 = RtPriority.h
+//     lower_this_thread(CtrlFSM.h diag 보고 스레드) — 같은 두 호출을 여기 직접 쓴다(그 헤더는 spdlog 를 끌어와 이 헤더만
+//     쓰는 단위 시험·로봇 게이트 컴파일에 링크 플래그가 필요해진다).
 //
 // 🔴 프로세스에 하나 — `ObsDump::shared()` 로만 쓴다(StateDump 와 같은 이유: State_Mimic 은 FSM 상태마다 하나씩
 //    만들어진다). obs 배치가 다른 인스턴스(예 Mimic_Dance1_subject2)가 열려 있는 파일에 붙으려 하면 경고 1회 뒤
@@ -33,6 +38,7 @@
 // 그 뒤에 obs 칸(`<ONNX 입력 이름>_<i>`, 그룹은 Meta.groups 순서). 실수는 %.9g(float32 왕복 정확), 시각은 %.6f.
 // 기록이 없는 칸은 float = nan · int = −1 (0 과 구별한다 — 0 은 진짜 값일 수 있다).
 #include <algorithm>
+#include <cerrno>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -48,6 +54,12 @@
 #include <utility>
 #include <vector>
 
+#include <pthread.h>
+#include <sched.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+
 namespace g1 {
 
 // 한 줄(이진). 정책 스레드가 채우고 쓰기 스레드가 글자로 바꾼다. 관절 순서 = 정책 순서(joint_ids_map 적용 뒤).
@@ -59,7 +71,8 @@ struct ObsDumpRow {
     int32_t stay = -1;      // 체류 번호(enter() 마다 +1, 1 부터)
     int64_t episode = -1;   // env->episode_length (틱 줄 = env->step() 뒤)
     double  t = 0;          // 열린 뒤 초(steady) — 틱 줄 = env->step() 이 끝난 시각, 체류 줄 = env->reset() 뒤
-    double  t_enter = 0;    // 체류 줄만: State_Mimic::enter() 첫머리(게인을 싣기 직전) 시각. 틱 줄 = nan
+    double  t_enter = 0;    // 체류 줄만: State_Mimic::enter() 첫머리(덤프를 열기 «전») 시각. 첫 체류는 음수(파일이 열리기 전). 틱 줄 = nan
+    double  t_gain = 0;     // 체류 줄만: 덤프 열기·감싸기를 마치고 게인을 싣기 직전 시각(t_gain − t_enter = 열기 비용). 틱 줄 = nan
     // ── 명령 (정책 루프가 이 틱에 쓴 것)
     int32_t key = -1;       // g_poll_inputs 가 이 틱에 먹은 키(글자 코드, 없으면 0, 한 글자가 아니면 −바이트 수)
     int32_t mode = -1;      // 전환 처리 뒤 g_mode.mode()
@@ -97,6 +110,7 @@ struct ObsDumpRow {
     template <class V> void fields(V& v) const {
         v("row", &row, 1);           v("kind", &kind, 1);         v("stay", &stay, 1);
         v("episode", &episode, 1);   v("t", &t, 1);               v("t_enter", &t_enter, 1);
+        v("t_gain", &t_gain, 1);
         v("key", &key, 1);           v("mode", &mode, 1);         v("mode_req", &mode_req, 1);
         v("switched", &switched, 1); v("clip", &clip, 1);         v("preset", &preset, 1);
         v("m5_hold", &m5_hold, 1);   v("qd_warn", &qd_warn, 1);   v("vr", &vr, 1);
@@ -178,6 +192,9 @@ public:
         opened_path_ = path;
         // 링 · 줄 버퍼 · 정책 스레드 기록칸을 «여기서» 잡는다 — RT 경로에서 할당이 없게.
         ring_.reset(new unsigned char[size_t(kRows) * row_bytes_]);
+        // 🔴 미리 만진다 — 새로 잡은 큰 메모리는 쪽(page)이 처음 쓰일 때 커널이 채운다(minor fault). 안 만지면 정책 스레드의
+        //    첫 512 줄이 쪽마다 fault 를 낸다. 여기(FSM 스레드 enter, 정책 스레드가 뜨기 전)서 한 번에 치른다.
+        std::memset(ring_.get(), 0, size_t(kRows) * row_bytes_);
         stage_obs_.assign(size_t(n_obs_), std::numeric_limits<float>::quiet_NaN());
         line_.assign(text_bytes_(), '\0');
         drain_obs_.assign(size_t(n_obs_), 0.f);
@@ -193,12 +210,18 @@ public:
     unsigned long long dropped() const { return dropped_.load(std::memory_order_relaxed); }
     unsigned long long rows_pushed() const { return head_.load(std::memory_order_relaxed); }
 
-    // ── FSM 스레드: enter() 첫머리(정책 스레드가 없을 때). 다음 체류 줄의 t_enter · 체류 번호.
-    void mark_enter() {
+    // ── FSM 스레드: enter() 에서 열기·감싸기를 마친 뒤(정책 스레드가 없을 때). 다음 체류 줄의 t_enter(= enter_abs,
+    //    열기 전에 now() 로 잰 값) · t_gain(지금) · 체류 번호.
+    void mark_enter(double enter_abs) {
         if (!f_) return;
-        t_enter_ = now() - t0_;
+        t_enter_ = enter_abs - t0_;
+        t_gain_ = now() - t0_;
         ++stay_;
     }
+    void mark_enter() { mark_enter(now()); }
+    // 쓰기 스레드의 tid(0 = 아직 안 떴다) · 자기를 내리는 데 성공했나(정책 · nice 둘 다)
+    int writer_tid() const { return writer_tid_.load(std::memory_order_acquire); }
+    bool writer_lowered() const { return writer_lowered_.load(std::memory_order_acquire); }
 
     // ── 정책 스레드 (생산자 하나) ────────────────────────────────────────────────────────────────────
     ObsDumpRow& stage() { return stage_; }
@@ -214,6 +237,7 @@ public:
         stage_.kind = kind;
         stage_.stay = stay_;
         stage_.t_enter = (kind == 0) ? t_enter_ : std::numeric_limits<double>::quiet_NaN();
+        stage_.t_gain = (kind == 0) ? t_gain_ : std::numeric_limits<double>::quiet_NaN();
         pending_ = true;
     }
     // 이 줄의 action 이 processed_actions 에 실렸다(env->step() 직후 · 체류 줄은 env->reset() 직후) — 이제부터
@@ -402,6 +426,7 @@ private:
         tail_.store(t, std::memory_order_release);
     }
     void drain_loop_() {
+        lower_this_thread_();   // 🔴 첫 줄 — FSM 스레드의 SCHED_FIFO 를 물려받았다(머리 주석)
         while (run_.load(std::memory_order_acquire)) {
             drain_();
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -409,10 +434,29 @@ private:
         drain_();
     }
 
+    // RtPriority.h lower_this_thread 와 같은 두 호출: RT 였다면 SCHED_OTHER 로 내리고, nice 는 «이 스레드» 에만
+    // (setpriority 의 PRIO_PROCESS + tid = 스레드. 0 을 주면 프로세스 전체가 밀린다). 내리는 것이라 권한이 필요 없다.
+    void lower_this_thread_() {
+        sched_param sp{};
+        sp.sched_priority = 0;
+        const int rc1 = pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp);
+        const pid_t tid = static_cast<pid_t>(::syscall(SYS_gettid));
+        const int rc2 = ::setpriority(PRIO_PROCESS, static_cast<id_t>(tid), kWriterNice);
+        if (rc1 != 0 || rc2 != 0)
+            std::fprintf(stderr, "[obs_dump] ⚠ 쓰기 스레드를 SCHED_OTHER nice +%d 로 못 내렸다(%s) — RT 우선순위로 돌 수 있다\n",
+                         kWriterNice, rc1 != 0 ? std::strerror(rc1) : std::strerror(errno));
+        writer_lowered_.store(rc1 == 0 && rc2 == 0, std::memory_order_release);
+        writer_tid_.store(static_cast<int>(tid), std::memory_order_release);
+    }
+
+public:
+    static constexpr int kWriterNice = 10;
+    // steady 시계 초(절대). enter() 가 덤프를 열기 전에 잰다(mark_enter).
     static double now() {
         return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
+private:
     std::FILE* f_ = nullptr;
     Meta meta_;
     int n_obs_ = 0;
@@ -423,7 +467,9 @@ private:
     std::atomic<unsigned long long> head_{0}, tail_{0}, dropped_{0};
     std::atomic<bool> run_{false};
     std::thread th_;
-    double t0_ = 0.0, t_enter_ = std::numeric_limits<double>::quiet_NaN();
+    double t0_ = 0.0, t_enter_ = std::numeric_limits<double>::quiet_NaN(), t_gain_ = std::numeric_limits<double>::quiet_NaN();
+    std::atomic<int> writer_tid_{0};
+    std::atomic<bool> writer_lowered_{false};
     std::string opened_path_;
     bool warned_layout_ = false, warned_path_ = false;
     // 정책 스레드 전용

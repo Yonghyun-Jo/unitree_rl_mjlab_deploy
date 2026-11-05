@@ -1456,6 +1456,7 @@ bool State_Mimic::obs_dump_enter_()
 {
     const char* path = std::getenv("G1_OBS_CSV");
     if (!path || !*path) return false;
+    const double t_enter_abs = g1::ObsDump::now();   // 열기 «전» — 열기·감싸기 비용이 덤프에 보이게(t_gain − t_enter)
     if (!obs_dump_wrapped_) {
         g1::ObsDump::Meta& m = obs_dump_meta_;
         m.slot = slot_name_;
@@ -1478,13 +1479,19 @@ bool State_Mimic::obs_dump_enter_()
     }
     if (!g1::ObsDump::shared().open_from_env("G1_OBS_CSV", obs_dump_meta_)) return false;
     if (!obs_dump_wrapped_) {
+        // ⚠ isaaclab::Algorithms(🅑 algorithms.h)에는 가상 소멸자가 없다 — env->alg(unique_ptr<Algorithms>)가 이 감싸개를
+        //    지우면 ObsDumpAlg·안의 OrtRunner 소멸자가 안 불리는 UB 다(감싸지 않은 OrtRunner 도 같은 UB 가 원래 있다).
+        //    지금은 env 가 프로세스 끝까지 살아 지워지지 않는다. 🅑 는 고치지 않는다(6대 공용) — env->alg 를 지우거나 바꾸는
+        //    코드를 더하면 여기를 먼저 볼 것.
+        // ⚠ 감싼 뒤엔 dynamic_cast<OrtRunner*>(env->alg.get()) 가 nullptr 이다. 지금 그것을 쓰는 곳은 위 머리 짓기 하나
+        //    (감싸기 «전» 에 한 번, obs_dump_meta_ 에 남긴다)뿐 — OrtRunner 가 필요한 코드를 더하면 감싸개를 풀어 볼 것.
         env->alg = std::make_unique<ObsDumpAlg>(std::move(env->alg), obs_dump_meta_.groups);
         obs_dump_wrapped_ = true;
         spdlog::warn("[obs_dump] G1_OBS_CSV={} — {} (슬롯 '{}', obs {} 칸) 정책 틱마다 obs·원출력·q_des 를 기록한다 "
                      "(P1 대조 계측, 커밋 {}{})", path, getStateString(), slot_name_,
                      g1::ObsDump::shared().n_obs(), obs_dump_meta_.commit, obs_dump_meta_.dirty == 1 ? " +변경" : "");
     }
-    g1::ObsDump::shared().mark_enter();
+    g1::ObsDump::shared().mark_enter(t_enter_abs);
     return true;
 }
 

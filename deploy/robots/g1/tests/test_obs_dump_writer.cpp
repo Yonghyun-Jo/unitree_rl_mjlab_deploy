@@ -2,14 +2,16 @@
 //
 // 여기서 재는 것:
 //   ⓪ 계측기 자기검증 — 이 스레드의 write/read syscall 카운터(/proc/thread-self/io)와 할당 카운터가 실제로 움직이는가
-//   ① 헤더 = # 머리 + 열 이름(고정 285 칸 + obs), 모든 줄의 열 수가 같다
+//   ① 헤더 = # 머리 + 열 이름(고정 286 칸 + obs), 모든 줄의 열 수가 같다
 //   ② 칸마다 값이 그대로 나르는가 — 기대값은 «멤버 이름으로» 따로 적은 표(expect_col)에서 온다. 이름표(fields())와
 //      독립이라 fields() 가 칸을 바꿔 적거나(kp ↔ kd) 빠뜨리면 여기서 걸린다
 //   ③ 변이 시험 — 기록 칸 하나를 바꾼 덤프는 «정확히 그 줄·그 칸» 하나만 어긋난다고 나와야 한다(검사가 실제로 잡는다)
 //   ④ 자극이 움직이는가 — 칸마다 줄 사이에 값이 바뀐다(멈춘 기록기가 «같은 값 == 같은 값» 으로 통과하지 못하게)
-//   ⑤ 🔴 RT 경로(begin_row·stage·publish_step·record_out)가 syscall 0 · 할당 0
+//   ⑤ 🔴 RT 경로(begin_row·stage·publish_step·record_out)가 syscall 0 · 할당 0 · 쪽 fault 0(링을 열 때 미리 만진다)
 //   ⑥ run() 기록(시퀀스 잠금)이 동시에 쓰여도 찢긴 기록이 줄에 들어가지 않는다
 //   ⑦ 멱등 open · obs 배치가 다른 두 번째 open 은 false · shared() 하나 · close 여러 번 · 꺼짐(환경변수 없음) = no-op
+//   ⑧ 🔴 쓰기 스레드가 물려받은 스케줄링을 스스로 내린다(SCHED_OTHER · nice ≥ 10) — 만든 스레드(FSM = SCHED_FIFO 40)의
+//      정책이 std::thread 로 상속된다. FIFO 는 권한이 필요해 SCHED_BATCH(권한 불필요)로 상속을 재현한다
 //
 //   g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include -pthread test_obs_dump_writer.cpp -o /tmp/t && /tmp/t
 #include "ObsDump.h"
@@ -21,6 +23,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <pthread.h>
+#include <sched.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <cerrno>
 #include <set>
 #include <string>
 #include <thread>
@@ -170,15 +178,20 @@ static bool expect_col(const g1::ObsDumpRow& r, const std::vector<float>& obs, c
 // 덤프 하나를 쓴다: 체류 줄 1 + 틱 줄 n. mutate(k, row) 가 있으면 «기록한 뒤» 칸 하나를 바꾼다(변이).
 // expected 에는 변이 «전» 값을 담는다 — 검사기가 그 차이를 찾아야 한다.
 struct Want { g1::ObsDumpRow r; std::vector<float> obs; };
+static long minflt_thread() {
+    rusage u{};
+    return getrusage(RUSAGE_THREAD, &u) == 0 ? u.ru_minflt : -1;
+}
 template <class Mut>
-static std::vector<Want> write_dump(g1::ObsDump& d, int n, Mut mutate, long* sysw_rt, long* sysr_rt, long* allocs_rt) {
+static std::vector<Want> write_dump(g1::ObsDump& d, int n, Mut mutate, long* sysw_rt, long* sysr_rt, long* allocs_rt,
+                                    long* minflt_rt = nullptr) {
     std::vector<Want> want;
     want.reserve(size_t(n) + 1);
     Want w;
     const int no = d.n_obs();   // 이 덤프의 obs 폭(⑦ 은 8)
     w.obs.assign(size_t(no), 0.f);
     IoMeter io;
-    long sw = 0, sr = 0, al = 0;
+    long sw = 0, sr = 0, al = 0, mf = 0;
     d.mark_enter();
     for (int k = 0; k <= n; ++k) {
         // 기대값 먼저(할당이 있으니 계측 밖에서)
@@ -186,11 +199,12 @@ static std::vector<Want> write_dump(g1::ObsDump& d, int n, Mut mutate, long* sys
         fill_row(w.r, k);
         for (int i = 0; i < no; ++i) w.obs[size_t(i)] = obs_v(k, i);
         io.start();
+        const long f0 = minflt_thread();
         g_allocs.store(0); g_count_alloc = true;
         // ── RT 경로(정책 스레드가 하는 일) ──
         d.begin_row(k == 0 ? 0 : 1);
         g1::ObsDumpRow& s = d.stage();
-        const int64_t row = s.row; const int32_t kind = s.kind, stay = s.stay; const double te = s.t_enter;
+        const int64_t row = s.row; const int32_t kind = s.kind, stay = s.stay; const double te = s.t_enter, tg = s.t_gain;
         fill_row(s, k);
         std::memcpy(d.stage_obs(), w.obs.data(), sizeof(float) * size_t(no));
         d.publish_step();
@@ -198,9 +212,11 @@ static std::vector<Want> write_dump(g1::ObsDump& d, int n, Mut mutate, long* sys
         run_record(d, d.step_seq());
         mutate(k, s);
         g_count_alloc = false; al += g_allocs.load();
+        const long f1 = minflt_thread();
+        mf += (f0 >= 0 && f1 >= 0) ? f1 - f0 : 1000000;
         long dw, dr; io.stop(dw, dr);
         sw += dw; sr += dr;
-        w.r.row = row; w.r.kind = kind; w.r.stay = stay; w.r.t_enter = te;
+        w.r.row = row; w.r.kind = kind; w.r.stay = stay; w.r.t_enter = te; w.r.t_gain = tg;
         for (int i = 0; i < NJ; ++i) {
             w.r.proc[i] = out_v(row, 0, i); w.r.q_des[i] = out_v(row, 1, i);
             w.r.kp[i] = out_v(row, 2, i);   w.r.kd[i] = out_v(row, 3, i);
@@ -213,20 +229,21 @@ static std::vector<Want> write_dump(g1::ObsDump& d, int n, Mut mutate, long* sys
     if (sysw_rt) *sysw_rt = sw;
     if (sysr_rt) *sysr_rt = sr;
     if (allocs_rt) *allocs_rt = al;
+    if (minflt_rt) *minflt_rt = mf;
     return want;
 }
 static std::vector<Want> write_dump(g1::ObsDump& d, int n) {
     return write_dump(d, n, [](int, g1::ObsDumpRow&) {}, nullptr, nullptr, nullptr);
 }
 
-// 덤프 ↔ 기대값. 어긋난 (줄, 칸) 목록을 돌려준다. t 는 증가만, t_enter 는 체류 줄만 유한.
+// 덤프 ↔ 기대값. 어긋난 (줄, 칸) 목록을 돌려준다. t 는 증가만, t_enter · t_gain 은 체류 줄만 유한(t_enter ≤ t_gain).
 struct Miss { int row; std::string col; };
 static std::vector<Miss> verify(const Csv& c, const std::vector<Want>& want, int* handled_cols) {
     std::vector<Miss> miss;
     int handled = 0;
     for (const auto& col : c.cols) {
         double v;
-        if (col == "t" || col == "t_enter" || expect_col(want.at(0).r, want.at(0).obs, col, v)) ++handled;
+        if (col == "t" || col == "t_enter" || col == "t_gain" || expect_col(want.at(0).r, want.at(0).obs, col, v)) ++handled;
         else miss.push_back({-1, "모르는 칸 " + col});
     }
     if (handled_cols) *handled_cols = handled;
@@ -239,7 +256,13 @@ static std::vector<Miss> verify(const Csv& c, const std::vector<Want>& want, int
             const std::string& col = c.cols[j];
             const double got = std::strtod(row[j].c_str(), nullptr);
             if (col == "t") { if (!(got >= t_prev)) miss.push_back({int(k), col}); t_prev = got; continue; }
-            if (col == "t_enter") { if (std::isfinite(got) != (want[k].r.kind == 0)) miss.push_back({int(k), col}); continue; }
+            if (col == "t_enter" || col == "t_gain") {
+                // 체류 줄만 유한 · 기록한 그 값(%.6f — 마이크로초까지) — 정책 스레드 쪽에서 덮이지 않았나
+                const double want_v = col == "t_enter" ? want[k].r.t_enter : want[k].r.t_gain;
+                const bool ok = (want[k].r.kind == 0) ? (std::isfinite(got) && std::fabs(got - want_v) < 1e-6) : !std::isfinite(got);
+                if (!ok) miss.push_back({int(k), col});
+                continue;
+            }
             double v;
             if (!expect_col(want[k].r, want[k].obs, col, v)) continue;
             // %.9g 는 float32 왕복이 정확하다 → float 로 되돌려 «정확히» 같아야 한다(정수 칸은 2^24 아래라 float 로도 정확)
@@ -278,7 +301,16 @@ int main() {
         { std::vector<int>* v = new std::vector<int>(10); delete v; }
         g_count_alloc = false;
         chk(g_allocs.load() >= 2, "할당 카운터가 안 움직인다 — ⑤ 판정이 무력하다");
-        std::printf("  ⓪ 계측기 자기검증: fflush 200 -> syscw +%ld · fread 50 -> syscr +%ld · new 2 -> 할당 %ld\n", dw, dr2, g_allocs.load());
+        // 쪽 fault 바늘: 새로 잡은 큰 메모리(mmap)를 쪽마다 한 번씩 만지면 그만큼 늘어야 한다
+        const size_t big = size_t(8) << 20;
+        unsigned char* b = static_cast<unsigned char*>(std::malloc(big));
+        const long f0 = minflt_thread();
+        for (size_t i = 0; i < big; i += 4096) b[i] = 1;
+        const long f1 = minflt_thread();
+        std::free(b);
+        chk(f0 >= 0 && f1 - f0 >= 1000, "쪽 fault 카운터(getrusage RUSAGE_THREAD)가 안 움직인다 — ⑤ 판정이 무력하다");
+        std::printf("  ⓪ 계측기 자기검증: fflush 200 -> syscw +%ld · fread 50 -> syscr +%ld · new 2 -> 할당 %ld · 8 MB 만짐 -> fault +%ld\n",
+                    dw, dr2, g_allocs.load(), f1 - f0);
         std::remove("/tmp/_todw_probe.txt");
     }
 
@@ -288,13 +320,13 @@ int main() {
         const char* path = "/tmp/_todw.csv";
         std::remove(path);
         setenv("G1_OBS_CSV", path, 1);
-        long sysw = 0, sysr = 0, allocs = 0;
+        long sysw = 0, sysr = 0, allocs = 0, minflt = 0;
         std::vector<Want> want;
         {
             g1::ObsDump d;
             chk(d.open_from_env("G1_OBS_CSV", meta_of("Mimic_Masked", N_OBS)), "열리지 않았다");
             chk(d.on() && d.n_obs() == N_OBS, "on · n_obs");
-            want = write_dump(d, kRows, [](int, g1::ObsDumpRow&) {}, &sysw, &sysr, &allocs);
+            want = write_dump(d, kRows, [](int, g1::ObsDumpRow&) {}, &sysw, &sysr, &allocs, &minflt);
             chk(d.dropped() == 0, "평시에 줄을 버렸다");
             d.close();
         }
@@ -306,9 +338,9 @@ int main() {
             if (m == "# commit=deadbeef0000 dirty=0") has_commit = true;
         }
         chk(has_slot && has_commit, "머리에 슬롯 · 커밋");
-        // 고정 285 칸(손으로 센 값 — 칸이 늘거나 줄면 분석기가 조용히 어긋나므로 시험이 먼저 알린다) + obs
-        chk(int(c.cols.size()) == 285 + N_OBS, "열 수 = 285 + obs");
-        if (int(c.cols.size()) != 285 + N_OBS) std::printf("     열 %zu, 기대 %d\n", c.cols.size(), 285 + N_OBS);
+        // 고정 286 칸(손으로 센 값 — 칸이 늘거나 줄면 분석기가 조용히 어긋나므로 시험이 먼저 알린다) + obs
+        chk(int(c.cols.size()) == 286 + N_OBS, "열 수 = 286 + obs");
+        if (int(c.cols.size()) != 286 + N_OBS) std::printf("     열 %zu, 기대 %d\n", c.cols.size(), 286 + N_OBS);
         int handled = 0;
         const auto miss = verify(c, want, &handled);
         chk(handled == int(c.cols.size()), "모든 칸을 기대값 표가 안다");
@@ -319,7 +351,7 @@ int main() {
             int still = 0;
             for (size_t j = 0; j < c.cols.size(); ++j) {
                 const std::string& col = c.cols[j];
-                if (col == "kind" || col == "stay" || col == "t_enter") continue;
+                if (col == "kind" || col == "stay" || col == "t_enter" || col == "t_gain") continue;
                 std::set<std::string> vals;
                 for (size_t k = 1; k < c.rows.size() && vals.size() < 2; ++k) vals.insert(c.rows[k][j]);
                 if (vals.size() < 2) { if (still < 5) std::printf("     안 움직이는 칸 %s\n", col.c_str()); ++still; }
@@ -327,10 +359,12 @@ int main() {
             chk(still == 0, "④ 자극이 안 움직이는 칸이 있다 — 멈춘 기록기를 못 잡는다");
         }
         // ⑤ RT 경로
-        std::printf("  ⑤ RT 경로 %d 줄: write syscall %ld · read syscall %ld · 할당 %ld\n", kRows + 1, sysw, sysr, allocs);
+        std::printf("  ⑤ RT 경로 %d 줄: write syscall %ld · read syscall %ld · 할당 %ld · 쪽 fault %ld\n", kRows + 1, sysw, sysr,
+                    allocs, minflt);
         chk(sysw == 0, "⑤ RT 경로가 write 계열 syscall 을 했다 = 파일을 만진다");
         chk(sysr == 0, "⑤ RT 경로가 read 계열 syscall 을 했다");
         chk(allocs == 0, "⑤ RT 경로가 할당했다");
+        chk(minflt == 0, "⑤ RT 경로가 쪽 fault 를 냈다 — 링을 열 때 미리 만지지 않았다");
         std::printf("  ①② %zu 줄 × %zu 칸 — 칸마다 값 일치 · ④ 자극 움직임\n", c.rows.size(), c.cols.size());
     }
 
@@ -519,10 +553,50 @@ int main() {
         std::printf("  ⑦ 멱등 · 다른 배치 거부 · 꺼짐 no-op · shared()\n");
     }
 
+    // ⑧ 쓰기 스레드가 물려받은 스케줄링을 스스로 내리는가
+    {
+        const pid_t me = static_cast<pid_t>(::syscall(SYS_gettid));
+        sched_param sp{};
+        sp.sched_priority = 0;
+        chk(pthread_setschedparam(pthread_self(), SCHED_BATCH, &sp) == 0, "⑧ 시험 스레드를 SCHED_BATCH 로 못 바꿨다");
+        // 바늘 자기검증: 새 std::thread 가 이 정책을 물려받는 것이 보여야 한다(안 보이면 아래 판정은 아무것도 안 잰다)
+        int inherited = -1;
+        std::thread([&] { inherited = sched_getscheduler(0); }).join();
+        chk(inherited == SCHED_BATCH, "⑧ 정책 상속이 안 보인다 — 이 판정이 무력하다");
+        errno = 0;
+        const int my_nice = getpriority(PRIO_PROCESS, static_cast<id_t>(me));
+        const char* path = "/tmp/_todw_sched.csv";
+        std::remove(path);
+        setenv("G1_OBS_CSV", path, 1);
+        int pol = -1, nice = -100, my_pol = -1, my_nice2 = -100;
+        bool lowered = false;
+        {
+            g1::ObsDump d;
+            chk(d.open_from_env("G1_OBS_CSV", meta_of("Mimic_Masked", 8)), "⑧ open");
+            for (int i = 0; i < 2000 && d.writer_tid() == 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            const int wt = d.writer_tid();
+            chk(wt > 0 && wt != me, "⑧ 쓰기 스레드 tid");
+            pol = sched_getscheduler(wt);
+            errno = 0;
+            nice = getpriority(PRIO_PROCESS, static_cast<id_t>(wt));
+            lowered = d.writer_lowered();
+            my_pol = sched_getscheduler(0);
+            my_nice2 = getpriority(PRIO_PROCESS, static_cast<id_t>(me));
+            d.close();
+        }
+        chk(pol == SCHED_OTHER, "⑧ 쓰기 스레드가 물려받은 정책(SCHED_BATCH — 실기에선 FIFO 40)을 안 내렸다");
+        chk(nice >= g1::ObsDump::kWriterNice, "⑧ 쓰기 스레드 nice 가 10 미만");
+        chk(lowered, "⑧ writer_lowered() 가 false");
+        chk(my_pol == SCHED_BATCH && my_nice2 == my_nice, "⑧ 만든 스레드(실기에선 FSM)까지 내려갔다 — nice 를 프로세스 전체에 걸었다");
+        std::printf("  ⑧ 쓰기 스레드: 정책 %s · nice %d (만든 스레드는 SCHED_BATCH · nice %d 그대로)\n",
+                    pol == SCHED_OTHER ? "SCHED_OTHER" : (pol == SCHED_BATCH ? "SCHED_BATCH(상속 그대로)" : "?"), nice, my_nice2);
+        chk(pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp) == 0, "⑧ 시험 스레드 원복");
+    }
+
     // 쓴 파일을 지운다 — 한 판에 ~33 MB 다(com1 /tmp 는 여러 번 가득 찼다). 실패했으면 들여다볼 수 있게 남긴다.
     if (!fail)
         for (const char* f : {"/tmp/_todw.csv", "/tmp/_todw_mut.csv", "/tmp/_todw_mut2.csv", "/tmp/_todw_seq.csv",
-                              "/tmp/_todw_idem.csv", "/tmp/_todw_idem_other.csv"})
+                              "/tmp/_todw_idem.csv", "/tmp/_todw_idem_other.csv", "/tmp/_todw_sched.csv"})
             std::remove(f);
     std::printf(fail ? "test_obs_dump_writer: %d FAIL\n" : "test_obs_dump_writer: OK\n", fail);
     return fail ? 1 : 0;
