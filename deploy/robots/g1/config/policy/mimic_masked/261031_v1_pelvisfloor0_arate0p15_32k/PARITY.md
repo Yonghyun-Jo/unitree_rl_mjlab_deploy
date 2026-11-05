@@ -1,9 +1,9 @@
 # 패리티 — `261031_v1_pelvisfloor0_arate0p15_32k`
 
-판정 **KNOWN** (PASS 40 · KNOWN 2 · WARN 0 · SKIP 1 · FAIL 0) · 2026-10-31T10:38:44 · check_slot_parity.py v1
+판정 **KNOWN** (PASS 40 · KNOWN 2 · WARN 0 · SKIP 1 · FAIL 0) · 2026-11-05T12:43:10 · check_slot_parity.py v1
 
 - 학습 원장(각 run 의 training_meta.json commit): base `c8c3ea6` · mode1 `c6278f9` · mode2 `b28ceb3` · mode3 `f22eab5`
-- 배포 (판정 당시): deploy repo `f659d1c` · ONNX md5 `1069d71bf014` · deploy.yaml sha256 `3acb2ad214b2`
+- 배포 (판정 당시): deploy repo `4b0e755` · ONNX md5 `1069d71bf014` · deploy.yaml sha256 `3acb2ad214b2`
 - 이 표가 유효한 조건: ONNX md5·deploy.yaml sha256 가 위와 같을 것 (policy_slot push · robot.sh verify 가 본다)
 
 | # | 항목 | 학습 (원장) | 배포 | 판정 | 비고 |
@@ -49,7 +49,7 @@
 | 4.7 | mode3 발-z 원천 | stage4_mode3 FOOT_GEN 없음 → 레퍼런스 발 world-z | ModeTable mode3 foot_z=Ref · requires ref_foot_height_ref 있음 | **PASS** | VR 이 발 높이를 안 줄 때는 두 발 접지(stance)로 대신한다(설계) |
 | 4.8 | GaitLut.h 배열 == 학습 gait_lut_data | gait_lut_data.py (V1=d94c7d9~1 · V2=워킹트리) | GaitLut.h GENERATED 구역 | **PASS** | gen_gait_lut_header --check: 표는 같다 (숫자 바이트 동일). |
 | 4.9 | IMU 보정 (projected_gravity 를 바꾼다) | 학습: 보정 없음 | config.yaml imu_cal pitch 0° roll 0° | **PASS** |  |
-| 4.10 | requires ⊆ 이 소스가 아는 기능 | deploy.yaml requires 6개 | DeployFeatures.h known() 14개 | **PASS** |  |
+| 4.10 | requires ⊆ 이 소스가 아는 기능 | deploy.yaml requires 6개 | DeployFeatures.h known() 15개 | **PASS** |  |
 | 4.11 | 추적 패리티 (sim2sim obs 덤프 vs 학습 함수) | - | - | **SKIP** | Tier B 미도입 |
 
 ## KNOWN — 학습과 다르다는 것을 알고 배포하는 항목 (`parity_known.yaml`)

@@ -1,6 +1,8 @@
 # 실기 후보 — 2026-11-03 (stage_candidates.py 입력). 슬롯 이름 = <day>_<alias>_<label>
 # skill5 독립 policy(Indep-5 base + 바닥 다양화 head) 한 ONNX. mode1 head 가 없는 «한 skill 슬롯» —
 # 안전 폴백(체류 시작 · qd_warn)이 mode5 «직립» 버튼이다(C++ 기능 slot_fallback, ModeRuntime.h slot_fallback_mode).
+# ⚠ v3 = 261031_v1_pelvisfloor0_arate0p15_32k (mode1 P 32k, 10-31 후보) 는 11-05 `policy_slot.py activate --day 261103 v1=… v2=… v3=…` 로 손으로 붙였다.
+#   이 파일로 stage_candidates.py 를 다시 돌리면 ACTIVE.yaml 이 v1·v2 로만 다시 써져 v3 가 빠진다 → 돌린 뒤 같은 activate 로 다시 붙인다.
 day: 261103
 candidates:
   - alias: v1
