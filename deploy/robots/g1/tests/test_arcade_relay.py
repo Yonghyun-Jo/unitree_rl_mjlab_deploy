@@ -140,11 +140,11 @@ def test_second_client_is_view_only(tmp_path):
             b, hb = await connect(relay)
             assert (ha["role"], hb["role"]) == ("controller", "viewer")
             t0 = time.monotonic()
-            await stream(b, 0.3, vx=1.0)
+            await stream(b, 0.3, vx=0.2)                             # 봉투 안의 값(새어 나가면 그대로 보이게)
             assert all(f["vx"] == 0 for t, f in frames if t >= t0)   # viewer cmd 는 무시
             await stream(a, 0.3, vx=0.4)
             assert any(abs(f["vx"] - 0.4) < 1e-6 for _, f in frames)
-            assert not any(abs(f["vx"] - 1.0) < 1e-6 for _, f in frames)
+            assert not any(abs(f["vx"] - 0.2) < 1e-6 for _, f in frames)
             st = await next_state(b)
             assert st["link"]["controller"] is False
     run(go())
@@ -171,16 +171,14 @@ def test_clamps_and_rejects_bad_frames(tmp_path, caplog):
     async def go():
         async with started_relay(tmp_path) as (relay, frames):
             ws, _ = await connect(relay)
-            await ws.send(cmd(1, vx=99, vy=-99, wz=99))
+            await ws.send(cmd(1, vx=99, vy=-99, wz=99))              # 기본 = 실로봇 봉투(학습 상한보다 좁다)
             await asyncio.sleep(0.1)
             f = frames[-1][1]
-            assert (f["vx"], f["wz"]) == (pytest.approx(gui_shm.VXCAP), pytest.approx(gui_shm.WCAP))
-            assert f["vy"] == pytest.approx(-gui_shm.VYCAP)
+            assert (f["vx"], f["vy"], f["wz"]) == (pytest.approx(0.5), pytest.approx(-0.3), pytest.approx(1.0))
             await ws.send(cmd(2, vx=-99, vy=99, wz=-99))
             await asyncio.sleep(0.1)
             f = frames[-1][1]
-            assert f["vx"] == pytest.approx(-gui_shm.VXCAP_BWD) and f["vy"] == pytest.approx(gui_shm.VYCAP)
-            assert f["wz"] == pytest.approx(-gui_shm.WCAP)
+            assert (f["vx"], f["vy"], f["wz"]) == (pytest.approx(-0.3), pytest.approx(0.3), pytest.approx(-1.0))
 
             good = {"v": 1, "type": "cmd", "seq": 3, "mode_req": 0, "m5_preset": 0, "m5_press_seq": 0,
                     "vx": 0.5, "vy": 0, "wz": 0}
@@ -264,8 +262,8 @@ def test_controller_handover_after_1s_silence(tmp_path):
             await stream(a, 0.2, vx=1.0)                   # 옛 controller 와 기존 viewer 는 조종권이 없다
             await stream(b, 0.2, vx=1.5)
             assert all(f["vx"] == 0 for t, f in frames if t >= t0)
-            await stream(c, 0.2, vx=0.6)
-            assert any(abs(f["vx"] - 0.6) < 1e-6 for _, f in frames)
+            await stream(c, 0.2, vx=0.45)
+            assert any(abs(f["vx"] - 0.45) < 1e-6 for _, f in frames)
     run(go())
 
 
@@ -372,9 +370,9 @@ def test_sigterm_writes_zero_frame_and_exits_0(tmp_path):
             except OSError:
                 await asyncio.sleep(0.1)
         assert ws is not None
-        await stream(ws, 0.4, vx=1.0, mode_req=0)
+        await stream(ws, 0.4, vx=0.4, mode_req=0)
         before = parse_gui(gui.read_bytes())
-        assert before["vx"] == pytest.approx(1.0) and before["magic"] == 0x6705
+        assert before["vx"] == pytest.approx(0.4) and before["magic"] == 0x6705
         proc.send_signal(signal.SIGTERM)
         for _ in range(60):                                  # 종료하는 동안에도 cmd 는 계속 온다
             if proc.poll() is not None:
@@ -516,3 +514,49 @@ def test_help_prints_no_gui_lines():
     out = subprocess.run(["bash", str(G1 / "tools" / "run_g1_with_gui.sh"), "--help"],
                          stdout=subprocess.PIPE, universal_newlines=True).stdout
     assert "--no-gui" in out and "arcade_relay" in out
+
+
+# ── 실로봇 봉투(기본 켬) — 학습 상한보다 좁게 자른다 ───────────────────────────────────────────
+def test_real_robot_cap_default_clamps_training_range_cmd(tmp_path, caplog):
+    """vx 2.0 / vy −0.8 / wz 2.0(학습 상한 안이지만 실로봇 밖) → 0.5 / −0.3 / 1.0. 시작 때 봉투 한 줄."""
+    caplog.set_level(logging.INFO, logger="arcade_relay")
+
+    async def go():
+        async with started_relay(tmp_path) as (relay, frames):
+            ws, _ = await connect(relay)
+            await stream(ws, 0.2, vx=2.0, vy=-0.8, wz=2.0)
+            f = frames[-1][1]
+            assert (f["vx"], f["vy"], f["wz"]) == (pytest.approx(0.5), pytest.approx(-0.3), pytest.approx(1.0))
+            await stream(ws, 0.2, vx=-1.5, vy=0.8, wz=-2.0)
+            f = frames[-1][1]
+            assert (f["vx"], f["vy"], f["wz"]) == (pytest.approx(-0.3), pytest.approx(0.3), pytest.approx(-1.0))
+            await stream(ws, 0.2, vx=0.45, vy=-0.25, wz=0.9)              # 봉투 안은 그대로
+            f = frames[-1][1]
+            assert (f["vx"], f["vy"], f["wz"]) == (pytest.approx(0.45), pytest.approx(-0.25), pytest.approx(0.9))
+    run(go())
+    lines = [r.getMessage() for r in caplog.records if "velocity cap (real robot)" in r.getMessage()]
+    assert len(lines) == 1, lines                                          # 시작할 때 한 번
+    assert "vx [-0.30, +0.50]" in lines[0] and "vy ±0.30" in lines[0] and "wz ±1.00" in lines[0]
+
+
+def test_cap_configurable_but_never_above_training():
+    v = arcade_relay.validate_cmd
+    good = {"seq": 1, "mode_req": 0, "m5_preset": 0, "m5_press_seq": 0, "vx": 2.0, "vy": -0.8, "wz": 2.0}
+    c, _ = v(good)                                                          # 기본 = 실로봇 봉투
+    assert (c["vx"], c["vy"], c["wz"]) == (pytest.approx(0.5), pytest.approx(-0.3), pytest.approx(1.0))
+    c, _ = v(good, arcade_relay.TRAINING_CAPS)                              # 학습 상한까지 열 수는 있다
+    assert (c["vx"], c["vy"], c["wz"]) == (pytest.approx(2.0), pytest.approx(-0.8), pytest.approx(2.0))
+    # CLI: 기본값 · 바꾼 값 · 학습 상한 넘음 = 사용 오류(2) · 음수·NaN = 사용 오류
+    a = arcade_relay.parse_args([])
+    assert a.caps == arcade_relay.REAL_CAPS == (0.5, 0.3, 0.3, 1.0)
+    a = arcade_relay.parse_args(["--cap-vx-fwd", "0.4", "--cap-vx-bwd", "0.2", "--cap-vy", "0.1", "--cap-wz", "0.5"])
+    assert a.caps == (0.4, 0.2, 0.1, 0.5)
+    a = arcade_relay.parse_args(["--cap-vx-fwd", "2.5", "--cap-vx-bwd", "1.5", "--cap-vy", "0.8", "--cap-wz", "2.0"])
+    assert a.caps == arcade_relay.TRAINING_CAPS
+    for bad in (["--cap-vx-fwd", "2.6"], ["--cap-vx-bwd", "1.6"], ["--cap-vy", "0.81"], ["--cap-wz", "2.01"],
+                ["--cap-vy", "-0.1"], ["--cap-wz", "nan"], ["--cap-vx-fwd", "inf"]):
+        with pytest.raises(SystemExit) as e:
+            arcade_relay.parse_args(bad)
+        assert e.value.code == 2, bad
+    with pytest.raises(ValueError):
+        arcade_relay.Relay(caps=(2.6, 0.3, 0.3, 1.0))                     # 코드로 만들어도 학습 상한은 못 넘는다

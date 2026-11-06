@@ -6,6 +6,8 @@
   - 처음 붙은 연결 = controller, 나머지 = viewer. controller 가 끊기거나 1 s 넘게 cmd 가 없으면 «새로 붙는» 연결이 승계.
   - cmd 가 0.3 s 끊기면 하트비트는 계속 쓰되 속도·1회성 칸은 0. 종료 시그널에서 0 프레임 한 번.
   - 느린 클라이언트는 최신 한 장만(이전 송신이 끝나지 않았거나 전송 버퍼가 차면 그 클라이언트의 이번 프레임은 건너뛴다).
+  - 속도는 «실로봇 봉투»(기본 켬, vx −0.3..+0.5 · vy ±0.3 · wz ±1.0)로 자른다 — 학습 상한(gui_shm)보다 좁다.
+    --cap-vx-fwd · --cap-vx-bwd · --cap-vy · --cap-wz 로 바꾸되 학습 상한을 넘게는 못 준다. 시작할 때 한 줄로 찍는다.
 
 런타임 = logger 의 venv python(py3.8, websockets 12/13, msgpack). python 3.8 문법만 쓴다.
 로봇 실행:
@@ -39,6 +41,14 @@ CMD_STALE_S = 0.3 - PERIOD_S  # 브라우저 cmd 끊김 → 0 프레임(쓰기 �
 HOLD_MAX_S = 0.1            # 1회성 프레임 소비 확인 대기 상한
 WRITE_BUF_LIMIT = 64 * 1024
 INT32_MAX = 2 ** 31 - 1
+
+# 실로봇 봉투(기본 켬) — g1_arcade keymaps/default.yaml real.envelope 의 walk(fwd 0.5 · bwd 0.3 · side 0.3 · turn 0.8)와
+# crawl(fwd 0.3 · bwd 0.3 · side 0.3 · turn 1.0)의 합집합. 브라우저 core 가 이미 자른 값이어야 하지만, 중계가 «마지막 문» 이다:
+# 다른 클라이언트·고장 난 브라우저가 학습 상한(gui_shm: vx +2.5/−1.5 · vy ±0.8 · wz ±2.0)까지 보내도 로봇은 이 봉투 안에서만 걷는다.
+# (vx_fwd, vx_bwd, vy, wz) — 모두 크기(≥ 0). CLI 로 바꿀 수 있지만 학습 상한보다 크게는 못 준다(check_caps).
+REAL_CAPS = (0.5, 0.3, 0.3, 1.0)
+TRAINING_CAPS = (gui_shm.VXCAP, gui_shm.VXCAP_BWD, gui_shm.VYCAP, gui_shm.WCAP)
+CAP_NAMES = ("cap-vx-fwd", "cap-vx-bwd", "cap-vy", "cap-wz")
 
 # piene_g1_logger g1_logger/joints.py G1_JOINT_NAMES 의 복사본(SDK motor index 순서) — 시험이 원본과 대조한다.
 G1_JOINT_NAMES = [
@@ -78,8 +88,26 @@ def _is_int(x, lo, hi):
     return type(x) is int and lo <= x <= hi
 
 
-def validate_cmd(obj):
-    """(cmd dict, None) 또는 (None, 사유). 속도는 gui_shm 상한으로 한 번 더 자른다."""
+def check_caps(caps):
+    """(vx_fwd, vx_bwd, vy, wz) 가 유한·0 이상·학습 상한 이하인가. 아니면 ValueError(사유)."""
+    if len(caps) != 4:
+        raise ValueError("caps 는 (vx_fwd, vx_bwd, vy, wz) 넷")
+    for name, v, hi in zip(CAP_NAMES, caps, TRAINING_CAPS):
+        if not _is_num(v) or v < 0:
+            raise ValueError("--%s %r: 0 이상의 유한한 수여야 한다" % (name, v))
+        if v > hi:
+            raise ValueError("--%s %g: 학습 상한 %g 를 넘는다(gui_shm.py)" % (name, v, hi))
+    return tuple(float(v) for v in caps)
+
+
+def caps_line(caps):
+    fwd, bwd, vy, wz = caps
+    return ("velocity cap (real robot): vx [%+.2f, %+.2f]  vy ±%.2f  wz ±%.2f   (training caps vx [%+.1f, %+.1f]  vy ±%.1f  wz ±%.1f)"
+            % (0.0 - bwd, fwd, vy, wz, -TRAINING_CAPS[1], TRAINING_CAPS[0], TRAINING_CAPS[2], TRAINING_CAPS[3]))
+
+
+def validate_cmd(obj, caps=REAL_CAPS):
+    """(cmd dict, None) 또는 (None, 사유). 속도는 caps(기본 = 실로봇 봉투)로 자른다 — caps 는 학습 상한 이하(check_caps)."""
     for k in ("seq", "mode_req", "m5_preset", "m5_press_seq", "vx", "vy", "wz"):
         if k not in obj:
             return None, "missing " + k
@@ -94,12 +122,13 @@ def validate_cmd(obj):
     for k in ("vx", "vy", "wz"):
         if not _is_num(obj[k]):
             return None, "bad " + k
+    fwd, bwd, vy, wz = caps
     return {
         "seq": obj["seq"] & 0xFFFFFFFF, "mode_req": obj["mode_req"], "m5_preset": obj["m5_preset"],
         "m5_press_seq": obj["m5_press_seq"] & 0xFFFFFFFF,
-        "vx": gui_shm.clamp(float(obj["vx"]), -gui_shm.VXCAP_BWD, gui_shm.VXCAP),
-        "vy": gui_shm.clamp(float(obj["vy"]), -gui_shm.VYCAP, gui_shm.VYCAP),
-        "wz": gui_shm.clamp(float(obj["wz"]), -gui_shm.WCAP, gui_shm.WCAP),
+        "vx": gui_shm.clamp(float(obj["vx"]), -bwd, fwd),
+        "vy": gui_shm.clamp(float(obj["vy"]), -vy, vy),
+        "wz": gui_shm.clamp(float(obj["wz"]), -wz, wz),
     }, None
 
 
@@ -162,9 +191,10 @@ def _clean(v):
 
 class Relay:
     def __init__(self, bind="127.0.0.1", port=8710, gui_shm=gui_shm.SHM_PATH, status_shm=status_shm.SHM_PATH,
-                 logger_url="ws://127.0.0.1:8700"):
+                 logger_url="ws://127.0.0.1:8700", caps=REAL_CAPS):
         self.bind, self.port = bind, port
         self.gui_path, self.status_path, self.logger_url = gui_shm, status_shm, logger_url
+        self.caps = check_caps(caps)            # 학습 상한을 넘으면 여기서 ValueError — 조용히 넓히지 않는다
         self.clients = set()
         self.controller = None
         self.intent = Intent()
@@ -191,6 +221,7 @@ class Relay:
         self.port = self._server.sockets[0].getsockname()[1]
         log.info("listening ws://%s:%d  gui=%s status=%s logger=%s", self.bind, self.port, self.gui_path,
                  self.status_path, self.logger_url)
+        log.info("%s", caps_line(self.caps))
         self._tasks = [asyncio.ensure_future(self._tick_loop()), asyncio.ensure_future(self._logger_loop())]
 
     async def stop(self):
@@ -298,7 +329,7 @@ class Relay:
                     c.viewer_cmd_logged = True
                     log.info("viewer cmd 무시 %s", c.name())
                 return
-            cmd, why = validate_cmd(obj)
+            cmd, why = validate_cmd(obj, self.caps)
             if cmd is None:
                 self._rl.warn("bad", "bad frame (%s) from %s" % (why, c.name()))
                 return
@@ -443,18 +474,31 @@ class Relay:
 _gui_mod = gui_shm
 
 
-def main(argv=None):
+def parse_args(argv=None):
+    """CLI → argparse 이름공간(+ a.caps = 검사한 실로봇 봉투). 학습 상한을 넘는 봉투는 사용 오류(종료 코드 2)."""
     ap = argparse.ArgumentParser(description="G1 아케이드 중계 (protocol_relay_v1)")
     ap.add_argument("--bind", default="127.0.0.1", help="로봇에선 --bind 192.168.3.2 를 명시")
     ap.add_argument("--port", type=int, default=8710)
     ap.add_argument("--gui-shm", default=gui_shm.SHM_PATH)
     ap.add_argument("--status-shm", default=status_shm.SHM_PATH)
     ap.add_argument("--logger", default="ws://127.0.0.1:8700")
+    caps_help = "실로봇 봉투(기본 켬) — 학습 상한(gui_shm.py)을 넘게는 못 준다. 기본 %s · 학습 상한 %s"
+    for name, dflt, hi in zip(CAP_NAMES, REAL_CAPS, TRAINING_CAPS):
+        ap.add_argument("--" + name, type=float, default=dflt, metavar="V", help=caps_help % (dflt, hi))
     a = ap.parse_args(argv)
+    try:
+        a.caps = check_caps((a.cap_vx_fwd, a.cap_vx_bwd, a.cap_vy, a.cap_wz))
+    except ValueError as e:
+        ap.error(str(e))
+    return a
+
+
+def main(argv=None):
+    a = parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [relay] %(message)s", stream=sys.stderr)
 
     async def amain():
-        relay = Relay(a.bind, a.port, a.gui_shm, a.status_shm, a.logger)
+        relay = Relay(a.bind, a.port, a.gui_shm, a.status_shm, a.logger, caps=a.caps)
         await relay.start()
         stop = asyncio.Event()
         loop = asyncio.get_event_loop()
