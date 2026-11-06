@@ -50,7 +50,7 @@ for t in test_height_estimator test_motion_preview test_safety_policy; do   # Ei
 done
 [ -f test_no_mode_ordinals.sh ] && { bash test_no_mode_ordinals.sh && echo "ok   no_mode_ordinals" || { echo "FAIL no_mode_ordinals"; fail=1; }; }
 # shm 바이트 배치(C++ 구조체 ↔ python FMT) + policy_slot push 게이트 + 헤드리스 도구의 t=0 판정 — 표준 라이브러리만 쓴다(uv 불필요)
-for t in test_gui_shm_layout test_status_shm_layout test_vr_shm_layout test_policy_slot_gate test_headless_pre_t0 test_masked_gui_posture_rows test_gui_clip_order; do
+for t in test_gui_shm_layout test_status_shm_layout test_arcade_shm_layout test_vr_shm_layout test_policy_slot_gate test_headless_pre_t0 test_masked_gui_posture_rows test_gui_clip_order; do
   [ -f $t.py ] && { python3 $t.py >"$OUT/$t.out" 2>&1 && echo "ok   $t" || { echo "FAIL $t"; tail -5 "$OUT/$t.out"; fail=1; }; }
 done
 
@@ -59,6 +59,11 @@ done
 #   시험 타깃 test_arcade_host 하나만 빌드한다(g1_ctrl 본체 · State_Mimic 은 빌드하지 않는다).
 #   G1_ARCADE_BUNDLE(없으면 <G1_ARCADE_DIR>/build/bundle_bt5 가 있을 때 그것) — 묶음이 없으면 시험이 «skip …» 한 줄을 찍고 통과.
 ARCADE_DIR="${G1_ARCADE_DIR:-$(cd .. && pwd)/third_party/g1_arcade}"
+# 아케이드 의도 칸(0x6707) 판정 · 아케이드 상태 칸(0x6708) seqlock/무할당 — 헤더 온리라 늘 돈다. core 헤더(types.h)가 있으면
+# Event 비트 대조까지(-DG1_HAVE_ARCADE), 없으면 그 대조만 skip. 릴리스 빌드와 같은 -O3 -DNDEBUG.
+ARCADE_SHM_FLAGS=()
+[ -f "$ARCADE_DIR/core/include/arcade/types.h" ] && ARCADE_SHM_FLAGS=(-DG1_HAVE_ARCADE -I"$ARCADE_DIR/core/include")
+[ -f test_arcade_shm.cpp ] && run test_arcade_shm -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include "${ARCADE_SHM_FLAGS[@]}" -pthread test_arcade_shm.cpp
 if [ -f "$ARCADE_DIR/core/CMakeLists.txt" ] && [ -f "$ARCADE_DIR/host/CMakeLists.txt" ]; then
   ARCADE_BUNDLE="${G1_ARCADE_BUNDLE:-}"
   [ -z "$ARCADE_BUNDLE" ] && [ -f "$ARCADE_DIR/build/bundle_bt5/manifest.json" ] && ARCADE_BUNDLE="$ARCADE_DIR/build/bundle_bt5"
