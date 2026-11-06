@@ -26,7 +26,7 @@
 struct ArcadeStatus {            // tools/arcade_status_shm.py FMT·FIELDS 와 같은 커밋으로만 바꾼다
     int32_t  magic;              // ARCADE_STATUS_MAGIC (쓰는 쪽이 매번 채운다)
     uint32_t seq;                // seqlock — 쓰는 중 홀수 (쓰는 쪽이 매번 채운다 · 넘긴 값은 무시)
-    uint32_t tick;               // 쓴 줄 수 — 정책 틱마다 +1
+    uint32_t tick;               // 호출부가 채운다(write 는 magic·seq 만) — 보통 정책 틱마다 +1
     int32_t  role;               // core role_names() 인덱스
     int32_t  skill;              // core skill_names() 인덱스
     int32_t  mode;

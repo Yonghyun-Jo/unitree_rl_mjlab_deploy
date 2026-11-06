@@ -103,7 +103,7 @@ def test_intent_write_read_roundtrip():
     try:
         p = os.path.join(d, "intent")
         assert m.read(p) is None                                          # 없음
-        m._state["seq"] = m._state["event_seq"] = 0
+        m._reset()
         m.write_intent(0.5, -0.25, 2.0, 1, 0, 0, path=p)                  # 2.0 → clamp 1.0
         a = m.read(p)
         assert a["fwd"] == 0.5 and a["side"] == -0.25 and a["turn"] == 1.0 and a["run"] == 1 and a["events"] == 0
@@ -119,12 +119,53 @@ def test_intent_write_read_roundtrip():
         m._state["seq"] = 0xFFFFFFFF                                      # uint32 감김
         m.write_intent(0, 0, 0, path=p)
         assert m.read(p)["seq"] == 0
+        m.write_intent(0, 0, 0, path=p)                                   # seq 0 을 지나도 끈적한 이벤트가 지워지지 않는다
+        assert m.read(p)["events"] == 17
         m.write_intent(float("nan"), 0, 0, path=p)
         assert m.read(p)["fwd"] == 0.0
+        m.write_intent(float("inf"), float("-inf"), 0.3, path=p)           # ±inf 는 ±1 이 아니라 0
+        r = m.read(p)
+        assert r["fwd"] == 0.0 and r["side"] == 0.0 and r["turn"] > 0.29
         Path(p).write_bytes(b"\0" * 35); assert m.read(p) is None         # 짧음
         Path(p).write_bytes(b"\0" * 37); assert m.read(p) is None         # 김
         Path(p).write_bytes(struct.pack(m.FMT, 0x6705, 1, 0, 0, 0, 0, 0, 0, 0)); assert m.read(p) is None   # 남의 magic
     finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_event_is_sticky_and_age_grows():
+    """(a) 이벤트 1 회 뒤 하트비트만 여러 번 써도 비트·event_seq 가 남고 age 만 는다. 새 이벤트는 event_seq +1. age 는 포화."""
+    import arcade_intent_shm as m
+    d = tempfile.mkdtemp(prefix="g1_arcade_intent_test_")
+    real = m._mono
+    try:
+        p = os.path.join(d, "intent")
+        clock = [1000.0]
+        m._mono = lambda: clock[0]
+        m._reset()
+        m.write_intent(0, 0, 0, 0, 0, 0, path=p)
+        r0 = m.read(p)
+        assert r0["events"] == 0 and r0["event_age_ms"] == 0
+        m.write_intent(0, 0, 0, 0, m.EV_JUMP, 30, path=p)                 # 이벤트 — 쓰는 쪽이 아는 나이 30 ms
+        r1 = m.read(p)
+        assert r1["events"] == 1 and r1["event_seq"] == (r0["event_seq"] + 1) & 0xFFFFFFFF and r1["event_age_ms"] == 30
+        ages = []
+        for _ in range(5):
+            clock[0] += 0.02
+            m.write_intent(0.5, 0, 0, 1, 0, 0, path=p)                    # 하트비트만
+            r = m.read(p)
+            assert r["events"] == 1 and r["event_seq"] == r1["event_seq"], "비트·event_seq 가 남는다"
+            assert r["seq"] == (r1["seq"] + len(ages) + 1) & 0xFFFFFFFF
+            ages.append(r["event_age_ms"])
+        assert ages == [50, 70, 90, 110, 130], ages
+        clock[0] += 0.02
+        m.write_intent(0, 0, 0, 0, m.EV_BOX, 0, path=p)                   # 새 이벤트
+        r2 = m.read(p)
+        assert r2["events"] == 16 and r2["event_seq"] == (r1["event_seq"] + 1) & 0xFFFFFFFF and r2["event_age_ms"] == 0
+        m.write_intent(0, 0, 0, 0, m.EV_JUMP, 1 << 40, path=p)            # 감지 말고 포화
+        assert m.read(p)["event_age_ms"] == 0xFFFFFFFF
+    finally:
+        m._mono = real
         shutil.rmtree(d, ignore_errors=True)
 
 
@@ -216,11 +257,16 @@ int main(int, char** argv) {
         exe = os.path.join(d, "r")
         subprocess.run([gxx, "-std=gnu++17", "-O2", "-I", str(G1 / "include"), prog, "-o", exe], check=True)
         p = os.path.join(d, "intent")
-        m._state["seq"] = m._state["event_seq"] = 0
+        m._reset()
+        m.write_intent(0.5, -0.25, 0.75, 1, m.EV_CRAWL, 40, path=p)
+        r = m.read(p)
+        m.write_intent(float("inf"), float("-inf"), float("nan"), 1, 0, 0, path=p)   # Python 쓰기 → C++ 읽기: 비유한 축은 0
+        out = subprocess.run([exe, p], check=True, capture_output=True, text=True).stdout.split()
+        assert out[2:5] == ["0.0000", "0.0000", "0.0000"], out
         m.write_intent(0.5, -0.25, 0.75, 1, m.EV_CRAWL, 40, path=p)
         r = m.read(p)
         out = subprocess.run([exe, p], check=True, capture_output=True, text=True).stdout.split()
-        assert out == [str(0x6707), str(r["seq"]), "0.5000", "-0.2500", "0.7500", "1", "2", str(r["event_seq"]), "40"], out
+        assert out[:8] == [str(0x6707), str(r["seq"]), "0.5000", "-0.2500", "0.7500", "1", "2", str(r["event_seq"])] and 40 <= int(out[8]) < 5000, out
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

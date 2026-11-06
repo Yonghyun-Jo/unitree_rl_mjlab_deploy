@@ -5,13 +5,17 @@
 
 write_intent(fwd, side, turn, run, events, event_age_ms) — 호출마다 seq(하트비트)를 +1, events 가 0 이 아니면 event_seq 도 +1.
   os.replace 로 통째 교체(찢긴 읽기 없음 · gui_shm.py 와 같은 방식). 값이 같아도 매번 쓴다(하트비트).
-  events = 이번 프레임에 «새로 눌린» 비트(EV_*) · event_age_ms = 쓰는 쪽이 아는 이벤트 나이(읽는 쪽이 500 ms 넘으면 버린다).
+  events = 마지막 이벤트 비트(EV_*, event_seq 와 짝) · event_age_ms = 쓰는 쪽이 아는 그 이벤트의 나이(읽는 쪽이 500 ms 넘으면 버린다).
+  «끈적한 이벤트»: 0 이 아닌 events 를 주면 새 이벤트(event_seq +1)다. 이후 events=0 으로 부르면 마지막 비트와 event_seq 를 그대로
+  다시 싣고 age 만 지금 시각으로 갱신한다(읽는 쪽이 이벤트 프레임을 놓쳐도 소실되지 않게 · 중복 적용은 event_seq 가 막는다).
+  age = 넘긴 event_age_ms + 그 이벤트를 쓴 뒤 흐른 시간(단조 시계 _mono).
 read(path) → magic 을 뺀 칸의 dict, 아니면 None(시험·점검용).
 
 python 3.8 문법만 쓴다(로봇 기본 python).
 """
 from __future__ import annotations
 
+import math
 import os
 import struct
 import time
@@ -26,12 +30,18 @@ EV_JUMP, EV_CRAWL, EV_GETUP, EV_LIE, EV_BOX = 1, 2, 4, 8, 16   # = core arcade::
 
 assert struct.calcsize(FMT) == SIZE and len(FIELDS) == len(FMT) - 1
 
-_state = {"seq": 0, "event_seq": 0}
+_state = {"seeded": False, "seq": 0, "event_seq": 0, "events": 0, "event_t": 0.0}
+_mono = time.monotonic          # 시험이 바꿔 끼운다
+
+
+def _reset() -> None:
+    """쓰기 상태를 처음으로(시험용) — 다음 write_intent 가 다시 시드한다."""
+    _state.update(seeded=False, seq=0, event_seq=0, events=0, event_t=0.0)
 
 
 def _clamp(x: float) -> float:
     x = float(x)
-    if x != x:
+    if not math.isfinite(x):          # NaN · ±inf = 0 (±1 로 바꾸지 않는다)
         return 0.0
     return max(-1.0, min(1.0, x))
 
@@ -39,15 +49,21 @@ def _clamp(x: float) -> float:
 def write_intent(fwd: float, side: float, turn: float, run: int = 0, events: int = 0,
                  event_age_ms: int = 0, path: Optional[str] = None) -> None:
     """프레임 하나를 원자 교체로 낸다. path 기본 = SHM_PATH(호출 때 읽는다 — 시험이 바꿔 끼운다)."""
-    if _state["seq"] == 0:                       # 쓰는 쪽을 다시 띄워도 이전 seq 와 겹치지 않게 시각으로 시드
+    if not _state["seeded"]:                     # 쓰는 쪽을 다시 띄워도 이전 seq 와 겹치지 않게 시각으로 시드
+        _state["seeded"] = True
         _state["seq"] = time.time_ns() & 0xFFFFFFFF
         _state["event_seq"] = (time.time_ns() >> 7) & 0xFFFFFFFF
+        _state["events"], _state["event_t"] = 0, 0.0
     _state["seq"] = (_state["seq"] + 1) & 0xFFFFFFFF
-    if int(events) != 0:
+    now = _mono()
+    if int(events) != 0:                         # 새 이벤트 — 끈적하게 다음 이벤트까지 싣는다
         _state["event_seq"] = (_state["event_seq"] + 1) & 0xFFFFFFFF
+        _state["events"] = int(events) & 0xFFFFFFFF
+        _state["event_t"] = now - max(0, int(event_age_ms)) / 1000.0
+    age = int(round(max(0.0, now - _state["event_t"]) * 1000.0)) if _state["events"] else 0
+    age = min(max(0, age), 0xFFFFFFFF)           # 포화(넘치면 struct.error 대신 최대값 = 낡음)
     buf = struct.pack(FMT, MAGIC, _state["seq"], _clamp(fwd), _clamp(side), _clamp(turn),
-                      1 if run else 0, int(events) & 0xFFFFFFFF, _state["event_seq"],
-                      max(0, int(event_age_ms)) & 0xFFFFFFFF)
+                      1 if run else 0, _state["events"], _state["event_seq"], age)
     dst = path if path is not None else SHM_PATH
     tmp = dst + ".tmp"
     with open(tmp, "wb") as f:

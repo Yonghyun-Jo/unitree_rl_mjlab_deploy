@@ -7,6 +7,9 @@
 // 헤더 온리 · 순수 C++17 · core 헤더를 include 하지 않는다(아케이드 없는 빌드에서도 시험이 돈다). Event 비트는 아래 상수로 두고
 // tests/test_arcade_shm.cpp 가 core 의 arcade::Event 와 같은지 대조한다(G1_HAVE_ARCADE 일 때만).
 //
+// 끈적한 이벤트: 쓰는 쪽(write_intent)이 마지막 비 0 events 와 그 event_seq 를 다음 이벤트까지 계속 싣고 event_age_ms 만 갱신한다 —
+//   읽는 쪽이 이벤트를 실은 프레임을 놓쳐도(50 Hz 읽기가 한 틱 늦으면) 소실되지 않는다. 중복 적용은 event_seq 가 막는다.
+//
 // poll_intent(frame, state) = 파일을 읽지 않는 순수 함수(무할당·무시스템콜). 파일 읽기는 read_intent_file 이 따로 한다
 // (GuiPoll 의 fopen/fread 와 같은 방식). 둘 다 정책 스레드에서 50 Hz.
 //
@@ -14,13 +17,17 @@
 //   · 끊김(stale): seq 가 INTENT_STALE_TICKS(15) 정책 틱 안 바뀌거나 파일이 없으면(frame == nullptr · magic 다름) 이동 0 · run 0 ·
 //     이벤트 버림. stale 중에 바뀐 event_seq 도 «먹은 것으로 치고» 버린다(이동 0 과 같은 원칙 — 되살아난 뒤 늦게 발동하지 않게).
 //   · 이벤트: event_seq 가 바뀐 틱에 한 번만. 그 틱의 event_age_ms > INTENT_EVENT_MAX_AGE_MS(500) 이면 버린다(바뀐 event_seq 는 소비).
-//     체류 시작(또는 처음 보는 프레임)의 event_seq 는 기준선만 잡는다 — 체류 전에 눌린 이벤트가 들어오며 재생되지 않게.
+//     체류 시작 뒤 첫 프레임은 «기준선만» — seq·event_seq 를 기록하고 하트비트로 치지 않는다(stale 카운터를 되돌리지 않는다:
+//     새 seq 가 와야 이동이 먹는다 · 첫 프레임의 event_seq 는 적용 안 함. GuiPoll.h gui_poll_begin_stay 와 같은 원칙).
 //   · 재무장(rearm): 체류 시작 · 끊김 뒤에는 세 축이 한 번 |·| < INTENT_NEUTRAL_EPS(0.05) 가 될 때까지 이동 0 · run 0.
 //     중립을 본 틱도 이동 0 이고 그 다음 틱부터 값이 먹는다. 비유한 축이 있는 프레임은 중립으로 치지 않는다.
 //   · 축은 [-1, 1] 로 clamp, 비유한은 0.
 #include <cmath>
 #include <cstdint>
-#include <cstdio>
+#include <cerrno>
+
+#include <fcntl.h>
+#include <unistd.h>
 
 #pragma pack(push, 1)
 struct ArcadeIntentFrame {       // tools/arcade_intent_shm.py FMT 와 같은 커밋으로만 바꾼다
@@ -28,9 +35,9 @@ struct ArcadeIntentFrame {       // tools/arcade_intent_shm.py FMT 와 같은 �
     uint32_t seq;                // 쓰는 쪽이 50 Hz 로 +1 (하트비트)
     float    fwd, side, turn;    // 이동 축 [-1, 1]
     int32_t  run;                // 0/1
-    uint32_t events;             // 이번 프레임에 새로 눌린 비트(INTENT_EV_*) = core Event
-    uint32_t event_seq;          // 이벤트가 실린 프레임마다 +1
-    uint32_t event_age_ms;       // 쓰는 쪽이 아는 이벤트 나이
+    uint32_t events;             // 마지막 이벤트 비트(INTENT_EV_* = core Event) — event_seq 와 짝. 다음 이벤트까지 계속 실린다(끈적한 이벤트)
+    uint32_t event_seq;          // 새 이벤트마다 +1 (읽는 쪽은 이것이 바뀐 틱에 한 번만 적용)
+    uint32_t event_age_ms;       // 쓰는 쪽이 아는 «그 이벤트의 나이» — 프레임마다 갱신
 };
 #pragma pack(pop)
 static_assert(sizeof(ArcadeIntentFrame) == 9 * 4, "ArcadeIntentFrame = arcade_intent_shm.FMT 9칸 36 바이트 (tests/test_arcade_shm_layout.py)");
@@ -75,7 +82,7 @@ inline IntentApply poll_intent(const ArcadeIntentFrame* f, IntentPollState& st) 
     const bool valid = f != nullptr && f->magic == ARCADE_INTENT_MAGIC;
     if (!valid) {
         if (st.stale_ticks < INTENT_STALE_TICKS) ++st.stale_ticks;
-    } else if (!st.have_frame || f->seq != st.last_seq) {
+    } else if (st.have_frame && f->seq != st.last_seq) {
         st.last_seq = f->seq;
         st.stale_ticks = 0;
     } else if (st.stale_ticks < INTENT_STALE_TICKS) {
@@ -86,6 +93,7 @@ inline IntentApply poll_intent(const ArcadeIntentFrame* f, IntentPollState& st) 
 
     if (valid) {
         const bool first = !st.have_frame;
+        if (first) st.last_seq = f->seq;                // 기준선 — 하트비트로 세지 않는다(위에서 stale_ticks 만 올랐다)
         const bool ev_changed = !first && f->event_seq != st.last_event_seq;
         st.have_frame = true;
         st.last_event_seq = f->event_seq;               // 적용·버림 모두 소비
@@ -106,15 +114,17 @@ inline IntentApply poll_intent(const ArcadeIntentFrame* f, IntentPollState& st) 
     return r;
 }
 
-// 파일 읽기(정책 스레드 선례 — GuiPoll 의 fopen/fread). 36 B 가 다 읽히고 magic 이 맞을 때만 true. 파일은 쓰는 쪽이 os.replace 로
-// 통째 바꾸므로 열린 파일은 한 프레임이다(찢김 없음).
+// 파일 읽기. 🔴 정책 틱의 시스템 콜 3 개(open · read · close) = 의도 칸 읽기의 예외다(기존 GuiPoll 의 파일 읽기 선례 —
+// 쓰는 쪽이 os.replace 로 파일을 통째 바꾸므로 mmap 한 번으로는 새 파일을 못 본다). stdio(fopen)는 glibc malloc·락을 타므로 쓰지 않는다:
+// 할당 0(tests/test_arcade_shm.cpp read_intent_file_allocates_nothing). 36 B 가 한 번에 다 읽히고 magic 이 맞을 때만 true —
+// 짧은 읽기 · EINTR · 열기 실패 = «프레임 없음»(호출부가 nullptr 로 poll_intent). 열린 파일은 한 프레임이다(찢김 없음).
 inline bool read_intent_file(const char* path, ArcadeIntentFrame& out) noexcept {
-    FILE* fp = std::fopen(path ? path : ARCADE_INTENT_PATH, "rb");
-    if (!fp) return false;
+    const int fd = ::open(path ? path : ARCADE_INTENT_PATH, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
     ArcadeIntentFrame g{};
-    const size_t n = std::fread(&g, 1, sizeof(g), fp);
-    std::fclose(fp);
-    if (n != sizeof(g) || g.magic != ARCADE_INTENT_MAGIC) return false;
+    const ssize_t n = ::read(fd, &g, sizeof(g));
+    ::close(fd);
+    if (n != static_cast<ssize_t>(sizeof(g)) || g.magic != ARCADE_INTENT_MAGIC) return false;
     out = g;
     return true;
 }

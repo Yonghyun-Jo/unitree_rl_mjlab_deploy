@@ -31,8 +31,13 @@ static void chk(bool ok, const char* what) {
 #endif
 static thread_local bool g_count_alloc = false;
 static std::atomic<long> g_allocs{0};
-void* operator new(std::size_t n) {
+// glibc 안쪽(fopen 의 FILE 등)의 malloc 도 세려고 malloc 자체를 가로챈다(operator new 는 malloc 을 부르므로 같이 센다).
+extern "C" void* __libc_malloc(std::size_t);
+extern "C" void* malloc(std::size_t n) {
     if (g_count_alloc) g_allocs.fetch_add(1, std::memory_order_relaxed);
+    return __libc_malloc(n);
+}
+void* operator new(std::size_t n) {
     if (void* p = std::malloc(n ? n : 1)) return p;
     throw std::bad_alloc();
 }
@@ -201,6 +206,69 @@ static void nonfinite_axis_is_zero() {
     chk(!r.rearmed && r.fwd == 0.f, "비유한 프레임으로 재무장되지 않는다");
 }
 
+
+// 끈적한 이벤트(F2): 쓰는 쪽이 같은 비트·event_seq 를 하트비트마다 싣고 age 만 는다. 읽는 쪽 규칙은 그대로.
+static void sticky_event_read_rules() {
+    // (b) 이벤트를 실은 첫 프레임을 건너뛰고 다음 프레임에서 처음 읽어도 정확히 한 번 적용
+    IntentPollState st; uint32_t seq = arm(st, 10);
+    ArcadeIntentFrame f = mk(++seq, 0, 0, 0, 0, 0, 5); poll_intent(&f, st);      // 기준선 event_seq 5
+    // (이벤트 프레임 mk(++seq, …, JUMP, 6, 0) 은 읽지 않고 건너뛴다)
+    ++seq;
+    f = mk(++seq, 0, 0, 0, 0, INTENT_EV_JUMP, 6, 20);                            // 같은 이벤트가 다음 프레임에도 실려 있다(age 20)
+    IntentApply r = poll_intent(&f, st);
+    chk(r.events == INTENT_EV_JUMP, "(b) 첫 프레임을 건너뛰어도 다음 프레임에서 한 번 적용");
+    // (c) 같은 event_seq 를 계속 읽어도 두 번 적용 안 됨
+    int applied = 0;
+    for (int i = 0; i < 20; ++i) { f.seq = ++seq; f.event_age_ms += 20; applied += poll_intent(&f, st).events != 0 ? 1 : 0; }
+    chk(applied == 0, "(c) 같은 event_seq 는 다시 안 먹는다");
+    // (d) 나이가 500 을 넘은 뒤 처음 읽으면 버림(그 뒤에도 안 터짐)
+    ArcadeIntentFrame g = mk(++seq, 0, 0, 0, 0, INTENT_EV_CRAWL, 7, 501);
+    r = poll_intent(&g, st);
+    chk(r.events == 0, "(d) 501 ms 가 된 뒤 처음 읽으면 버림");
+    g.seq = ++seq; g.event_age_ms = 520;
+    chk(poll_intent(&g, st).events == 0, "(d) 버린 뒤에도 안 터진다");
+}
+
+// F4: 체류 시작 리셋 뒤 첫 프레임은 기준선만 — 하트비트로 치지 않는다
+static void stay_start_first_frame_is_baseline() {
+    IntentPollState st; uint32_t seq = arm(st, 50);
+    ArcadeIntentFrame f = mk(++seq, 0.8f, 0, 0, 1, INTENT_EV_JUMP, 9, 10); poll_intent(&f, st);   // 끈적한 이벤트가 실린 채
+    reset_for_stay_start(st);
+    // 리셋 뒤 같은 seq 만 계속 온다(죽은 중계가 남긴 낡은 프레임) → 이동 0 · 이벤트 0 · 15 번째 poll 에서 stale
+    IntentApply r;
+    bool any_move = false, any_event = false;
+    for (int i = 1; i <= INTENT_STALE_TICKS; ++i) {
+        r = poll_intent(&f, st);
+        any_move = any_move || r.fwd != 0.f || r.run != 0;
+        any_event = any_event || r.events != 0;
+        chk(r.stale == (i >= INTENT_STALE_TICKS), "stale 은 리셋 뒤 15 번째 poll 에서");
+    }
+    chk(!any_move, "낡은 프레임이면 이동 0");
+    chk(!any_event, "끈적한 이벤트가 실린 채 리셋돼도 적용 안 됨");
+    // 새 seq 가 와야 (재무장 후) 이동
+    f = mk(++seq); r = poll_intent(&f, st);
+    chk(!r.stale && r.rearmed, "새 seq 중립 → 재무장");
+    f = mk(++seq, 0.5f, 0, 0, 1); r = poll_intent(&f, st);
+    chk(r.fwd == 0.5f, "새 seq 가 오면 이동");
+}
+
+static void read_intent_file_allocates_nothing() {
+    char dir[] = "/tmp/g1_arcade_shm_test_XXXXXX";
+    if (!mkdtemp(dir)) { chk(false, "mkdtemp"); return; }
+    const std::string p = std::string(dir) + "/intent";
+    ArcadeIntentFrame f = mk(1, 0.5f), out{};
+    FILE* fp = std::fopen(p.c_str(), "wb"); std::fwrite(&f, 1, sizeof f, fp); std::fclose(fp);
+    g_allocs.store(0); g_count_alloc = true;
+    bool ok = true;
+    for (int i = 0; i < 1000; ++i) ok = read_intent_file(p.c_str(), out) && ok;
+    g_count_alloc = false;
+    const long allocs = g_allocs.load();
+    chk(ok, "읽기 1000 회 성공");
+    chk(allocs == 0, "read_intent_file 1000 회 할당 0");
+    std::printf("  read_intent_file: 1000 회 할당 %ld\n", allocs);
+    std::remove(p.c_str()); ::rmdir(dir);
+}
+
 static void event_bits_match_core() {
 #ifdef G1_HAVE_ARCADE
     chk(INTENT_EV_JUMP == static_cast<uint32_t>(arcade::Event::Jump) && INTENT_EV_CRAWL == static_cast<uint32_t>(arcade::Event::Crawl) &&
@@ -301,7 +369,10 @@ int main() {
     stale_drops_event_seq();
     rearm_requires_neutral_after_stale_and_stay_start();
     nonfinite_axis_is_zero();
+    sticky_event_read_rules();
+    stay_start_first_frame_is_baseline();
     event_bits_match_core();
+    read_intent_file_allocates_nothing();
     read_intent_file_roundtrip();
     status_seqlock_never_torn();
     status_write_allocates_nothing();
