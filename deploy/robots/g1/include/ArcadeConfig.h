@@ -10,6 +10,7 @@
 //     · kArcadeRemoved 의 전이가 원본에 하나라도 없다 = config 가 바뀌었다(조용히 넘어가지 않는다 — 규칙을 다시 볼 것)
 //     · 지운 뒤 Passive 에서 닿는 상태(리모컨 · 키보드 전이)가 {Passive, FixStand, Mimic_Masked} 가 아니다
 //       (새 위험 전이 · 새 상태 — 또는 아케이드 진입 m 이 없어짐)
+//     · 닿는 Mimic 형 상태(Mimic_Masked)의 end_state 가 자기 이름이 아니다(없으면 기본 Velocity → 클립 길이 뒤 시간 초과 전이)
 //   남는 것: Passive(LT+up · f) · FixStand(LT+B · p · m) · Mimic_Masked(LT+B · p) 와 그 밖 모든 키(정책 · 클립 · 게인 · imu_cal …).
 //   시험 = tests/test_arcade_gate.cpp ④(실제 config.yaml 로 — 함수 결과 대조).
 // 헤더 온리 · yaml-cpp 만(core 헤더 없음 — 아케이드 없는 빌드에서도 시험이 돈다).
@@ -117,6 +118,21 @@ inline bool arcade_config_from(const YAML::Node& base, YAML::Node& out, std::str
     err = "위험 전이를 지운 뒤 Passive 에서 닿는 상태가 {Passive, FixStand, Mimic_Masked} 가 아니다: {" + g +
           "} — config.yaml 에 새 전이 · 상태가 생겼거나 진입(m)이 없어졌다";
     return false;
+  }
+  // 4) 닿는 상태 중 Mimic 형(FSM._.<이름>.type == Mimic)은 end_state 가 자기 이름이어야 한다.
+  //    State_Mimic 생성자는 end_state 가 없으면 기본값 "Velocity" 를 쓰고, 자기 이름이 아니면 클립 길이 뒤 그 상태로 가는
+  //    시간 초과 전이를 등록한다(State_Mimic.cpp end_state · registered_checks) — 전이 목록을 지워도 Velocity 로 빠질 수 있다.
+  const YAML::Node types = bfsm["_"];
+  for (const std::string& s : got) {
+    const YAML::Node ty = (types && types.IsMap() && types[s] && types[s].IsMap()) ? types[s]["type"] : YAML::Node();
+    if (!ty || !ty.IsScalar() || ty.Scalar() != "Mimic") continue;
+    const YAML::Node st = cfsm[s];
+    const YAML::Node es = (st && st.IsMap()) ? st["end_state"] : YAML::Node();
+    if (!es || !es.IsScalar() || es.Scalar() != s) {
+      err = "FSM." + s + ".end_state 가 «" + s + "» 가 아니다(" + (es && es.IsScalar() ? es.Scalar() : std::string("없음 → 기본 Velocity")) +
+            ") — 아케이드 체류가 클립 길이 뒤 그 상태로 빠진다";
+      return false;
+    }
   }
   if (removed) *removed = std::to_string(n_removed) + " 개: " + list;
   out = cfg;

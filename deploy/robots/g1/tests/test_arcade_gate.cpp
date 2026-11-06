@@ -423,6 +423,17 @@ static void arcade_config_from_drops_six_transitions() {
     chk(!ac::arcade_config_from(b3, out3, e3) && e3.find("Mimic_Dance1_subject3") != std::string::npos,
         "④ Passive 에서 닿는 새 상태(FixStand d → Mimic_Dance1_subject3) → 거부 + 그 이름");
   }
+  {  // 거부: Mimic_Masked end_state 없음(기본 Velocity) · 다른 상태 — 클립 길이 뒤 시간 초과로 빠진다
+    for (const char* bad : {"", "Velocity", "FixStand"}) {
+      YAML::Node b6 = YAML::Clone(before);
+      if (*bad) b6["FSM"]["Mimic_Masked"]["end_state"] = bad;
+      else b6["FSM"]["Mimic_Masked"].remove("end_state");
+      std::string e6;
+      YAML::Node out6 = YAML::Node(42);
+      chk(!ac::arcade_config_from(b6, out6, e6) && e6.find("Mimic_Masked.end_state") != std::string::npos && out6.IsScalar(),
+          (std::string("④ Mimic_Masked end_state «") + (*bad ? bad : "없음") + "» → 거부 + 이유 · out 그대로").c_str());
+    }
+  }
   {  // 거부: 아케이드 진입(m)이 없어짐
     YAML::Node b4 = YAML::Clone(before);
     b4["FSM"]["FixStand"]["keyboard_transitions"].remove("Mimic_Masked");
