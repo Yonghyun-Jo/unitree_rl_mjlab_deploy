@@ -135,8 +135,13 @@ void ArcadeHost::enter(const arcade::ObservableState& measured) {
   tick_ = 0;
   max_tick_us_ = 0;
   info_ = rt_->tick_info();
-  for (int i = 0; i < arcade::kNJ; ++i) qf_[i] = static_cast<float>(measured.q[i]);
-  q_des_.publish(qf_.data());
+  // 측정 q 에 비유한 값이 있으면 q_des 에 싣지 않는다(tick 과 같은 규칙 — 잠금은 이전 상태 유지, 첫 진입이면 아직 없음)
+  bool finite = true;
+  for (int i = 0; i < arcade::kNJ; ++i) {
+    qf_[i] = static_cast<float>(measured.q[i]);
+    finite = finite && std::isfinite(qf_[i]);
+  }
+  if (finite) q_des_.publish(qf_.data());
 }
 
 ArcadeHost::TickOut ArcadeHost::tick(const arcade::ObservableState& s, const arcade::Intent& in) noexcept {

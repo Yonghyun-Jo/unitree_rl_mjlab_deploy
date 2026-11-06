@@ -381,6 +381,47 @@ void prefills_measured_pose_before_first_tick(const Ctx& c, ArcadeHost& h) {
   chk(h.ticks() == 0, "② 다시 enter 뒤 틱 번호 0");
 }
 
+// ② 보강 — enter 는 Runtime 을 처음 상태로 되돌린다 · 비유한 측정 자세는 q_des 에 싣지 않는다
+void enter_resets_runtime_and_rejects_nonfinite(const Ctx& c) {
+  ArcadeHost h;
+  std::string err;
+  if (!h.open(c.bundle, err)) {
+    chk(false, "②b open");
+    return;
+  }
+  const ObservableState s = standing(c);
+  const Intent idle = move(0, false, false), jump = move(0, false, true);
+  const int v7 = index_of(h.skill_names(), "v7"), jump_skill = index_of(h.skill_names(), "jump_soft");
+  const int walk = index_of(h.role_names(), "walk");
+  h.enter(s);
+  for (int k = 0; k < 120; ++k) h.tick(s, k == 100 ? jump : idle);
+  const ArcadeHost::TickOut t = h.tick(s, idle);
+  chk(t.ok && t.info.skill == jump_skill, "②b 전제: Space 뒤 활성 꾸러미 = jump_soft");
+  h.enter(s);  // 재진입 — Runtime::reset() 이 role · skill · 경로를 처음으로
+  const arcade::TickInfo i = h.info();
+  chk(i.role == walk, "②b 재진입 뒤 role = walk(기본 role)");
+  chk(i.skill == v7, "②b 재진입 뒤 활성 꾸러미 = v7");
+  chk(i.route_step == -1, "②b 재진입 뒤 경로 없음(route_step = -1)");
+
+  // 비유한 측정 자세
+  ArcadeHost g;
+  chk(g.open(c.bundle, err), "②b 다시 open");
+  ObservableState bad = standing(c);
+  bad.q[5] = std::numeric_limits<double>::quiet_NaN();
+  g.enter(bad);
+  std::array<float, 29> q{};
+  chk(!g.read_q_des(q), "②b 비유한 q 로 첫 enter → read_q_des = false(싣지 않음)");
+  ObservableState good = standing(c);
+  for (int k = 0; k < 29; ++k) good.q[k] = c.default_q[k] + 0.03;
+  g.enter(good);
+  ObservableState inf = good;
+  inf.q[0] = std::numeric_limits<double>::infinity();
+  g.enter(inf);
+  bool kept = g.read_q_des(q);
+  for (int k = 0; k < 29; ++k) kept = kept && q[k] == static_cast<float>(good.q[k]);
+  chk(kept, "②b 비유한 q 로 다시 enter → 이전 q_des 유지");
+}
+
 // ── ③ ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 void tick_allocates_nothing(const Ctx& c, ArcadeHost& h) {
   if (!h.is_open()) {
@@ -699,10 +740,23 @@ void q_des_latch_never_tears() {
 int main() {
   Ctx c;
   // R-B6: 시험 시작에 프로세스 메모리를 잠근다(모델 적재보다 앞 — MCL_FUTURE 가 이후 매핑도). 성공했을 때만 폴트 0 을 단언.
-  c.mlock_ok = mlockall(MCL_CURRENT | MCL_FUTURE) == 0;
-  c.mlock_errno = c.mlock_ok ? 0 : errno;
-  std::printf("  · mlockall(MCL_CURRENT|MCL_FUTURE): %s\n",
-              c.mlock_ok ? "성공" : str("실패 errno=%d %s", c.mlock_errno, std::strerror(c.mlock_errno)).c_str());
+  // 한도가 모델·스레드 스택까지 못 덮으면 MCL_FUTURE 가 뒤 mmap/brk 를 실패시켜 혼란스러운 FAIL 이 된다 → 충분할 때만 시도.
+  constexpr rlim_t kMemlockNeed = rlim_t(1) << 30;  // 1 GiB
+  struct rlimit rl {};
+  const bool rl_ok = getrlimit(RLIMIT_MEMLOCK, &rl) == 0;
+  const bool enough = rl_ok && (rl.rlim_cur == RLIM_INFINITY || rl.rlim_cur >= kMemlockNeed);
+  if (enough) {
+    c.mlock_ok = mlockall(MCL_CURRENT | MCL_FUTURE) == 0;
+    c.mlock_errno = c.mlock_ok ? 0 : errno;
+    std::printf("  · mlockall(MCL_CURRENT|MCL_FUTURE): %s\n",
+                c.mlock_ok ? "성공" : str("실패 errno=%d %s", c.mlock_errno, std::strerror(c.mlock_errno)).c_str());
+  } else {
+    c.mlock_errno = rl_ok ? ENOMEM : errno;
+    if (rl_ok)
+      std::printf("  · memlock 한도 %llu — 잠금 생략, 폴트 단언 생략\n", static_cast<unsigned long long>(rl.rlim_cur));
+    else
+      std::printf("  · memlock 한도를 읽지 못함(errno=%d) — 잠금 생략, 폴트 단언 생략\n", errno);
+  }
 
   q_des_latch_never_tears();  // 묶음 없이도 돈다
   std::printf("%s q_des_latch_never_tears\n", fail ? "FAIL" : "ok  ");
@@ -729,6 +783,7 @@ int main() {
   const Case cases[] = {
       {"opens_bundle_and_warms_sessions", [&] { opens_bundle_and_warms_sessions(c, h); }},
       {"prefills_measured_pose_before_first_tick", [&] { prefills_measured_pose_before_first_tick(c, h); }},
+      {"enter_resets_runtime_and_rejects_nonfinite", [&] { enter_resets_runtime_and_rejects_nonfinite(c); }},
       {"tick_allocates_nothing", [&] { tick_allocates_nothing(c, h); }},
       {"first_jump_tick_within_budget", [&] { first_jump_tick_within_budget(c); }},
       {"kp_kd_match_slot", [&] { kp_kd_match_slot(c, h); }},
