@@ -63,14 +63,14 @@ class ArcadeLink {
   bool open(const OpenArgs& a, std::string& err, std::string& summary);
   // 체류 시작(FSM 스레드, 정책 스레드 전). 측정 자세 q 에 비유한 값이 있으면 false — 체류를 시작하지 않는다(refused() = true,
   // 호출부가 kp 0 · Passive). 그 밖엔 ArcadeHost::enter(측정) · 의도 칸 체류 시작 리셋 · 직전 q 칸 = 측정 q · 상태 칸 틱 0.
-  bool enter(const ArcadeSense& measured);
+  bool enter(const ArcadeSense& measured, const float* default_q);   // default_q = 슬롯 default_joint_pos(29) — 거부 때 직전 q 의 비유한 칸을 채운다
   bool refused() const noexcept { return refused_.load(std::memory_order_relaxed); }
 
   Tick tick(const ArcadeSense& s) noexcept;                     // 정책 스레드
   arcade_gate::CoreSafety core_safety() const noexcept;         // 정책 스레드 — 마지막 tick(enter 직후엔 reset 뒤) 기준
   // 정책 스레드 — 이 틱 아케이드 상태 칸 한 줄(원자 저장 22 개). qd_warn · qd_crit = g1_ctrl 안전층 래치(실제 처분이 보는 값).
   void write_status(const Tick& t, int fsm_state, float tilt_deg, bool qd_warn, bool qd_crit) noexcept;
-  std::vector<float> run_q_des();                               // 1 kHz FSM 스레드
+  void run_q_des(std::array<float, 29>& out);                   // 1 kHz FSM 스레드 — 할당 0(호출부 버퍼에 복사)
 
   const ArcadeHost& host() const noexcept { return host_; }
 

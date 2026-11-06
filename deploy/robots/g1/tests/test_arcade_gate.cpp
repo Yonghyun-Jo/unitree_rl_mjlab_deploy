@@ -266,6 +266,15 @@ static void small_rules() {
   chk(!ag::mlock_worth_trying(false, 900 * MB, 500 * MB), "③ memlock < 2×RSS → 생략");
   chk(!ag::mlock_worth_trying(false, 64 * 1024, 500 * MB), "③ memlock 64 KB → 생략");
   chk(!ag::mlock_worth_trying(false, 2000 * MB, 0), "③ RSS 를 못 읽음 → 생략");
+  {  // F1: 거부 때 직전 q — 유한 칸 = 측정값 · 비유한 칸 = default
+    float qm[29], qd[29], out[29];
+    for (int i = 0; i < 29; ++i) { qm[i] = 0.1f * i + 0.05f; qd[i] = -1.f - i; out[i] = 777.f; }
+    qm[3] = std::nanf(""); qm[28] = INFINITY;
+    ag::refusal_fallback_q(qm, qd, out);
+    bool ok = out[3] == qd[3] && out[28] == qd[28];
+    for (int i = 0; i < 29; ++i) if (i != 3 && i != 28) ok = ok && out[i] == qm[i];
+    chk(ok, "F1 refusal_fallback_q: 비유한 칸 → default · 유한 칸 → 측정값");
+  }
 }
 
 // ── ④ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -461,10 +470,18 @@ static void arcade_link_tick_allocates_nothing() {
 
   g1::ArcadeSense bad = s;
   bad.q[7] = std::nanf("");
-  chk(!link.enter(bad) && link.refused(), "⑤ 측정 자세 비유한 → enter 거부(refused)");
-  chk(link.enter(s) && !link.refused(), "⑤ 유효 측정 → enter");
-  const std::vector<float> q0 = link.run_q_des();
-  bool same_q = q0.size() == 29;
+  chk(!link.enter(bad, dq0.data()) && link.refused(), "⑤ 측정 자세 비유한 → enter 거부(refused)");
+  {
+    std::array<float, 29> qr;
+    link.run_q_des(qr);
+    bool ok = qr[7] == dq0[7];
+    for (int i = 0; i < 29; ++i) if (i != 7) ok = ok && qr[i] == s.q[i];
+    chk(ok, "F1 거부 뒤 run_q_des = 유한 칸 측정 · 비유한 칸 default(0 rad 아님)");
+  }
+  chk(link.enter(s, dq0.data()) && !link.refused(), "⑤ 유효 측정 → enter");
+  std::array<float, 29> q0;
+  link.run_q_des(q0);
+  bool same_q = true;
   for (int i = 0; same_q && i < 29; ++i) same_q = q0[i] == s.q[i];
   chk(same_q, "⑤ enter 직후 run_q_des = 측정 자세(첫 추론 전 0 rad 없음)");
 

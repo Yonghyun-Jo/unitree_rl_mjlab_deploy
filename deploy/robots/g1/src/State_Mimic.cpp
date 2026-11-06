@@ -1269,6 +1269,9 @@ void State_Mimic::mon_log_summary()
     spdlog::info("[Mimic_Masked] 체류 {:.1f}s, 최종 mode{}, 종료사유 {}",
                  dwell, g_mode.mode(), mon_exit_reason_ ? mon_exit_reason_ : "operator");
 #if G1_HAVE_ARCADE
+    if (g_arc_owner == this && g_arc->refused()) {   // 이번 체류는 측정 비유한으로 거부됨 — core 는 시작하지 않았다(지난 체류 값을 찍지 않는다)
+        spdlog::info("  arcade     : 이번 체류 거부됨(측정 관절각 비유한) — 정책 틱 0");
+    } else
     if (g_arc_owner == this) {   // 아케이드 경로 — 위 «최종 mode» 는 g1_ctrl 모드 표(안 씀). core 쪽 마지막 상태(정책 스레드 join 뒤라 읽어도 된다)
         const auto& roles = g_arc->host().role_names();
         const int r = g_arc->host().info().role;
@@ -1578,6 +1581,7 @@ void State_Mimic::enter()
 {
     // 계측(기본 꺼짐) — 게인을 싣기 «전» 에 열어 이 체류의 시작 시각(t_enter)을 잡는다.
 #if G1_HAVE_ARCADE
+    // 경고: 끈 빌드 오브젝트 바이트 동일을 위해 «if (…) x; else» + 바로 뒤 #endif 모양 그대로 — 이 사이에 줄을 넣지 말 것.
     if (g_arc_owner == this) obs_dump_on_ = false; else   // 아케이드 경로는 env->step 을 안 거친다(G1_OBS_CSV 는 생성자가 경고만)
 #endif
     obs_dump_on_ = obs_dump_enter_();
@@ -2188,7 +2192,17 @@ void State_Mimic::run()
     // 아케이드: core 가 쓴 q_des 잠금(읽기 실패 = 직전 q — 첫 값은 enter 의 측정 자세, 0 rad 를 내지 않는다). 블렌드 둘은 건너뛴다 —
     // core 가 arm/switch 블렌드를 이미 반영했다(이중 적용 금지). 아래 pos_clamp · NaN 홀드 · rate_limit · q 기록은 그대로.
     const bool arc = (g_arc_owner == this);
-    auto action = arc ? g_arc->run_q_des() : env->action_manager->processed_actions();
+    // 아케이드 = 스택 버퍼(할당 0). 끈 경로(processed_actions 복사)는 그대로 — 아래 뷰가 둘 다 받는다.
+    struct ActView {
+        float* p; size_t n;
+        float* data() const { return p; }
+        size_t size() const { return n; }
+        float& operator[](size_t i) const { return p[i]; }
+    };
+    std::array<float, 29> arc_q;
+    std::vector<float> off_q;
+    if (arc) g_arc->run_q_des(arc_q); else off_q = env->action_manager->processed_actions();
+    const ActView action = arc ? ActView{arc_q.data(), arc_q.size()} : ActView{off_q.data(), off_q.size()};
 #else
     auto action = env->action_manager->processed_actions();   // = raw*scale + offset (target q)
 #endif
@@ -2198,6 +2212,7 @@ void State_Mimic::run()
     // Interpolate toward default_joint_pos (= the action offset; joint_names=[.*] so action
     // index == robot joint index). arm_scale is 1.0 except during a mode1 transition.
 #if G1_HAVE_ARCADE
+    // 경고: 끈 빌드 바이트 동일을 위해 «if (!arc)» 바로 뒤 #endif 모양 그대로 — 이 사이에 줄을 넣지 말 것.
     if (!arc)
 #endif
     g_loco.apply_arm_blend(action.data(), env->robot->data.default_joint_pos.data(),
@@ -2206,6 +2221,7 @@ void State_Mimic::run()
     // live action over the blend window so a mode change never sends a raw joint STEP to the
     // motors (which trips the onboard velocity/torque protection). No-op outside a switch.
 #if G1_HAVE_ARCADE
+    // 경고: 끈 빌드 바이트 동일을 위해 «if (!arc)» 바로 뒤 #endif 모양 그대로 — 이 사이에 줄을 넣지 말 것.
     if (!arc)
 #endif
     g_loco.apply_switch_blend(action.data(), static_cast<int>(action.size()));
@@ -2318,7 +2334,7 @@ bool State_Mimic::arcade_enter_()
 {
     g1::ArcadeSense m;
     g1::sense_of(env->robot->data, m);
-    if (g_arc->enter(m)) {
+    if (g_arc->enter(m, env->robot->data.default_joint_pos.data())) {
         const auto& roles = g_arc->host().role_names();
         const int r = g_arc->host().info().role;
         spdlog::info("[arcade] 체류 시작 — role {} · q_des = 측정 자세 · 의도 칸 기준선(재무장 = 축 중립 한 번)",

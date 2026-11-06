@@ -22,6 +22,7 @@
 #include "ModeTable.h"
 #include "SafetyPolicy.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 
@@ -85,6 +86,12 @@ inline bool ids_identity(const V& m) {
   for (int i = 0; i < 29; ++i)
     if (static_cast<double>(m[i]) != static_cast<double>(i)) return false;
   return true;
+}
+
+// 측정 자세를 거부할 때(비유한 칸이 있다) 1 kHz «직전 q» 를 채우는 값: 유한한 칸 = 측정값, 비유한 칸 = 슬롯 default_joint_pos.
+// kp 0 상태로 한 틱 나가더라도 0 rad 가 아니다(F1).
+inline void refusal_fallback_q(const float* q_meas, const float* q_default, float* out) {
+  for (int i = 0; i < 29; ++i) out[i] = std::isfinite(q_meas[i]) ? q_meas[i] : q_default[i];
 }
 
 // mlockall(MCL_CURRENT) 을 시도할 만한가(R-B7): memlock 한도(soft)가 무한이거나 지금 RSS 의 2 배 이상일 때만. MCL_FUTURE 는 쓰지

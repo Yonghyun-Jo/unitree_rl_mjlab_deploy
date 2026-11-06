@@ -59,11 +59,14 @@ bool ArcadeLink::open(const OpenArgs& a, std::string& err, std::string& summary)
   return true;
 }
 
-bool ArcadeLink::enter(const ArcadeSense& m) {
+bool ArcadeLink::enter(const ArcadeSense& m, const float* default_q) {
   bool finite = true;
   for (int i = 0; i < 29; ++i) finite = finite && std::isfinite(m.q[i]);
   refused_.store(!finite, std::memory_order_relaxed);
-  if (!finite) return false;  // 직전 q 칸 · 잠금은 그대로(ArcadeHost::enter 도 비유한 측정은 싣지 않는다) — 호출부가 Passive
+  if (!finite) {  // 잠금은 그대로(ArcadeHost::enter 도 비유한 측정은 싣지 않는다) — 호출부가 Passive. 직전 q = 유한 칸은 측정, 아니면 default
+    arcade_gate::refusal_fallback_q(m.q.data(), default_q, q_last_.data());
+    return false;
+  }
   arcade::ObservableState s;
   for (int i = 0; i < 4; ++i) s.quat_wxyz[i] = static_cast<double>(m.quat_wxyz[i]);
   for (int i = 0; i < 3; ++i) s.gyro[i] = static_cast<double>(m.gyro[i]);
@@ -121,10 +124,28 @@ void ArcadeLink::write_status(const Tick& t, int fsm_state, float tilt_deg, bool
   arcade_status::ArcadeStatusWriter::shared().write(arcade_status_frame(t, status_tick_, fsm_state, tilt_deg, qd_warn, qd_crit));
 }
 
-std::vector<float> ArcadeLink::run_q_des() {
+void ArcadeLink::run_q_des(std::array<float, 29>& out) {
   std::array<float, 29> q;
   if (host_.read_q_des(q)) q_last_ = q;  // 실패(첫 기록 전 · 읽기 4 번 엇갈림) = 직전 q 그대로
-  return std::vector<float>(q_last_.begin(), q_last_.end());
+  out = q_last_;
+}
+
+// /proc/self/status 의 VmSize · VmRSS · VmLck [kB] — 못 읽으면 -1. (잠근 양을 로봇에서 실제로 보려고)
+static std::string vm_tail() {
+  long sz = -1, rss = -1, lck = -1;
+  if (std::FILE* f = std::fopen("/proc/self/status", "r")) {
+    char line[256];
+    while (std::fgets(line, sizeof(line), f)) {
+      long v;
+      if (std::sscanf(line, "VmSize: %ld kB", &v) == 1) sz = v;
+      else if (std::sscanf(line, "VmRSS: %ld kB", &v) == 1) rss = v;
+      else if (std::sscanf(line, "VmLck: %ld kB", &v) == 1) lck = v;
+    }
+    std::fclose(f);
+  }
+  char b[120];
+  std::snprintf(b, sizeof(b), " · VmSize %.1f MB · VmRSS %.1f MB · VmLck %.1f MB", sz / 1024.0, rss / 1024.0, lck / 1024.0);
+  return b;
 }
 
 std::string arcade_try_mlock_current() {
@@ -142,19 +163,19 @@ std::string arcade_try_mlock_current() {
   char lim[48];
   if (unlimited) std::snprintf(lim, sizeof(lim), "unlimited");
   else std::snprintf(lim, sizeof(lim), "%.1f MB", soft / 1048576.0);
-  char buf[200];
+  char buf[320];
   if (!arcade_gate::mlock_worth_trying(unlimited, soft, rss)) {
     std::snprintf(buf, sizeof(buf), "skip (memlock %s < 2×RSS %.1f MB — 잠그지 않는다)", lim, rss / 1048576.0);
-    return buf;
+    return std::string(buf) + vm_tail();
   }
   if (mlockall(MCL_CURRENT) != 0) {
     const int e = errno;
     std::snprintf(buf, sizeof(buf), "fail errno=%d %s (RSS %.1f MB · memlock %s) — 잠그지 않고 계속", e, std::strerror(e),
                   rss / 1048576.0, lim);
-    return buf;
+    return std::string(buf) + vm_tail();
   }
   std::snprintf(buf, sizeof(buf), "ok (MCL_CURRENT · RSS %.1f MB · memlock %s · MCL_FUTURE 안 씀)", rss / 1048576.0, lim);
-  return buf;
+  return std::string(buf) + vm_tail();  // 잠근 뒤라 VmLck 가 실제 잠긴 양
 }
 
 }  // namespace g1

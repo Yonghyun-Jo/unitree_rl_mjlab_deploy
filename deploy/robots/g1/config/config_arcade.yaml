@@ -98,7 +98,7 @@ FSM:
     time_end: 1000.0
 
 
-  Mimic_Masked:        # masked flow student. keyboard: 1~4=mode(표 = include/ModeTable.h), [ ]=클립 선택(재생 중엔 거부), WASD/QE=vel, p=stop.
+  Mimic_Masked:        # masked flow student. (원본 config.yaml 의 광고 «1~4=mode · [ ]=클립 · WASD/QE=vel» 은 아케이드 경로에서 정책에 안 닿는다 — 의도 칸만. 쓰는 전이 키 = p(Passive) · f · m.)
     transitions:
       Passive: LT + B.on_pressed
     keyboard_transitions:   # p=passive(stop) — 아케이드: v(velocity) 없음. 이동·모드·자세 키는 정책에 안 닿는다(의도 칸만)
