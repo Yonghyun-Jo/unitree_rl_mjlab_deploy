@@ -14,6 +14,8 @@ import time
 
 SHM_PATH = "/dev/shm/g1_masked_gui"
 MAGIC = 0x6704          # v2 (2026-09-22). v1 = 0x6701 — C++ 가 거부한다(옛 GUI 가 새 제어기를 조종하지 않게).
+MAGIC_GUI_RELAY = 0x6705  # 중계 전용(로봇 위 relay): 같은 48 B, 50 Hz 로 값이 같아도 seq 를 올린다(하트비트).
+#   C++ 는 이 프레임이 0.3 s(15 정책 틱) 끊기면 속도를 0 으로 하고, 보행 파라미터·clip_req 는 무시한다.
 #   채널마다 magic 이 다르다: 0x6702 = vr(teleop/vr_shm.py) · 0x6703 = estop(teleop/estop_shm.py).
 #   «잘못된 파일을 읽었다» 를 거르는 마지막 방벽이므로 겹치게 두지 않는다(tests/test_gui_shm_layout.py).
 # <  little-endian, packed.
@@ -38,9 +40,10 @@ def clamp(x: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, x))
 
 
-def write(state: dict) -> None:
+def write(state: dict, magic: int = MAGIC) -> None:
     """Atomically publish the control struct. 필수 키: seq, vx, vy, wz, period_steps, height_scale, turn_k.
     선택 키: mode_req(0), m5_preset(0), m5_press_seq(0), clip_req(−1). Increments state['seq'].
+    magic: 기본 0x6704(GUI·PICO·replay 그대로). 중계는 MAGIC_GUI_RELAY(0x6705).
     1회성 칸(mode_req · m5_preset · clip_req)은 보낸 뒤 «요청 없음» 으로 되돌린다. seq·m5_press_seq 는
     구조체 칸이 uint32 라 32 bit 에서 감는다(struct 'I' 는 넘치면 예외를 던진다).
     seq 가 0 이면(쓰는 쪽의 첫 쓰기) 시각(ns)으로 시드한다 — 쓰는 쪽 셋(GUI·PICO 브리지·replay_cmd)이 모두
@@ -48,7 +51,7 @@ def write(state: dict) -> None:
     if int(state["seq"]) == 0:
         state["seq"] = time.time_ns() & 0xFFFFFFFF
     state["seq"] = (int(state["seq"]) + 1) & 0xFFFFFFFF
-    buf = struct.pack(FMT, MAGIC, state["seq"], int(state.get("mode_req", 0)),
+    buf = struct.pack(FMT, int(magic), state["seq"], int(state.get("mode_req", 0)),
                       state["vx"], state["vy"], state["wz"],
                       state["period_steps"], state["height_scale"], state["turn_k"],
                       int(state.get("m5_preset", 0)), int(state.get("m5_press_seq", 0)) & 0xFFFFFFFF,

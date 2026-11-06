@@ -10,6 +10,7 @@
 #include "MotionPreview.h"
 #include "SafetyPolicy.h"           // 넘어짐·qd_warn 을 표의 안전 등급 + 명령·자세로 가른다
 #include "CmdSlew.h"
+#include "GuiPoll.h"               // GuiCtrl 구조체 + 프레임 판정(0x6704 v2 · 0x6705 중계)
 #include "LimbLut.h"                // mode6 사지 높이 명령 (학습 limb_lut 1:1, gen_limb_lut_header.py)                // base_vel 명령 필터 = 선형 slew 1.5 (유일한 필터)
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
@@ -268,30 +269,12 @@ static inline float clamp_vx(float v) { return std::clamp(v, -VX_MAX_BWD, VX_MAX
 // A Python viser GUI (deploy/robots/g1/tools/masked_gui.py) writes this packed struct to
 // /dev/shm/g1_masked_gui; g_poll_gui() reads it each step and overrides mode / base_vel /
 // foot-gen params. Optional: if the file is absent, keyboard + joystick drive everything.
-#pragma pack(push, 1)
-struct GuiCtrl {                 // v2 (2026-09-22). tools/gui_shm.py FMT 와 같은 커밋으로만 바꾼다
-    int32_t  magic;              // GUI_CTRL_MAGIC
-    uint32_t seq;                // GUI 가 바꿀 때마다 +1 (에지 적용)
-    int32_t  mode_req;           // 0 = 요청 없음(1회성). 1.. = 표의 모드 (슬롯 지원·이탈 조건은 ModeRuntime)
-    float    vx, vy, wz;         // base_vel 명령 (배포 상한은 아래에서 한 번 더)
-    int32_t  period_steps;       // foot-gen gait period
-    float    height_scale;       // foot-gen swing-height multiplier
-    float    turn_k;             // foot-gen |wz|->step gain
-    int32_t  m5_preset;          // 0 = 없음, 1..N = Mode5Presets.h PRESETS[i-1]
-    uint32_t m5_press_seq;       // 누를 때마다 +1 (같은 자세 재입력 = 새 목표)
-    int32_t  clip_req;           // −1 = 그대로, 0.. = 고를 클립 (재생 중이면 거부). 1회성
-};
-#pragma pack(pop)
-static_assert(sizeof(GuiCtrl) == 12 * 4, "GuiCtrl = gui_shm.FMT 12칸 48 바이트 (tests/test_gui_shm_layout.py)");
-static constexpr int32_t GUI_CTRL_MAGIC = 0x6704;      // 0x6701 gui v1 · 0x6702 vr · 0x6703 estop 과 겹치지 않게
-static constexpr int32_t GUI_CTRL_MAGIC_V1 = 0x6701;   // 옛 형식 — 읽지 않는다(한 번 알린다)
-static uint32_t g_gui_last_seq = 0;
-static uint32_t g_gui_last_m5_seq = 0;                   // 자세가 실린 프레임만 옮긴다(PICO·replay 는 자세 칸이 0)
-// 체류(Mimic 진입)마다 한 번 «기준선 다시 잡기». enter() 가 세우고, 그 체류의 첫 g_poll_gui 가 내린다.
+// GuiCtrl 구조체·magic·프레임 판정은 include/GuiPoll.h (순수 함수 · tests/test_gui_poll.cpp).
+// 체류(Mimic 진입)마다 한 번 «기준선 다시 잡기». enter() 가 g_gui_poll.rebase 를 세우고, 그 체류의 첫 g_poll_gui 가 내린다.
 //   파일이 있으면(유효한 v2) seq·자세 seq 를 기준으로만 잡고 **아무것도 적용하지 않는다** — Mimic 밖
 //   (Passive·FixStand·지난 세션)에서 눌린 모드·자세·클립·속도가 p→f→m 뒤 첫 틱에 발동하지 않게.
 //   파일이 없으면 플래그만 내린다 → 그 체류의 첫 실제 쓰기는 그대로 먹는다.
-static bool g_gui_rebase = true;
+static GuiPollState g_gui_poll;
 
 // 조작자의 모드 요청이 들어오는 유일한 문. 거부되면 이유를 한 줄 남긴다(같은 모드 재요청은 조용히 통과).
 // ⚠ GUI·VR 은 50 Hz 로 들어온다 — 같은 거부를 매 틱 찍으면 정책 스레드에서 초당 50번 I/O 다.
@@ -356,31 +339,33 @@ static void g_select_clip(int id, const char* src) {
 
 static void g_poll_gui()
 {
+    // 파일 읽기는 그대로 — 판정(기준선·seq·NaN·끊김·0x6704/0x6705 구분)은 GuiPoll.h poll_gui_frame 이 한다.
     FILE* f = std::fopen("/dev/shm/g1_masked_gui", "rb");
-    if (!f) { g_gui_rebase = false; return; }                         // 기준선 없음 → 첫 실제 쓰기가 먹는다
     GuiCtrl g{};
-    const size_t n = std::fread(&g, 1, sizeof(g), f);
-    std::fclose(f);
-    // 쓰는 쪽(gui_shm.write)은 os.replace 로 파일을 통째로 바꾼다 — 찢긴 읽기가 없으니, v2 모양이 아닌 파일은
-    // «남의 파일(옛 GUI 등)» 이다. 그때 이 체류의 기준선은 «없음» 으로 끝낸다 → 이 체류의 첫 v2 쓰기는 그대로 먹는다.
+    size_t n = 0;
+    if (f) { n = std::fread(&g, 1, sizeof(g), f); std::fclose(f); }
+    // 쓰는 쪽(gui_shm.write)은 os.replace 로 파일을 통째로 바꾼다 — 찢긴 읽기가 없으니, 규격 모양이 아닌 파일은
+    // «남의 파일(옛 GUI 등)» 이다. 그때 이 체류의 기준선은 «없음» 으로 끝낸다 → 이 체류의 첫 쓰기는 그대로 먹는다.
     // (기준선을 계속 미루면 옛 0x6701 파일이 남은 채 새 v2 PICO 브리지를 띄웠을 때 그 첫 누름이 기준선으로 삼켜졌다
     //  — 최종 검토 M-14.)
-    if (n >= sizeof(int32_t) && g.magic == GUI_CTRL_MAGIC_V1) {
+    if (f && n >= sizeof(int32_t) && g.magic == GUI_CTRL_MAGIC_V1) {
         static bool warned = false;
         if (!warned) { warned = true; spdlog::warn("[gui] 옛 형식(0x6701) — 무시한다. tools/gui_shm.py 를 이 브랜치 것으로 (GUI·PICO 브리지 재시작)"); }
-        g_gui_rebase = false;
+    }
+    const GuiApply a = poll_gui_frame((f && n == sizeof(g)) ? &g : nullptr, g_gui_poll);
+    if (a.zero_vel) {
+        // 중계(0x6705) 하트비트가 0.3 s 끊김 — GUI 속도 전역만 0. 모드 요청·다른 상태는 건드리지 않는다
+        // (G1 리모컨 조이스틱은 지금처럼 그 위에 더해진다).
+        g_kb_vx = 0.0f; g_kb_vy = 0.0f; g_kb_wz = 0.0f;
+        printf("\r\n[gui relay stale] velocity zeroed\r\n");
+        fflush(stdout);
         return;
     }
-    if (n != sizeof(g) || g.magic != GUI_CTRL_MAGIC) { g_gui_rebase = false; return; }
-    if (g_gui_rebase) {
+    if (a.rebased) {
         // 1회성 요청도 파일에는 «마지막 쓰기» 로 남는다 — 그대로 먹으면 Mimic 밖에서 누른 «5» 가 m 직후
         // 재생된다(서 있던 로봇이 드러눕는다). 속도·foot-gen 도 적용하지 않는다: 체류마다 다시 잡으므로
         // 적용하면 키보드로 멈춘(space) 뒤 p→f→m 할 때 GUI 에 남은 옛 속도로 걷기 시작한다.
-        // 비유한 값이 든 프레임이어도 똑같이 기준으로만 삼킨다(아무것도 적용하지 않으니 값은 상관없다) — 전엔
-        // 비유한 거부 쪽이 먼저 돌아 자세 seq 기준을 안 잡은 채 기준선 단계를 끝냈다(최종 검토 M-14).
-        g_gui_rebase = false;
-        g_gui_last_seq = g.seq;
-        if (g.m5_preset != 0) g_gui_last_m5_seq = g.m5_press_seq;    // 자세 없는 프레임(PICO·replay)은 기준을 안 옮긴다
+        // 비유한 값이 든 프레임이어도 똑같이 기준으로만 삼킨다(아무것도 적용하지 않으니 값은 상관없다).
         printf("\r\n[gui] 진입 기준선 seq=%u — 파일에 남은 요청(mode_req=%d 자세=%d clip_req=%d)·속도는 적용하지 않는다. 다음 쓰기부터 먹는다\r\n",
                g.seq, g.mode_req, g.m5_preset, g.clip_req);
         fflush(stdout);
@@ -389,30 +374,24 @@ static void g_poll_gui()
     // 비유한(NaN·inf) 실수 칸이 하나라도 있으면 프레임을 통째로 버린다 — std::clamp 는 NaN 을 그대로 통과시켜
     // 속도 명령·발 생성기에 NaN 이 들어간다. seq 는 기준으로 삼아 같은 프레임을 매 틱 다시 읽지 않는다
     // (알림은 나쁜 프레임마다 한 번). 다음 정상 프레임은 그대로 먹는다.
-    if (!std::isfinite(g.vx) || !std::isfinite(g.vy) || !std::isfinite(g.wz) ||
-        !std::isfinite(g.turn_k) || !std::isfinite(g.height_scale)) {
-        if (g.seq != g_gui_last_seq) {
-            g_gui_last_seq = g.seq;
-            printf("\r\n[gui seq=%u] 거부: 비유한 값(vx=%g vy=%g wz=%g turn_k=%g height_scale=%g) — 프레임 통째로 무시\r\n",
-                   g.seq, g.vx, g.vy, g.wz, g.turn_k, g.height_scale);
-            fflush(stdout);
-        }
+    if (a.rejected_nonfinite) {
+        printf("\r\n[gui seq=%u] 거부: 비유한 값(vx=%g vy=%g wz=%g turn_k=%g height_scale=%g) — 프레임 통째로 무시\r\n",
+               g.seq, g.vx, g.vy, g.wz, g.turn_k, g.height_scale);
+        fflush(stdout);
         return;
     }
-    if (g.seq == g_gui_last_seq) return;
-    g_gui_last_seq = g.seq;
-    if (g.mode_req != 0) {
+    if (!a.apply) return;
+    if (a.mode_req != 0) {
         g_reject_last = G1_REJECT_NONE;   // v2 의 mode_req 는 사람이 누른 1회성 입력 → 거부도 매번 한 줄 (키보드와 같다)
-        g_request_mode_from_channel(g.mode_req, Channel::Gui, "gui");
+        g_request_mode_from_channel(a.mode_req, Channel::Gui, "gui");
     }
     // 자세가 실린 프레임만 누름으로 본다 — 자세 칸이 0 인 쓰는 쪽(PICO 브리지·replay_cmd)의 프레임이
     // 기준을 0 으로 옮기면, 다음 GUI 프레임이 GUI 의 마지막 자세(예: 드러누움)를 «다시 누름» 으로 만든다.
-    if (g.m5_preset != 0 && g.m5_press_seq != g_gui_last_m5_seq) {
-        g_gui_last_m5_seq = g.m5_press_seq;
+    if (a.m5_press) {
         // 범위는 뺄셈 «전» 에 본다 — m5_preset 은 남의 프로그램이 쓴 바이트라 INT_MIN 이면 −1 이 부호 넘침(UB)이다.
-        const int p = (g.m5_preset >= 1 && g.m5_preset <= m5::N_PRESETS) ? g.m5_preset - 1 : -1;
+        const int p = (a.m5_preset >= 1 && a.m5_preset <= m5::N_PRESETS) ? a.m5_preset - 1 : -1;
         if (p < 0) {
-            printf("\r\n[m5] gui: 없는 자세 %d\r\n", g.m5_preset);
+            printf("\r\n[m5] gui: 없는 자세 %d\r\n", a.m5_preset);
         } else if (m5::PRESETS[p].key == '\0') {
             // 키 없는 표 자세(베어 크롤·한쪽 낮춘 지지 L/R)는 운용자에게 아직 안 연다(Ruling 17 — 검증 뒤, B3).
             // GUI 는 그 버튼을 안 내지만 shm 은 남의 프로그램도 쓴다 — 제어기가 한 번 더 막는다(최종 검토 M-3).
@@ -425,11 +404,14 @@ static void g_poll_gui()
         }
         fflush(stdout);
     }
-    if (g.clip_req >= 0) g_select_clip(g.clip_req, "gui");
-    g_kb_vx = g.vx; g_kb_vy = g.vy; g_kb_wz = g.wz;                   // clamped in g_joystick_base_vel
-    if (g.period_steps > 0)  g_loco.period_steps = g.period_steps;
-    if (g.height_scale > 0)  g_loco.height_scale = g.height_scale;
-    g_loco.turn_k = g.turn_k;
+    if (a.clip_req >= 0) g_select_clip(a.clip_req, "gui");
+    if (a.set_vel) { g_kb_vx = a.vx; g_kb_vy = a.vy; g_kb_wz = a.wz; }   // clamped in g_joystick_base_vel
+    if (a.set_foot) {
+        if (a.period_steps > 0)  g_loco.period_steps = a.period_steps;
+        if (a.height_scale > 0)  g_loco.height_scale = a.height_scale;
+        g_loco.turn_k = a.turn_k;
+    }
+    if (!a.log_line) return;
     // verify commands land (printed once per GUI change, not per step): if mode flaps or
     // base_vel oscillates here, the GUI is fighting the keyboard/joystick.
     printf("\r\n[gui seq=%u] mode=%d base_vel=[%+.2f %+.2f %+.2f] foot{period=%d hscale=%.2f turnk=%.2f}\r\n",
@@ -1446,7 +1428,7 @@ static void od_m5_now(g1::ObsDumpRow& r)
 static void od_cmd_now(g1::ObsDumpRow& r)
 {
     r.kb[0] = g_kb_vx; r.kb[1] = g_kb_vy; r.kb[2] = g_kb_wz;
-    r.gui_seq = static_cast<int32_t>(g_gui_last_seq);
+    r.gui_seq = static_cast<int32_t>(g_gui_poll.last_seq);
     r.vr = (State_Mimic::motion && State_Mimic::motion->vr_override) ? 1 : 0;
 }
 
@@ -1596,7 +1578,7 @@ void State_Mimic::enter()
     g1::StateDump::shared().open_from_env("G1_STATE_CSV", GaitAux::header());
     std::remove("/dev/shm/g1_vr_ref");   // clear any stale VR ref so it can't hijack on entry
                                          // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
-    g_gui_rebase = true;                 // GUI 파일은 지우지 않는다(GUI 가 다시 안 쓸 수 있다) — 이 체류의 첫 poll 이
+    g_gui_poll.rebase = true; g_gui_poll.stale_ticks = 0; g_gui_poll.relay_seen = false;   // GUI 파일은 지우지 않는다(GUI 가 다시 안 쓸 수 있다) — 이 체류의 첫 poll 이
                                          // 기준선만 잡는다(g_poll_gui). 정책 스레드가 뜨기 전이라 경합 없음.
     // 🔴 모든 체류는 «멈춤» 으로 시작한다 — 속도 명령은 사람이 다시 준다. g_kb_* 는 체류를 넘어 남는데,
     //    Mimic 밖에서 쓴 «속도를 낮추는» 프레임(넘어져 Passive 인 동안 스틱을 놓음 vx=0 · FixStand 에서 GUI 정지)은

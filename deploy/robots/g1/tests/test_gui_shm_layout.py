@@ -18,12 +18,13 @@ _CH = {"int32_t": "i", "uint32_t": "I", "float": "f"}
 
 
 def _cpp_src() -> str:
-    return (G1 / "src/State_Mimic.cpp").read_text(encoding="utf-8")
+    # GuiCtrl 구조체·magic 은 GuiPoll.h 에 있다(State_Mimic.cpp 가 include).
+    return (G1 / "include/GuiPoll.h").read_text(encoding="utf-8")
 
 
 def _cpp_fmt() -> str:
     m = re.search(r"struct GuiCtrl\s*\{(.*?)\n\};", _cpp_src(), re.S)
-    assert m, "State_Mimic.cpp 에서 struct GuiCtrl 을 못 찾았다"
+    assert m, "GuiPoll.h 에서 struct GuiCtrl 을 못 찾았다"
     out = ""
     for line in m.group(1).splitlines():
         code = line.split("//")[0]
@@ -63,6 +64,40 @@ def test_magic_differs_from_other_channels():
     vr = int(mv.group(1), 16)
     assert gui_shm.MAGIC != estop, f"GUI magic {gui_shm.MAGIC:#x} == E-stop magic {estop:#x}"
     assert gui_shm.MAGIC != vr and gui_shm.MAGIC != 0x6702, f"GUI magic {gui_shm.MAGIC:#x} == VR magic"
+
+
+def test_relay_magic():
+    """0x6705 = 중계 전용. 같은 48 B 배치 · 다른 채널(v1 0x6701·VR 0x6702·estop 0x6703·v2 0x6704)과 겹치지 않는다."""
+    import gui_shm
+    m = re.search(r"MAGIC_GUI_RELAY\s*=\s*0x([0-9A-Fa-f]+)", _cpp_src())
+    assert m and int(m.group(1), 16) == gui_shm.MAGIC_GUI_RELAY == 0x6705
+    assert gui_shm.MAGIC_GUI_RELAY not in (0x6701, 0x6702, 0x6703, gui_shm.MAGIC)
+    estop_h = (G1.parent.parent / "include/FSM/EstopChannel.h").read_text(encoding="utf-8")
+    assert gui_shm.MAGIC_GUI_RELAY != int(re.search(r"ESTOP_MAGIC\s*=\s*0x([0-9A-Fa-f]+)", estop_h).group(1), 16)
+    vr_py = (G1 / "teleop/vr_shm.py").read_text(encoding="utf-8")
+    assert gui_shm.MAGIC_GUI_RELAY != int(re.search(r"^MAGIC\s*=\s*0x([0-9A-Fa-f]+)", vr_py, re.M).group(1), 16)
+
+
+def test_write_magic_argument():
+    """write(state) 의 기본 magic 은 0x6704(기존 쓰는 쪽 무변경). magic=0x6705 는 레이아웃은 같고 첫 칸만 다르다."""
+    import gui_shm
+    d = Path(tempfile.mkdtemp(prefix="g1_gui_shm_test_"))
+    real = gui_shm.SHM_PATH
+    try:
+        gui_shm.SHM_PATH = str(d / "g1_masked_gui_test")
+        mk = lambda: dict(seq=5, vx=0.5, vy=0.0, wz=0.1, period_steps=43, height_scale=1.0, turn_k=0.3, mode_req=2)
+        gui_shm.write(mk())
+        a = Path(gui_shm.SHM_PATH).read_bytes()
+        gui_shm.write(mk(), magic=gui_shm.MAGIC_GUI_RELAY)
+        b = Path(gui_shm.SHM_PATH).read_bytes()
+        assert len(a) == len(b) == 48
+        ra, rb = struct.unpack(gui_shm.FMT, a), struct.unpack(gui_shm.FMT, b)
+        assert ra[0] == 0x6704 and rb[0] == 0x6705
+        assert ra[1:] == rb[1:], "magic 말고는 같은 바이트"
+        assert gui_shm.write.__defaults__ == (gui_shm.MAGIC,)
+    finally:
+        gui_shm.SHM_PATH = real
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_write_is_one_shot(tmp_path=None):

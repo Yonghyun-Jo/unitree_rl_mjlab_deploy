@@ -1,0 +1,160 @@
+// GuiPoll.h 판정 시험. 실행: g++ -std=gnu++17 -O2 -Wall -Wextra -I../include test_gui_poll.cpp && ./a.out
+#include "GuiPoll.h"
+#include <cstdio>
+#include <cstring>
+#include <limits>
+#include <vector>
+
+static int g_fail = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); ++g_fail; } } while (0)
+
+static GuiCtrl mk(int32_t magic, uint32_t seq, float vx = 0, float vy = 0, float wz = 0) {
+    GuiCtrl g{};
+    g.magic = magic; g.seq = seq; g.vx = vx; g.vy = vy; g.wz = wz;
+    g.period_steps = 43; g.height_scale = 1.0f; g.turn_k = 0.3f; g.clip_req = -1;
+    return g;
+}
+
+// ── 기준: 이 변경 전 State_Mimic.cpp g_poll_gui 의 판정을 그대로 옮긴 것(파일 읽기·출력·모드 호출만 뺐다) ──
+struct Legacy {
+    uint32_t last_seq = 0, last_m5 = 0; bool rebase = true;
+    struct Out { bool apply=false; int mode_req=0; bool m5=false; int m5_preset=0; int clip=-1;
+                 float vx=0,vy=0,wz=0; int period=0; float hs=0, tk=0; bool rebased=false, nonfinite=false; };
+    Out poll(const GuiCtrl* fp) {
+        Out o;
+        if (!fp) { rebase = false; return o; }
+        const GuiCtrl& g = *fp;
+        if (g.magic != GUI_CTRL_MAGIC) { rebase = false; return o; }
+        if (rebase) {
+            rebase = false; last_seq = g.seq;
+            if (g.m5_preset != 0) last_m5 = g.m5_press_seq;
+            o.rebased = true; return o;
+        }
+        if (!std::isfinite(g.vx) || !std::isfinite(g.vy) || !std::isfinite(g.wz) ||
+            !std::isfinite(g.turn_k) || !std::isfinite(g.height_scale)) {
+            if (g.seq != last_seq) { last_seq = g.seq; o.nonfinite = true; }
+            return o;
+        }
+        if (g.seq == last_seq) return o;
+        last_seq = g.seq;
+        o.apply = true; o.mode_req = g.mode_req;
+        if (g.m5_preset != 0 && g.m5_press_seq != last_m5) { last_m5 = g.m5_press_seq; o.m5 = true; o.m5_preset = g.m5_preset; }
+        o.clip = g.clip_req;
+        o.vx = g.vx; o.vy = g.vy; o.wz = g.wz;
+        o.period = g.period_steps; o.hs = g.height_scale; o.tk = g.turn_k;
+        return o;
+    }
+};
+
+static void v2_frames_behave_as_before() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    std::vector<GuiCtrl> frames;
+    GuiCtrl a = mk(GUI_CTRL_MAGIC, 100, 0.5f, 0.1f, -0.2f); a.mode_req = 3; a.m5_preset = 4; a.m5_press_seq = 7; a.clip_req = 2;
+    GuiCtrl b = a; b.seq = 101; b.mode_req = 0; b.clip_req = -1;                 // 같은 자세 seq → 누름 아님
+    GuiCtrl c = a; c.seq = 102; c.m5_press_seq = 8; c.period_steps = 60; c.height_scale = 1.4f; c.turn_k = 0.5f;
+    GuiCtrl d = mk(GUI_CTRL_MAGIC, 103, nan, 0, 0);                              // NaN
+    GuiCtrl d2 = d;                                                              // 같은 seq NaN → 알림 없음
+    GuiCtrl e = mk(GUI_CTRL_MAGIC, 104, 0.3f);
+    GuiCtrl foreign = mk(0x6702, 105, 9, 9, 9);                                  // 남의 magic
+    GuiCtrl f2 = mk(GUI_CTRL_MAGIC, 106, 0.1f);
+    GuiCtrl pico = f2; pico.seq = 107; pico.m5_preset = 0; pico.m5_press_seq = 0;
+    // (nullptr 은 따로 끼운다)
+    std::vector<const GuiCtrl*> seq = {&a, &a, &b, &b, &c, &c, &d, &d2, &e, nullptr, &e, &foreign, &f2, &pico, &pico};
+    Legacy lg; GuiPollState st;
+    for (size_t i = 0; i < seq.size(); ++i) {
+        Legacy::Out o = lg.poll(seq[i]);
+        GuiApply r = poll_gui_frame(seq[i], st);
+        CHECK(r.apply == o.apply); CHECK(r.rebased == o.rebased); CHECK(r.rejected_nonfinite == o.nonfinite);
+        CHECK(st.last_seq == lg.last_seq); CHECK(st.last_m5_seq == lg.last_m5); CHECK(st.rebase == lg.rebase);
+        CHECK(!r.zero_vel);
+        if (o.apply) {
+            CHECK(r.mode_req == o.mode_req); CHECK(r.m5_press == o.m5);
+            if (o.m5) CHECK(r.m5_preset == o.m5_preset);
+            CHECK(r.clip_req == o.clip); CHECK(r.set_vel && r.set_foot);
+            CHECK(r.vx == o.vx && r.vy == o.vy && r.wz == o.wz);
+            CHECK(r.period_steps == o.period && r.height_scale == o.hs && r.turn_k == o.tk);
+            CHECK(r.log_line);                                                   // 0x6704 는 적용 프레임마다 로그
+        } else CHECK(!r.log_line);
+    }
+    // 명시 기대값: 첫 프레임은 기준선, seq 같으면 무시
+    GuiPollState s2; GuiApply r = poll_gui_frame(&a, s2); CHECK(!r.apply && r.rebased);
+    r = poll_gui_frame(&a, s2); CHECK(!r.apply);
+    r = poll_gui_frame(&c, s2); CHECK(r.apply && r.m5_press && r.m5_preset == 4 && r.period_steps == 60 && r.clip_req == 2);
+    // stale 판정 없음: seq 가 1000 틱 멈춰도 zero_vel 없음
+    for (int i = 0; i < 1000; ++i) { r = poll_gui_frame(&c, s2); CHECK(!r.zero_vel); }
+    for (int i = 0; i < 1000; ++i) { r = poll_gui_frame(nullptr, s2); CHECK(!r.zero_vel); }
+}
+
+static void relay_frames_apply_only_mode_preset_velocity() {
+    GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 1);
+    poll_gui_frame(&g, st);                                                      // 기준선
+    g = mk(MAGIC_GUI_RELAY, 2, 0.6f, -0.1f, 0.4f);
+    g.mode_req = 2; g.m5_preset = 3; g.m5_press_seq = 5;
+    g.period_steps = 99; g.height_scale = 2.0f; g.turn_k = 0.9f; g.clip_req = 4;
+    GuiApply r = poll_gui_frame(&g, st);
+    CHECK(r.apply); CHECK(!r.set_foot); CHECK(r.clip_req == -1);
+    CHECK(r.mode_req == 2); CHECK(r.m5_press && r.m5_preset == 3);
+    CHECK(r.set_vel && r.vx == 0.6f && r.vy == -0.1f && r.wz == 0.4f);
+    // NaN 프레임은 0x6704 와 똑같이 버린다
+    GuiCtrl n = mk(MAGIC_GUI_RELAY, 3, std::numeric_limits<float>::infinity());
+    r = poll_gui_frame(&n, st); CHECK(!r.apply && r.rejected_nonfinite);
+    // 첫 프레임 기준선은 0x6705 에도 적용
+    GuiPollState s2; g = mk(MAGIC_GUI_RELAY, 50, 1, 1, 1); g.mode_req = 5;
+    r = poll_gui_frame(&g, s2); CHECK(!r.apply && r.rebased && !r.log_line);
+}
+
+static void relay_frames_stale_zero_velocity() {
+    GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 10, 0.5f);
+    poll_gui_frame(&g, st);                                                      // 기준선
+    g.seq = 11; GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel);
+    for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); }   // 같은 seq 14 틱
+    r = poll_gui_frame(&g, st); CHECK(r.zero_vel);                               // 15 틱째
+    for (int i = 0; i < 50; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); }    // 1 회뿐
+    g.seq = 12; r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel);       // 되살아남 → 정상
+    CHECK(r.log_line);                                                           // 속도가 0 → 0.5 로 바뀜
+    // 파일이 사라져도 같다
+    for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(nullptr, st); CHECK(!r.zero_vel); }
+    r = poll_gui_frame(nullptr, st); CHECK(r.zero_vel);
+    r = poll_gui_frame(nullptr, st); CHECK(!r.zero_vel);
+    // 되살아난 뒤 다시 멈추면 다시 한 번
+    g.seq = 13; r = poll_gui_frame(&g, st); CHECK(r.apply);
+    for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); }
+    r = poll_gui_frame(&g, st); CHECK(r.zero_vel);
+    // 중계를 본 적 없으면 파일 없음은 감시 대상이 아니다
+    GuiPollState s2; for (int i = 0; i < 100; ++i) { r = poll_gui_frame(nullptr, s2); CHECK(!r.zero_vel); }
+    // v2 가 이어받으면 감시 끝
+    GuiPollState s3; GuiCtrl rl = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&rl, s3);
+    for (int i = 0; i < 5; ++i) poll_gui_frame(&rl, s3);
+    GuiCtrl v2 = mk(GUI_CTRL_MAGIC, 2, 0.2f); r = poll_gui_frame(&v2, s3); CHECK(r.apply && !s3.relay_seen);
+    for (int i = 0; i < 100; ++i) { r = poll_gui_frame(&v2, s3); CHECK(!r.zero_vel); }
+    // 틱 14 직전에 하트비트가 오면 카운트가 리셋된다
+    GuiPollState s4; GuiCtrl h = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&h, s4);
+    for (int round = 0; round < 5; ++round) {
+        for (int i = 0; i < 13; ++i) { r = poll_gui_frame(&h, s4); CHECK(!r.zero_vel); }
+        ++h.seq; r = poll_gui_frame(&h, s4); CHECK(!r.zero_vel);
+    }
+}
+
+static void relay_log_only_on_change() {
+    GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 1);
+    poll_gui_frame(&g, st);
+    g = mk(MAGIC_GUI_RELAY, 2, 0.4f, 0, 0);
+    GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);           // 속도 변화
+    for (uint32_t s = 3; s < 20; ++s) { g.seq = s; r = poll_gui_frame(&g, st); CHECK(r.apply && !r.log_line); }   // 하트비트
+    g.seq = 20; g.wz = 0.1f; r = poll_gui_frame(&g, st); CHECK(r.log_line);       // wz 변화
+    g.seq = 21; g.mode_req = 3; r = poll_gui_frame(&g, st); CHECK(r.log_line);    // 모드
+    g.seq = 22; g.mode_req = 0; r = poll_gui_frame(&g, st); CHECK(!r.log_line);
+    g.seq = 23; g.m5_preset = 2; g.m5_press_seq = 1; r = poll_gui_frame(&g, st); CHECK(r.log_line && r.m5_press);   // 자세 누름
+    g.seq = 24; r = poll_gui_frame(&g, st); CHECK(!r.log_line);                  // 같은 누름 seq
+    g.seq = 25; g.vy = 0.2f; r = poll_gui_frame(&g, st); CHECK(r.log_line);       // vy 변화
+}
+
+int main() {
+    v2_frames_behave_as_before();
+    relay_frames_apply_only_mode_preset_velocity();
+    relay_frames_stale_zero_velocity();
+    relay_log_only_on_change();
+    if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
+    std::printf("test_gui_poll ok\n");
+    return 0;
+}
