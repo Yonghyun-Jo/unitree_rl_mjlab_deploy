@@ -2,7 +2,7 @@
  "tool": "deploy/scripts/check_slot_parity.py",
  "tool_version": 1,
  "slot": "261103_v1_i5_groundvar_90k",
- "checked_at": "2026-11-03T02:19:17",
+ "checked_at": "2026-11-06T15:27:46",
  "verdict": "PASS",
  "counts": {
   "PASS": 34,
@@ -14,7 +14,7 @@
   "deploy_yaml_sha256": "cad004ac8ee7ec573839a98ac006768bf2738e875a6c5af0041aa23f2bdbe26d"
  },
  "context_sha256": {
-  "deploy/robots/g1/src/State_Mimic.cpp": "2b7d822312161cfccb3342bf7f439919d7958133c2a95e35ae385a269c21219d",
+  "deploy/robots/g1/src/State_Mimic.cpp": "5c555b9c62e64101406abb570fa6b5fd8feeceb6fa25a3952024853489c4cfb0",
   "deploy/include/isaaclab/envs/mdp/observations/observations.h": "6b3fb08a75ef44600aa222ef131b66d4404968c0f2b0f9879bd091920a4ee5e5",
   "deploy/robots/g1/include/ModeTable.h": "22e62587418c853972d78f4295d661790682bb13c321c648abbdfd8ce1f08ea6",
   "deploy/robots/g1/include/DeployFeatures.h": "d78097f718d8e5430dc8ba3680df262b76b88e69d73d6c3ea660292b85d9cef4",
@@ -28,9 +28,9 @@
   "mode5": "da5f3b6b00fe8efbc6e96c34f6c4e91e51829302"
  },
  "mjlab": "/home/piene/mjlab1.4/mjlab_g1_final",
- "deploy_repo_head": "cb808a6",
+ "deploy_repo_head": "28da6bf",
  "known_used": [],
- "elapsed_s": 0.24,
+ "elapsed_s": 0.23,
  "rows": [
   {
    "no": "1.1",

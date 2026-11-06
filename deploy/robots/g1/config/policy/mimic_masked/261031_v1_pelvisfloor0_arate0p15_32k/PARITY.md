@@ -1,9 +1,9 @@
 # 패리티 — `261031_v1_pelvisfloor0_arate0p15_32k`
 
-판정 **KNOWN** (PASS 40 · KNOWN 2 · WARN 0 · SKIP 1 · FAIL 0) · 2026-11-05T12:43:10 · check_slot_parity.py v1
+판정 **KNOWN** (PASS 40 · KNOWN 2 · WARN 0 · SKIP 1 · FAIL 0) · 2026-11-06T15:27:46 · check_slot_parity.py v1
 
 - 학습 원장(각 run 의 training_meta.json commit): base `c8c3ea6` · mode1 `c6278f9` · mode2 `b28ceb3` · mode3 `f22eab5`
-- 배포 (판정 당시): deploy repo `4b0e755` · ONNX md5 `1069d71bf014` · deploy.yaml sha256 `3acb2ad214b2`
+- 배포 (판정 당시): deploy repo `28da6bf` · ONNX md5 `1069d71bf014` · deploy.yaml sha256 `3acb2ad214b2`
 - 이 표가 유효한 조건: ONNX md5·deploy.yaml sha256 가 위와 같을 것 (policy_slot push · robot.sh verify 가 본다)
 
 | # | 항목 | 학습 (원장) | 배포 | 판정 | 비고 |

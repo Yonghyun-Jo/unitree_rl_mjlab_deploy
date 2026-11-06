@@ -2,7 +2,7 @@
  "tool": "deploy/scripts/check_slot_parity.py",
  "tool_version": 1,
  "slot": "261031_v1_pelvisfloor0_arate0p15_32k",
- "checked_at": "2026-11-05T12:43:10",
+ "checked_at": "2026-11-06T15:27:46",
  "verdict": "KNOWN",
  "counts": {
   "PASS": 40,
@@ -14,7 +14,7 @@
   "deploy_yaml_sha256": "3acb2ad214b248372edd7769f61c729c95bd2b11bc383713fc2bb99aa1e26c09"
  },
  "context_sha256": {
-  "deploy/robots/g1/src/State_Mimic.cpp": "2b7d822312161cfccb3342bf7f439919d7958133c2a95e35ae385a269c21219d",
+  "deploy/robots/g1/src/State_Mimic.cpp": "5c555b9c62e64101406abb570fa6b5fd8feeceb6fa25a3952024853489c4cfb0",
   "deploy/include/isaaclab/envs/mdp/observations/observations.h": "6b3fb08a75ef44600aa222ef131b66d4404968c0f2b0f9879bd091920a4ee5e5",
   "deploy/robots/g1/include/ModeTable.h": "22e62587418c853972d78f4295d661790682bb13c321c648abbdfd8ce1f08ea6",
   "deploy/robots/g1/include/DeployFeatures.h": "d78097f718d8e5430dc8ba3680df262b76b88e69d73d6c3ea660292b85d9cef4",
@@ -30,7 +30,7 @@
   "mode3": "f22eab592412732c9793dc4cc3d911fa8c17bc4d"
  },
  "mjlab": "/home/piene/mjlab1.4/mjlab_g1_motion",
- "deploy_repo_head": "4b0e755",
+ "deploy_repo_head": "28da6bf",
  "known_used": [
   {
    "id": "K1",
@@ -49,7 +49,7 @@
    "where": "deploy/robots/g1/src/State_Mimic.cpp 의 VX_MAX_* 위 주석 (≈182행, «모드별 봉투 분리는 별건으로 남겨 둔다»)"
   }
  ],
- "elapsed_s": 0.19,
+ "elapsed_s": 0.16,
  "rows": [
   {
    "no": "1.1",

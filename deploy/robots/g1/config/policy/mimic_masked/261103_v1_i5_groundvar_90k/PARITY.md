@@ -1,9 +1,9 @@
 # 패리티 — `261103_v1_i5_groundvar_90k`
 
-판정 **PASS** (PASS 34 · KNOWN 0 · WARN 2 · SKIP 3 · FAIL 0) · 2026-11-03T02:19:17 · check_slot_parity.py v1
+판정 **PASS** (PASS 34 · KNOWN 0 · WARN 2 · SKIP 3 · FAIL 0) · 2026-11-06T15:27:46 · check_slot_parity.py v1
 
 - 학습 원장(각 run 의 training_meta.json commit): base `19c5bb5` · mode5 `da5f3b6`
-- 배포 (판정 당시): deploy repo `cb808a6` · ONNX md5 `9cc16f1d1a78` · deploy.yaml sha256 `cad004ac8ee7`
+- 배포 (판정 당시): deploy repo `28da6bf` · ONNX md5 `9cc16f1d1a78` · deploy.yaml sha256 `cad004ac8ee7`
 - 이 표가 유효한 조건: ONNX md5·deploy.yaml sha256 가 위와 같을 것 (policy_slot push · robot.sh verify 가 본다)
 
 | # | 항목 | 학습 (원장) | 배포 | 판정 | 비고 |
