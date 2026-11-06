@@ -3,10 +3,12 @@
 #include "FSM/State_FixStand.h"
 #include "FSM/State_RLBase.h"
 #include "State_Mimic.h"
+#include "ArcadeGate.h"   // G1_ARCADE 값(arcade_request) — 아케이드 경로면 FSM 설정 = config_arcade.yaml
 #include <atomic>
 #include <cmath>
 #include <mutex>
 #include <cstdio>
+#include <cstdlib>
 #include <csignal>
 #include <termios.h>
 #include <unistd.h>
@@ -18,6 +20,15 @@ namespace {
 // ⚠ 같은 TU 안의 동적 초기화는 선언 순서대로 실행되므로 이 블록은 반드시 keyboard 정의보다 위.
 termios g_tty_orig;
 const bool g_tty_saved = (::tcgetattr(STDIN_FILENO, &g_tty_orig) == 0);
+
+// 기동 거부(아케이드 설정 오류) — exit() 는 정적 소멸자에서 join 안 된 Keyboard 스레드로 abort(core dump)한다.
+// State_Mimic.cpp die_startup 과 같이 로그만 비우고 _Exit 하되, 터미널은 여기서 되돌린다(Keyboard 소멸자가 안 돈다).
+[[noreturn]] void die_startup_main()
+{
+    if(g_tty_saved) ::tcsetattr(STDIN_FILENO, TCSANOW, &g_tty_orig);
+    spdlog::default_logger()->flush();
+    std::_Exit(1);
+}
 
 extern "C" void restore_tty_and_die(int sig)
 {
@@ -94,6 +105,32 @@ int main(int argc, char** argv)
 
     // Load parameters
     auto vm = param::helper(argc, argv);
+    // 아케이드 경로(G1_ARCADE=1): FSM 전이를 config_arcade.yaml(config.yaml 에서 Velocity · Dance · v 전이를 뺀 사본)로 — CtrlFSM 과
+    // 각 FSMState 생성자가 param::config 를 읽기 «전» 이다(param.h 는 config.yaml 만 싣는다 — 🅑 무변경, 2b-facts B15).
+    switch (g1::arcade_gate::arcade_request(std::getenv("G1_ARCADE"))) {
+        case g1::arcade_gate::Request::Off:
+            break;
+        case g1::arcade_gate::Request::Bad:
+            spdlog::critical("[arcade] G1_ARCADE='{}' 는 모르는 값 — 1(켬) 또는 0/없음(끔). 기동 거부.", std::getenv("G1_ARCADE"));
+            die_startup_main();
+        case g1::arcade_gate::Request::On: {
+#if G1_HAVE_ARCADE
+            const std::filesystem::path p = param::config_dir / "config_arcade.yaml";
+            try {
+                param::config = YAML::LoadFile(p.string());
+            } catch (const std::exception& e) {
+                spdlog::critical("[arcade] {} 를 못 읽었다: {} — 기동 거부.", p.string(), e.what());
+                die_startup_main();
+            }
+            spdlog::info("[arcade] G1_ARCADE=1 — FSM 설정 = {} (Velocity · Dance · 키 v 전이 없음 · Passive LT+B/p · f · m)", p.string());
+#else
+            spdlog::critical("[arcade] 이 g1_ctrl 은 아케이드 없이 빌드됨(G1_ARCADE_DIR 없음 — cmake 경고 «아케이드 없음») — "
+                             "G1_ARCADE=1 을 쓸 수 없다. -DG1_ARCADE_DIR=<g1_arcade> 로 다시 빌드할 것. 기동 거부.");
+            die_startup_main();
+#endif
+            break;
+        }
+    }
 
     std::cout << " --- Unitree Robotics --- \n";
     std::cout << "     G1-29dof Controller \n";

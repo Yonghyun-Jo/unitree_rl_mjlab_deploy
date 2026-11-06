@@ -3,7 +3,7 @@
 cd "$(dirname "$0")/.."
 # 모드를 다루는 순수 헤더(B2: ModeRuntime · SafetyPolicy · Mode5Driver · MotionPreview · HeightEstimator)도 같은 규칙이다.
 files="src/State_Mimic.cpp include/MaskedLocoController.h include/State_Mimic.h include/ModeRuntime.h include/SafetyPolicy.h
-       include/Mode5Driver.h include/MotionPreview.h include/HeightEstimator.h"
+       include/Mode5Driver.h include/MotionPreview.h include/HeightEstimator.h include/ArcadeGate.h src/ArcadeLink.cpp"
 # 파일이 없어지거나 이름이 바뀌면 grep 이 조용히 빈 결과를 내서 «통과» 가 된다 — 먼저 막는다.
 for f in $files; do
   [ -f "$f" ] || { echo "검사 대상이 없다: $f (이름이 바뀌었으면 이 목록을 고칠 것)"; exit 1; }

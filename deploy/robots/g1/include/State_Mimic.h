@@ -7,6 +7,9 @@
 #include "ObsDump.h"
 #include "ImuCal.h"
 #include "G1Articulation.h"
+#if G1_HAVE_ARCADE
+#include "ArcadeGate.h"
+#endif
 #include <cnpy.h>
 #include <array>
 #include <atomic>
@@ -126,6 +129,14 @@ private:
     // IMU 장착 편향 보정 (config.yaml: imu_cal). 기본 0 = 꺼짐 = 종전 거동 비트 동일.
     g1::ImuCal imu_cal_;
     const char* mon_exit_reason_ = nullptr;   // null = 조작자 전이(p/v) 또는 정상 종료
+#if G1_HAVE_ARCADE
+    // ── 아케이드 경로 (G1_ARCADE=1 ∧ Mimic_Masked — State_Mimic.cpp «아케이드 경로» 절 · include/ArcadeLink.h · ArcadeGate.h) ──
+    //    정책 틱 = 의도 칸 → core → ORT → q_des 잠금(옛 1859~2087 구간 대신). 안전층(넘어짐 관문 · qd 가드)은 core 등급으로.
+    void arcade_open_();         // 생성자 끝: 묶음 열기 · 게인/슬롯/관절 순서 단언 · mlockall · Passive 검사 등록 (실패 = die_startup)
+    bool arcade_enter_();        // enter(): 측정 자세로 체류 시작. false = 측정 비유한 → kp 0 · 다음 FSM 틱에 Passive
+    void arcade_policy_loop_();  // 정책 스레드 본체
+    void arcade_qd_guard_(const g1::arcade_gate::CoreSafety& cs);   // 감시 · crit 래치 · 낮은 자세 Passive (폴백 모드 강제 없음)
+#endif
 };
 
 

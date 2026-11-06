@@ -15,6 +15,9 @@
 #include "LimbLut.h"                // mode6 사지 높이 명령 (학습 limb_lut 1:1, gen_limb_lut_header.py)                // base_vel 명령 필터 = 선형 slew 1.5 (유일한 필터)
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
+#if G1_HAVE_ARCADE
+#include "ArcadeLink.h"            // 아케이드 경로(G1_ARCADE=1): 의도 칸 → core → q_des · 아케이드 상태 칸 (판정 = ArcadeGate.h)
+#endif
 #include <atomic>
 #include <cstdlib>     // getenv (G1_POLICY_SLOT)
 #include <cstring>
@@ -205,6 +208,13 @@ static bool g_commanded_upright() {
     if (row.mode5_cmd_live && g_m5.active()) m5_z = m5::PRESETS[g_m5.preset()].z;
     return g1::safety::commanded_upright(row, clip_tilt, m5_z);
 }
+
+#if G1_HAVE_ARCADE
+// 아케이드 경로(G1_ARCADE=1): Mimic_Masked 생성자가 만든다(arcade_open_) — 프로세스 끝까지 산다(env 와 같다). 그 인스턴스만 이 경로로
+// 돈다(Mimic_Dance1_subject2 는 옛 경로 그대로). 둘 다 생성자(main 스레드)에서 한 번 쓰고, FSM · 정책 스레드는 그 뒤에 읽기만 한다.
+static g1::ArcadeLink* g_arc = nullptr;
+static const State_Mimic* g_arc_owner = nullptr;
+#endif
 
 // Deploy-clean controller (1:1 with mjlab_g1_motion loco_controller.py; golden-verified).
 // Updated once per policy step (see policy_thread) BEFORE obs are computed; obs terms +
@@ -1219,6 +1229,11 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
             FSMStringMap.right.at("Passive")
         )
     );
+#if G1_HAVE_ARCADE
+    if (state_string == "Mimic_Masked" &&
+        g1::arcade_gate::arcade_request(std::getenv("G1_ARCADE")) == g1::arcade_gate::Request::On)
+        arcade_open_();   // PD 를 걸기 «전»(여기서 죽어도 lowcmd 가 끊기지 않는다)
+#endif
 }
 
 // deploy 관절 순서 29 (legL/legR/waist/armL/armR) — 로그를 사람이 읽게 하기 위한 이름표.
@@ -1253,6 +1268,15 @@ void State_Mimic::mon_log_summary()
     const float dwell = env->episode_length * env->step_dt;
     spdlog::info("[Mimic_Masked] 체류 {:.1f}s, 최종 mode{}, 종료사유 {}",
                  dwell, g_mode.mode(), mon_exit_reason_ ? mon_exit_reason_ : "operator");
+#if G1_HAVE_ARCADE
+    if (g_arc_owner == this) {   // 아케이드 경로 — 위 «최종 mode» 는 g1_ctrl 모드 표(안 씀). core 쪽 마지막 상태(정책 스레드 join 뒤라 읽어도 된다)
+        const auto& roles = g_arc->host().role_names();
+        const int r = g_arc->host().info().role;
+        spdlog::info("  arcade     : 최종 role {} (core mode{}) · 정책 틱 {} · tick_us 최대 {} µs",
+                     (r >= 0 && r < (int)roles.size()) ? roles[r] : std::string("?"), g_arc->host().info().mode,
+                     g_arc->host().ticks(), g_arc->host().max_tick_us());
+    }
+#endif
     if (mon_clamp_joint_ >= 0)
         spdlog::info("  pos_clamp  : {} tick (최대 {:.4f} rad 삭감 @ {} {})",
                      mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_, jname(mon_clamp_joint_));
@@ -1553,6 +1577,9 @@ void State_Mimic::status_exit_frame_()
 void State_Mimic::enter()
 {
     // 계측(기본 꺼짐) — 게인을 싣기 «전» 에 열어 이 체류의 시작 시각(t_enter)을 잡는다.
+#if G1_HAVE_ARCADE
+    if (g_arc_owner == this) obs_dump_on_ = false; else   // 아케이드 경로는 env->step 을 안 거친다(G1_OBS_CSV 는 생성자가 경고만)
+#endif
     obs_dump_on_ = obs_dump_enter_();
     // set gain
     for (int i = 0; i < env->robot->data.joint_stiffness.size(); i++)
@@ -1696,6 +1723,11 @@ void State_Mimic::enter()
     // 진입 시 «조작자가 요청한 모드» 를 현재 모드와 일치시켜 시작(불일치 방지). 같은 모드 요청은
     // 이탈 조건을 안 타므로 requested 만 맞춰진다.
     (void)g_mode.request(g_mode.mode());
+#if G1_HAVE_ARCADE
+    // 아케이드: core 를 측정 자세로 체류 시작(q_des 잠금 · 1 kHz 직전 q = 측정 자세 · 의도 칸 기준선) — 정책 스레드 «전»(스레드 시작이
+    // happens-before). 측정이 비유한이면 체류를 시작하지 않는다(kp 0 · registered_check → Passive).
+    if (g_arc_owner == this && !arcade_enter_()) return;
+#endif
     // Start policy thread
     policy_thread_running = true;
     policy_thread = std::thread([this]{
@@ -1703,6 +1735,9 @@ void State_Mimic::enter()
         // 정책도 RT 로. 안전(FSM 1kHz)보다는 «아래»다 — 정책이 늦으면 행동이 낡을 뿐이고,
         // 안전이 늦으면 관절 가드가 안 돈다. 실패해도 경고만 남기고 종전대로 돈다.
         rtprio::raise_this_thread("정책 50Hz", rtprio::POLICY_50HZ);
+#if G1_HAVE_ARCADE
+        if (g_arc_owner == this) { arcade_policy_loop_(); return; }   // 아케이드 정책 루프(아래 «아케이드 경로» 절)
+#endif
         const std::chrono::duration<double> desiredDuration(env->step_dt);
         const auto dt = std::chrono::duration_cast<clock::duration>(desiredDuration);
 
@@ -2149,17 +2184,30 @@ void State_Mimic::run()
     // G1_OBS_CSV(기본 꺼짐): processed_actions «전에» 읽는다 — 이 번호(정책 줄) 이상의 action 이 보인다.
     const bool od = obs_dump_on_;
     const int64_t od_from = od ? g1::ObsDump::shared().step_seq() : 0;
+#if G1_HAVE_ARCADE
+    // 아케이드: core 가 쓴 q_des 잠금(읽기 실패 = 직전 q — 첫 값은 enter 의 측정 자세, 0 rad 를 내지 않는다). 블렌드 둘은 건너뛴다 —
+    // core 가 arm/switch 블렌드를 이미 반영했다(이중 적용 금지). 아래 pos_clamp · NaN 홀드 · rate_limit · q 기록은 그대로.
+    const bool arc = (g_arc_owner == this);
+    auto action = arc ? g_arc->run_q_des() : env->action_manager->processed_actions();
+#else
     auto action = env->action_manager->processed_actions();   // = raw*scale + offset (target q)
+#endif
     std::array<float, 29> od_proc{};
     if (od) for (int i = 0; i < 29 && i < (int)action.size(); ++i) od_proc[i] = action[i];
     // mode1 arm-blend: ease the upper-joint TARGETS toward the default pose, then release.
     // Interpolate toward default_joint_pos (= the action offset; joint_names=[.*] so action
     // index == robot joint index). arm_scale is 1.0 except during a mode1 transition.
+#if G1_HAVE_ARCADE
+    if (!arc)
+#endif
     g_loco.apply_arm_blend(action.data(), env->robot->data.default_joint_pos.data(),
                            static_cast<int>(action.size()));
     // mode-switch crossfade (+ NaN guard): ease the action from the frozen pre-switch pose to the
     // live action over the blend window so a mode change never sends a raw joint STEP to the
     // motors (which trips the onboard velocity/torque protection). No-op outside a switch.
+#if G1_HAVE_ARCADE
+    if (!arc)
+#endif
     g_loco.apply_switch_blend(action.data(), static_cast<int>(action.size()));
     // L1-2차: C++ 최종 위치 clamp (기계한계, gated). action.clip(process_actions)이 1차 방어이고
     // 이건 최종 출력 직전 보루 — 기본 off, sim2sim 검증 후 enable_pos_clamp:true로 켠다.
@@ -2218,3 +2266,181 @@ void State_Mimic::run()
         g1::StateDump::shared().tick(FSMState::lowstate->msg_, lowcmd->msg_, aux);
     }
 }
+
+#if G1_HAVE_ARCADE
+// ══ 아케이드 경로 (G1_ARCADE=1 ∧ Mimic_Masked) ═══════════════════════════════════════════════════════════════════════════
+// 정책 틱 = 의도 칸 → core(전환 기계 + skill) → ORT → q_des 잠금(ArcadeLink · ArcadeHost). 옛 경로의 입력 폴링(g_poll_inputs ·
+// g_poll_vr — 키보드 이동·모드·자세 키 · GuiCtrl 0x6704/0x6705 · VR · 리모컨 스틱·십자키) · 모드 전환 · slew · 클립 · mode5 · 사지 ·
+// env->step() 을 부르지 않는다(설계 2B §5). FSM 전이(LT+B · p → Passive)는 CtrlFSM 이 그대로 본다.
+// 남는 것: robot->update · z_fk · 기울기 · 넘어짐 관문(core 등급 — ArcadeGate.h) · qd 가드(감시 · crit 래치 · 낮은 자세 Passive) ·
+// 상태 칸 v1(active_mode = core 모드) · 아케이드 상태 칸 · LoopDiag · SafetyLog 1 Hz · run()(1 kHz pos_clamp · NaN 홀드 · q 기록 ·
+// StateDump) · registered_checks · E-stop.
+
+// 생성자 끝(PD 를 걸기 전 · 정책 스레드 없음). 실패 = 기동 거부(die_startup — 이유는 critical 로그).
+void State_Mimic::arcade_open_()
+{
+    const auto& rd = env->robot->data;
+    if (rd.joint_stiffness.size() != 29 || rd.joint_damping.size() != 29) {
+        spdlog::critical("[arcade] 기동 거부: 슬롯 '{}' 의 stiffness/damping 이 29 개가 아니다 ({}/{})", slot_name_,
+                         rd.joint_stiffness.size(), rd.joint_damping.size());
+        die_startup();
+    }
+    g1::ArcadeLink::OpenArgs a;
+    const char* bundle = std::getenv("G1_ARCADE_BUNDLE");
+    a.bundle_dir = bundle ? bundle : "";
+    a.slot_name = slot_name_;
+    for (int i = 0; i < 29; ++i) { a.kp[i] = rd.joint_stiffness[i]; a.kd[i] = rd.joint_damping[i]; }
+    a.joint_ids_map = rd.joint_ids_map;
+    std::string err, summary;
+    auto* link = new g1::ArcadeLink();   // 프로세스 끝까지 산다(지우지 않는다 — env 와 같다)
+    if (!link->open(a, err, summary)) {
+        spdlog::critical("[arcade] 기동 거부: {}", err);
+        spdlog::critical("  G1_ARCADE=1 · G1_ARCADE_BUNDLE={} · 슬롯 '{}'", a.bundle_dir.empty() ? "(없음)" : a.bundle_dir, slot_name_);
+        die_startup();
+    }
+    g_arc = link;
+    g_arc_owner = this;
+    spdlog::info("[arcade] {}", summary);
+    // 묶음 · ORT 세션 · 예열이 끝난 뒤 — 지금 잡힌 쪽(모델 무게 · 세션)을 잠근다. 한도가 모자라면 생략, 실패해도 기동은 계속(R-B7)
+    spdlog::info("[arcade] mlockall={}", g1::arcade_try_mlock_current());
+    spdlog::warn("[arcade] 아케이드 경로 — 정책 틱 = core(의도 칸 {}). g1_ctrl 키보드 이동·모드·자세 키 · GUI/중계(0x6704/0x6705) · "
+                 "VR · 리모컨 스틱은 정책에 안 닿는다. 넘어짐 관문 · qd_warn = core 안전 등급(폴백 모드 강제 없음)",
+                 ARCADE_INTENT_PATH);
+    if (std::getenv("G1_OBS_CSV"))
+        spdlog::warn("[arcade] G1_OBS_CSV 는 아케이드 경로에서 기록하지 않는다(env->step 을 안 거친다) — q 는 G1_STATE_CSV 로");
+    // 체류 시작 때 측정 자세가 비유한이면(arcade_enter_ 가 거부) 다음 FSM 틱에 Passive
+    this->registered_checks.emplace_back(
+        std::make_pair([]()->bool{ return g_arc && g_arc->refused(); }, FSMStringMap.right.at("Passive")));
+}
+
+// enter() — env->reset() 이 방금 update() 한 측정 상태로. 정책 스레드 전.
+bool State_Mimic::arcade_enter_()
+{
+    g1::ArcadeSense m;
+    g1::sense_of(env->robot->data, m);
+    if (g_arc->enter(m)) {
+        const auto& roles = g_arc->host().role_names();
+        const int r = g_arc->host().info().role;
+        spdlog::info("[arcade] 체류 시작 — role {} · q_des = 측정 자세 · 의도 칸 기준선(재무장 = 축 중립 한 번)",
+                     (r >= 0 && r < (int)roles.size()) ? roles[r] : std::string("?"));
+        return true;
+    }
+    // 측정 관절각에 비유한 값 — 체류를 시작하지 않는다. 잡지 않는다(kp 0 — Passive 와 같은 감쇠만), 다음 FSM 틱의 검사가 Passive 로.
+    for (auto& mc : lowcmd->msg_.motor_cmd()) mc.kp() = 0;
+    if (!mon_exit_reason_) mon_exit_reason_ = "arcade_nonfinite_pose";
+    spdlog::critical("[arcade] 측정 관절각에 비유한 값 — 아케이드 체류를 시작하지 않는다 (kp 0) -> Passive");
+    return false;
+}
+
+// 정책 스레드 — 아케이드 qd 가드. 옛 1867-1952 의 감시 · crit 래치 · 낮은 자세 Passive 를 그대로 두고, warn 래치의 풀기 · 처분만
+// core 등급으로 판정한다(ArcadeGate.h qd_warn_verdict). g_mode.force · g_m5.press 는 부르지 않는다.
+void State_Mimic::arcade_qd_guard_(const g1::arcade_gate::CoreSafety& cs)
+{
+    const auto& jv = env->robot->data.joint_vel;
+    const int qd_j = js_qd_argmax(jv.data(), (int)jv.size());
+    const float qd_now = (qd_j >= 0) ? std::fabs(jv[qd_j]) : 0.0f;
+    if (qd_j >= 0 && std::isfinite(qd_now) && qd_now > mon_qd_max_) { mon_qd_max_ = qd_now; mon_qd_joint_ = qd_j; }
+    if (!js_enable_qd_guard_) return;
+    const int sev = js_qd_severity_v(jv.data(), std::min((int)jv.size(), 29), js_qd_warn_v_.data(), js_qd_crit_v_.data());
+    const bool warn_before = js_qd_warn_latched_;
+    bool crit_l = js_qd_crit_latched_.load();
+    const bool crit_before = crit_l;
+    js_qd_step(sev, js_over_ticks_, js_warn_run_, js_crit_run_, js_qd_warn_latched_, crit_l);
+    if (crit_l) js_qd_crit_latched_.store(true);   // registered_check 가 Passive 로(하드 보호, 등급 무관)
+    if (!crit_before && crit_l) {
+        const float lim = (qd_j >= 0 && qd_j < 29) ? js_qd_crit_v_[qd_j] : js_qd_crit_;
+        spdlog::error("[safety] qd_crit LATCHED  |qd|={:.2f} rad/s @ {} {} (crit {:.1f} 을 {}틱 연속 초과) -> Passive",
+                      qd_now, qd_j, jname(qd_j), lim, js_over_ticks_);
+        g1::SafetyLog::shared().event("qd_crit", qd_j, jname(qd_j), qd_now, lim, "-> Passive");
+    }
+    if (!js_qd_warn_latched_) return;
+    const g1::arcade_gate::QdWarn v = g1::arcade_gate::qd_warn_verdict(cs, mode_table::row(fallback_mode_), g_z_fk, g_tilt.value());
+    if (v == g1::arcade_gate::QdWarn::Release) { js_qd_warn_latched_ = false; return; }   // core 가 걷기(폴백 모드)로 돌아왔다
+    const bool to_passive = (v == g1::arcade_gate::QdWarn::Passive);
+    if (!warn_before) {
+        if (to_passive) {
+            spdlog::error("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과)  core mode{} 등급 {} "
+                          "z_fk={:.2f} 기울기={:.0f}° -> Passive. 복귀=p→f→m",
+                          qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_, cs.mode, cs.safety_class, g_z_fk, g_tilt.value());
+            g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
+        } else {
+            spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과)  core mode{}{} -> 처분 보류"
+                         "(아케이드 — 모드 강제 없음). core 가 걷기로 돌아오면 풀린다",
+                         qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_, cs.mode, cs.holds_qd ? " (점프·브리지)" : "");
+            g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 처분 보류(아케이드)");
+        }
+    }
+    if (to_passive && !js_lowpose_passive_.exchange(true) && warn_before) {
+        spdlog::error("[safety] qd_warn 래치 중 (core mode{} z_fk={:.2f} 기울기={:.0f}°) -> Passive. 복귀=p→f→m",
+                      cs.mode, g_z_fk, g_tilt.value());
+        g1::SafetyLog::shared().event("qd_warn_lowpose", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
+    }
+}
+
+// 정책 스레드 본체(enter() 의 정책 스레드가 rtprio 를 올린 직후 부른다). 체류 하나 = 이 함수 한 번.
+void State_Mimic::arcade_policy_loop_()
+{
+    using clock = std::chrono::high_resolution_clock;
+    g1::ArcadeLink& A = *g_arc;
+    const auto dt = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(env->step_dt));
+    auto sleepTill = clock::now() + dt;
+    LoopDiag diag(env->step_dt * 1000.0, 1.0);   // 옛 루프와 같은 속도계 — 구간 이름만 아케이드 것으로
+    static const char* SEG[6] = {"intent", "safe", "core", "-", "-", "status"};
+    char d_buf[768];
+    auto d_prev = clock::now();
+    bool d_first = true;
+    int bad_ticks = 0;            // 창(1 s) 안 TickOut.ok == false(추론 실패 · 비유한 q_des — 1 kHz 는 직전 q)
+    g1::ArcadeSense sense;
+    while (policy_thread_running)
+    {
+        const auto d_t0 = clock::now();
+        env->robot->update();     // 이 틱의 측정 — z_fk · 기울기 · 관문 · core 가 모두 이 한 번 읽은 값을 본다
+        const auto& rd = env->robot->data;
+        g_z_fk = g1::z_fk(rd.joint_pos.data(), rd.root_quat_w);
+        g_tilt.update({rd.projected_gravity_b[0], rd.projected_gravity_b[1], rd.projected_gravity_b[2]});
+        {   // 넘어짐 관문 = core 의 지난 틱 안전 등급 · 명령 직립(옛 경로의 g_mode 행 대신, 2b-facts B14)
+            const g1::arcade_gate::CoreSafety cs = A.core_safety();
+            g_recent_high.update(g_z_fk, g_tilt.raw(), g_tilt.value(), g1::arcade_gate::memory_upright(cs));
+            orient_gate_.store(g1::arcade_gate::orient_gate(cs, g_recent_high.value()));
+        }
+        g1::sense_of(rd, sense);
+        const g1::ArcadeLink::Tick t = A.tick(sense);   // 의도 칸 → poll → core begin_tick → ORT → end_tick → q_des 잠금
+        ++env->episode_length;                          // 체류 시간(exit 요약) — 옛 경로는 env->step() 이 센다
+        if (!t.out.ok) ++bad_ticks;
+        const auto d_t_core = clock::now();
+        arcade_qd_guard_(A.core_safety());              // 이 틱 core 가 고른 skill 의 등급으로(«그 순간의 모드»)
+        const auto d_t_safe = clock::now();
+        ++g_status_tick;
+        g1::masked_status::MaskedStatusWriter::shared().write(g_status_frame(
+            t.out.info.mode, getState(),
+            g1::masked_status::safety_level(js_qd_crit_latched_.load(), js_qd_warn_latched_)));
+        A.write_status(t, getState(), g_tilt.value(), js_qd_warn_latched_, js_qd_crit_latched_.load());
+        const auto d_t1 = clock::now();
+        {
+            auto ms = [](clock::time_point a, clock::time_point b) {
+                return std::chrono::duration<double, std::milli>(b - a).count();
+            };
+            diag.seg(0, t.poll_us * 1e-3);
+            diag.seg(1, ms(d_t_core, d_t_safe));
+            diag.seg(2, t.out.tick_us * 1e-3);
+            diag.seg(5, ms(d_t_safe, d_t1));
+            diag.tick(ms(d_t0, d_t1), d_first ? 0.0 : ms(d_prev, d_t0));
+            d_prev = d_t0; d_first = false;
+            if (diag.window_closed()) {
+                diag.format(d_buf, sizeof d_buf, SEG);
+                if (diag.overrun() > 0) spdlog::warn("[diag:policy] {}", d_buf + 7);
+                else                    spdlog::info("[diag:policy] {}", d_buf + 7);
+                if (bad_ticks > 0)
+                    spdlog::warn("[arcade] 추론 실패 · 비유한 q_des {} 틱 (지난 1 s) — 그 틱은 q_des 를 바꾸지 않았다", bad_ticks);
+                bad_ticks = 0;
+                g1::SafetyLog::shared().sample(mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_,
+                                   mon_rate_ticks_, mon_rate_max_, mon_rate_joint_,
+                                   mon_tilt_max_deg_, &jname);
+                diag.reset();
+            }
+        }
+        std::this_thread::sleep_until(sleepTill);
+        sleepTill += dt;
+    }
+}
+#endif  // G1_HAVE_ARCADE

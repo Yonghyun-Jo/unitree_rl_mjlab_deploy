@@ -31,6 +31,7 @@ ArcadeHost::~ArcadeHost() = default;
 
 void ArcadeHost::close() noexcept {
   open_ = false;
+  base_slot_.clear();
   rt_.reset();
   pool_.reset();
   gains_.clear();
@@ -78,6 +79,11 @@ bool ArcadeHost::open(const std::string& bundle_dir, std::string& err) {
       err = "OrtPool::warm_up(3): 실패 " + std::to_string(failed) + " 회";
       return false;
     }
+    std::string base_slot;  // 처음 role 의 꾸러미 → 그 slot(없으면 "")
+    for (const arcade::DemoSkill& d : b.setup.demo)
+      if (d.role == b.setup.default_role)
+        for (const arcade::SkillSpec& sp : b.setup.skills)
+          if (sp.id == d.id) base_slot = sp.slot;
     std::vector<Gains> gains;
     gains.reserve(b.setup.skills.size());
     for (const arcade::SkillSpec& sp : b.setup.skills) gains.push_back(Gains{sp.id, sp.kp, sp.kd});
@@ -87,6 +93,7 @@ bool ArcadeHost::open(const std::string& bundle_dir, std::string& err) {
     pool_ = std::move(pool);
     rt_ = std::move(rt);
     gains_ = std::move(gains);
+    base_slot_ = std::move(base_slot);
     dt_ = dt;
     s_ = arcade::ObservableState{};
     info_ = rt_->tick_info();

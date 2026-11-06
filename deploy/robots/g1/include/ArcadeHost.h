@@ -132,6 +132,9 @@ class ArcadeHost {
   double step_dt() const noexcept { return dt_; }
   const std::vector<std::string>& skill_names() const noexcept;  // TickInfo.skill 번호의 꾸러미 id
   const std::vector<std::string>& role_names() const noexcept;   // TickInfo.role 번호의 role
+  // 처음 role(demo_set.default)의 꾸러미가 나온 배포 슬롯 이름(skill.json slot — 묶음 bt5 = v7 슬롯). State_Mimic(T8)이 g1_ctrl
+  // 슬롯(G1_POLICY_SLOT)과 같은지 본다 — 안전층 설정(pos_clamp 한계 · qd 임계 · 폴백 모드)이 그 슬롯의 것이어야 한다. 없으면 "".
+  const std::string& base_slot() const noexcept { return base_slot_; }
   int ticks() const noexcept { return tick_; }                    // enter 뒤 돈 틱 수(정책 스레드)
   int max_tick_us() const noexcept { return max_tick_us_; }       // enter 뒤 tick_us 최대(정책 스레드)
 
@@ -146,6 +149,7 @@ class ArcadeHost {
   std::unique_ptr<arcade::Runtime> rt_;
   std::vector<Gains> gains_;
   bool open_ = false;
+  std::string base_slot_;
   double dt_ = 0;
   int tick_ = 0;
   int max_tick_us_ = 0;

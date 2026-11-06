@@ -64,16 +64,24 @@ ARCADE_DIR="${G1_ARCADE_DIR:-$(cd .. && pwd)/third_party/g1_arcade}"
 ARCADE_SHM_FLAGS=()
 [ -f "$ARCADE_DIR/core/include/arcade/types.h" ] && ARCADE_SHM_FLAGS=(-DG1_HAVE_ARCADE -I"$ARCADE_DIR/core/include")
 [ -f test_arcade_shm.cpp ] && run test_arcade_shm -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include "${ARCADE_SHM_FLAGS[@]}" -pthread test_arcade_shm.cpp
+# 아케이드 경로 판정(ArcadeGate.h — 넘어짐 관문 · qd_warn 처분을 core 등급으로) + config_arcade.yaml 대조(yaml-cpp). 헤더 온리라 늘 돈다 —
+# 한 정책 틱의 malloc 수준 할당 0(ArcadeLink · 묶음)은 아래 아케이드 CMake 갈래의 같은 시험 타깃이 더한다.
+[ -f test_arcade_gate.cpp ] && run test_arcade_gate -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include test_arcade_gate.cpp -lyaml-cpp
 if [ -f "$ARCADE_DIR/core/CMakeLists.txt" ] && [ -f "$ARCADE_DIR/host/CMakeLists.txt" ]; then
   ARCADE_BUNDLE="${G1_ARCADE_BUNDLE:-}"
   [ -z "$ARCADE_BUNDLE" ] && [ -f "$ARCADE_DIR/build/bundle_bt5/manifest.json" ] && ARCADE_BUNDLE="$ARCADE_DIR/build/bundle_bt5"
   if cmake -S .. -B "$OUT/arcade" -DCMAKE_BUILD_TYPE=Release -DG1_ARCADE_DIR="$ARCADE_DIR" >"$OUT/arcade.log" 2>&1 \
-     && cmake --build "$OUT/arcade" --target test_arcade_host -j4 >>"$OUT/arcade.log" 2>&1; then
+     && cmake --build "$OUT/arcade" --target test_arcade_host test_arcade_gate -j4 >>"$OUT/arcade.log" 2>&1; then
     if G1_ARCADE_BUNDLE="$ARCADE_BUNDLE" "$OUT/arcade/test_arcade_host" >"$OUT/arcade.out" 2>&1; then
       if grep -q '^skip test_arcade_host' "$OUT/arcade.out"; then grep -m1 '^skip test_arcade_host' "$OUT/arcade.out"
       else echo "ok   test_arcade_host"; grep '^skip' "$OUT/arcade.out" | sed 's/^/     /'; fi
     else echo "FAIL test_arcade_host"; grep '^FAIL' "$OUT/arcade.out" | head -8; tail -3 "$OUT/arcade.out"; fail=1; fi
-  else echo "FAIL test_arcade_host (빌드)"; tail -8 "$OUT/arcade.log"; fail=1; fi
+    # 같은 test_arcade_gate.cpp 를 아케이드 켬으로 — ArcadeLink 한 정책 틱(의도 칸 → core → 상태 칸) 우리 코드 malloc · new 0 까지
+    if G1_ARCADE_BUNDLE="$ARCADE_BUNDLE" "$OUT/arcade/test_arcade_gate" >"$OUT/arcade_gate.out" 2>&1; then
+      if grep -q '^skip ⑤' "$OUT/arcade_gate.out"; then echo "ok   test_arcade_gate[arcade]"; grep -m1 '^skip ⑤' "$OUT/arcade_gate.out" | sed 's/^/     /'
+      else echo "ok   test_arcade_gate[arcade]"; fi
+    else echo "FAIL test_arcade_gate[arcade]"; grep '^FAIL' "$OUT/arcade_gate.out" | head -8; tail -3 "$OUT/arcade_gate.out"; fail=1; fi
+  else echo "FAIL test_arcade_host · test_arcade_gate (빌드)"; tail -8 "$OUT/arcade.log"; fail=1; fi
 else
   echo "skip test_arcade_host (g1_arcade 없음: $ARCADE_DIR — G1_ARCADE_DIR=… 로 준다)"
 fi

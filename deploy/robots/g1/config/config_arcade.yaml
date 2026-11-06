@@ -1,0 +1,187 @@
+# config_arcade.yaml — 🔴 아케이드 경로(G1_ARCADE=1) 전용 FSM 설정. main.cpp 가 G1_ARCADE=1 일 때 config.yaml 대신 이것을 싣는다.
+#   config.yaml 의 사본에서 «위험 전이» 만 뺐다: Velocity(RT+A · 키보드 v) · Mimic_Dance1_subject2(RB+A) 로 가는 전이 6 개.
+#   남긴 것: Passive(LT+B · p) · FixStand(LT+up · f) · Mimic_Masked(m). 상태 이름 · id · 나머지 키(정책 · 클립 · 게인 · imu_cal)는
+#   config.yaml 과 같다 — tests/test_arcade_gate.cpp config_arcade_has_no_velocity_or_dance 가 «전이 말고는 같다» 를 대조한다.
+#   🔴 config.yaml 을 고치면 이 파일도 같은 커밋에서 같이 고친다(시험이 어긋남을 잡는다).
+#   아케이드 경로의 정책 슬롯 = G1_POLICY_SLOT=261009_v7_f6_s1456_109k(묶음 bt5 의 처음 role 슬롯 — 다르면 기동 거부).
+FSM:
+  _: # enabled fsms
+    Passive:
+      id: 1
+    FixStand:
+      id: 2
+    Velocity:
+      id: 3
+      type: RLBase
+
+    Mimic_Dance1_subject2:
+      id: 5
+      type: Mimic
+
+    Mimic_Masked:        # mjlab_g1_motion stage2_masked flow student (3-mode teleop)
+      id: 6
+      type: Mimic
+
+
+  Passive:
+    transitions:
+      FixStand: LT + up.on_pressed
+    keyboard_transitions:   # gamepad-free: press f to stand
+      FixStand: f
+    mode: [
+      1,1,1,1,1,1,
+      1,1,1,1,1,1,
+      1,1,1,
+      1,1,1,1,1,1,1,
+      1,1,1,1,1,1,1,
+    ]
+    kd: [
+      3,3,3,3,3,3,
+      3,3,3,3,3,3,
+      3,3,3,
+      3,3,3,3,3,3,3,  
+      3,3,3,3,3,3,3,  
+    ]
+
+
+  FixStand:
+    transitions:
+      Passive: LT + B.on_pressed
+    keyboard_transitions:   # p=passive(stop)  m=mimic_masked(직행)  — 아케이드: v(velocity) 없음
+      Passive: p
+      Mimic_Masked: m
+
+    kp: [
+      100,100,100,150,40,40,
+      100,100,100,150,40,40,
+      200,200,200,
+      40,40,40,40,40,40,40,
+      40,40,40,40,40,40,40,
+    ]
+    kd: [
+      2,2,2,4,2,2,
+      2,2,2,4,2,2,
+      5,5,5,
+      10,10,10,10,10,10,10,
+      10,10,10,10,10,10,10,
+    ]
+    ts: [0, 2]
+    qs: [
+      [],
+      [ -0.1, 0,0,0.3,-0.2,0,
+        -0.1, 0,0,0.3,-0.2,0,
+        0,0,0,
+        0.35, 0.18,0,0.87,0,0,0,
+        0.35,-0.18,0,0.87,0,0,0
+      ]
+    ]
+
+
+  Velocity:
+    transitions:
+      Passive: LT + B.on_pressed
+      Mimic_Masked: RB + B.on_pressed
+    keyboard_transitions:   # p=passive(stop)  m=mimic_masked
+      Passive: p
+      Mimic_Masked: m
+
+    policy_dir: config/policy/velocity
+
+
+  Mimic_Dance1_subject2:
+    transitions:
+      Passive: LT + B.on_pressed
+
+    motion_file: config/policy/mimic/dance1_subject2/params/dance1_subject2.npz
+    policy_dir: config/policy/mimic/dance1_subject2/
+    time_start: 0.0
+    time_end: 1000.0
+
+
+  Mimic_Masked:        # masked flow student. keyboard: 1~4=mode(표 = include/ModeTable.h), [ ]=클립 선택(재생 중엔 거부), WASD/QE=vel, p=stop.
+    transitions:
+      Passive: LT + B.on_pressed
+    keyboard_transitions:   # p=passive(stop) — 아케이드: v(velocity) 없음. 이동·모드·자세 키는 정책에 안 닿는다(의도 칸만)
+      Passive: p
+
+    # 클립 «primary»(`[`/`]` 로 고른 뒤 '4' = mode4 재생. 기본 선택) = 제자리 상체 데모. LAFAN dance1_subject3 4~20s(제자리 상체 제스처) +
+    # 끝→처음 1.0s Hermite 복귀 구간(총 17.0s). 시작이 4s인 이유 = 3.6s까지 남아있는 T-pose
+    # (양팔 수평) 제외. 복귀 구간이 있어야 modulo 루프 이음매가 안 튄다(raw cut은 1.56rad 점프).
+    # 🔴 2026-08-29 stage_candidates.py 가 260829_v1_ms8_noslip1_30k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 260828_v1_settle55k 로 되돌리고 `policy_slot.py restore 260828_v1_settle55k` (보관소에 있다).
+    # 🔴 2026-09-02 stage_candidates.py 가 260902_v1_cs_sep25_w4_30k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 260829_v1_ms8_noslip1_30k 로 되돌리고 `policy_slot.py restore 260829_v1_ms8_noslip1_30k` (보관소에 있다).
+    # 🔴 2026-09-04 stage_candidates.py 가 260904_v1_standpose_70k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 260902_v1_cs_sep25_w4_30k 로 되돌리고 `policy_slot.py restore 260902_v1_cs_sep25_w4_30k` (보관소에 있다).
+    # 🔴 2026-09-10 stage_candidates.py 가 260910_v1_gen9u3_noslip30_60k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 260904_v1_standpose_70k 로 되돌리고 `policy_slot.py restore 260904_v1_standpose_70k` (보관소에 있다).
+    # 🔴 2026-09-17 stage_candidates.py 가 260917_v1_com2cm_bvt25_30k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 260910_v1_gen9u3_noslip30_60k 로 되돌리면 된다 (--no-archive 라 그 슬롯 폴더·가중치는 그대로 있다).
+    # 🔴 2026-09-22 stage_candidates.py 가 260922_v1_m1gen_v2_torso_30k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 260917_v1_com2cm_bvt25_30k 로 되돌리고 `policy_slot.py restore 260917_v1_com2cm_bvt25_30k` (보관소에 있다).
+    # 🔴 2026-10-01 stage_candidates.py 가 261001_v1_cmdresample_zhold_87k5 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 260922_v1_m1gen_v2_torso_30k 로 되돌리고 `policy_slot.py restore 260922_v1_m1gen_v2_torso_30k` (보관소에 있다).
+    # 🔴 2026-10-09 stage_candidates.py 가 261009_v1_schedobs_stepw12_27k5 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 261001_v1_cmdresample_zhold_87k5 로 되돌리고 `policy_slot.py restore 261001_v1_cmdresample_zhold_87k5` (보관소에 있다).
+    # 🔴 2026-10-31 stage_candidates.py 가 261031_v1_pelvisfloor0_arate0p15_32k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 261009_v1_schedobs_stepw12_27k5 로 되돌리고 `policy_slot.py restore 261009_v1_schedobs_stepw12_27k5` (보관소에 있다).
+    # 🔴 2026-11-03 stage_candidates.py 가 261103_v1_i5_groundvar_90k 로 옮김 (motion_file*·policy_dir 4줄 = 그날 첫 슬롯, npz 실사본).
+    #    복귀 = 아래 4줄을 261031_v1_pelvisfloor0_arate0p15_32k 로 되돌리고 `policy_slot.py restore 261031_v1_pelvisfloor0_arate0p15_32k` (보관소에 있다).
+    motion_file: config/policy/mimic_masked/261103_v1_i5_groundvar_90k/params/g1_dance1_subject3_upper16s.npz
+    motion_file_light: config/policy/mimic_masked/261103_v1_i5_groundvar_90k/params/g1_aiming_stand10s.npz  # 클립 «light» = 서서 상체만 test demo
+    # 클립 «demo6» = LAFAN dance1_subject2 통짜 재생(131.5s, 전신+이동). ⚠ primary/light 와 달리
+    #   ① 손질 안 한 원본이라 131.5s 마다 modulo 루프 이음매에서 0.91 rad 점프가 난다
+    #   ② 제자리가 아니라 pelvis 가 4.8 m 이동하고 z 가 0.40 m 까지 내려간다(깊은 자세)
+    #   → 실기 첫 시도는 반드시 사람이 하드 E-stop 을 잡고, 넓은 공간에서.
+    #   COLMOv2 판을 쓰는 이유 = v3 슬롯이 학습한 것이 그것이고(manifest g1_flow_specialists_v2),
+    #   |q̇| 이 6.0 rad/s 로 제한돼 있다. 구세대 motions/ 판은 30.0 rad/s 라 안전층에 걸린다.
+    #   🔴 gmt_multihead_cwc_scratch 로 복귀할 땐 이 줄도 그 슬롯의 g1_dance1_subject2.npz
+    #      (= 구세대 24클립 매니페스트가 학습한 판) 로 같이 되돌릴 것.
+    motion_file_demo6: config/policy/mimic_masked/261103_v1_i5_groundvar_90k/params/g1_dance1_subject2_colmov2.npz
+    policy_dir: config/policy/mimic_masked/261103_v1_i5_groundvar_90k/
+    # v3 스택에서 **mode1 head 만** 교체 = s4_mode1_cad1p15_slowcmd_scratch30k/model_18000.
+    # base·mode2·mode3 는 바이트 동일(실추론 Δ 정확히 0 으로 확인). 되돌리려면 이 한 줄을
+    # v3_multihead_s30k_steps6 으로 — C++ 은 안 건드려도 된다(ModeGait 기본값 = 종전 거동).
+    # 🔴 이 슬롯은 C++ 재빌드가 필요하다: 새 mode1 이 COLMOv2 재적합 표로 학습돼
+    #    GaitLut.h 에 V2 표 + 모드별 선택이 들어갔다(c3e103f). 옛 바이너리로 이 슬롯을
+    #    돌리면 deploy.yaml 의 table/cadence/turn_asym 키가 조용히 무시된다.
+    #   🔴 기본값을 260828_v1_settle55k 로 옮겼다 (2026-08-28). 직전 기본값 v4_multihead_m1colmov2_steps6 은
+    #      보관소로 나갔다 — 되살리려면 `deploy/scripts/policy_slot.py restore v4_multihead_m1colmov2_steps6`.
+    #   🔴 복귀(그 이전) = v3_multihead_steps6/  — mode1 이 52k 판으로 돌아간다(실기에서 «기울어진 줄 모르고 잔발» 을 낸 그 head). 두 슬롯은 클립이 같아 motion_file 3줄은 그대로 둬도 된다. 더 이전: gmt_multihead_cwc_scratch / gmt_multihead_cwc / gmt_multihead_v0
+    time_start: 0.0
+    time_end: 1000.0
+    end_state: Mimic_Masked   # 타임아웃 없음(무한 실행) — p/v 누를 때까지 유지. 낙상→Passive는 그대로.
+    switch_blend_steps: 50    # mode 전환 crossfade 창(tick @50Hz). 50=1.0s, 25=0.5s, 0=즉시(off). 재컴파일 없이 조절.
+
+# ── IMU 장착 편향 보정 ────────────────────────────────────────────────────────
+# 이 정책은 상태추정이 없어 **중력 벡터가 유일한 «어디가 수직인가» 신호**다. IMU 가 δ° 기울어
+# 붙어 있으면 정책은 몸을 δ° 기운 채로 «수직» 으로 유지한다 — 「기울어진 줄 모르는 느낌」.
+# 학습은 zero-mean 지터만 주고 상수 편향을 안 가르치며, 배포에도 보정 항이 없었다.
+#
+# 🔴 로봇의 성질이지 정책의 성질이 아니다 — 슬롯(deploy.yaml)이 아니라 여기에 둔다.
+# 🔴 0 = 꺼짐 = 종전 거동 비트 동일.
+# 🔴 sim(--network=lo) 에서는 **자동으로 꺼진다**(ImuCal::applies_to_network). 이 파일은 sim·실기
+#    공용인데, 실기용 상쇄값을 편향 없는 sim 에 걸면 «틀린 보정» 이 되어 넘어진다.
+#    sim 에 편향을 «만들» 때는 환경변수 G1_IMU_CAL_DEG="pitch,roll" — config 를 덮는다.
+#
+# 🔴 부호 — deploy/scripts/imu_bias_fit.py 가 찍는 «몸-고정 편향 pitch b» 를 **그대로** 넣는다.
+#    (fit 의 b 와 ImuCal::set() 의 pitch 는 같은 양 q_mount=Ry(b) 다 — 스크립트 --selftest 와
+#    test_imu_cal ② 가 양쪽에서 잠근다.) 2026-09-01 노트가 «부호를 뒤집어 넣으라» 고 적었던 것은
+#    **틀렸다** — 실기 quat 에 ImuCal(−4.22) 를 걸면 발바닥 잔차가 −3.5° → +0.3° 로 0 에 오고,
+#    ImuCal(+4.22) 는 −8° 로 두 배가 된다(2026-09-03 실데이터 확인).
+#
+# 🔴 2026-09-03 현재 **0 — 켜지 않았다. «IMU 편향 4.2°» 는 성립하지 않은 가설이다.**
+#   · 정책 ON(kp 40) 정지 구간의 발바닥-IMU 잔차: −3.5~−4.2° (3일, 방위 345°, 몸-고정처럼 보임)
+#   · 그런데 **정책 OFF(FixStand, kp 100/80/150) 구간은 −0.3 ± 1.7°** 다(온보드 parquet,
+#     imu_bias_fit.py --onboard). 장착 편향이면 정책과 무관하게 같은 값이어야 한다.
+#   ⇒ 잔차는 센서가 아니라 **정책이 선 자세(뒤꿈치 하중·발끝 들림)** 일 가능성이 크다.
+#     그 경우 −4.22 를 걸면 로봇을 **더 뒤로** 민다(sim 주입: 골반 −2.5°, CoM −3.3 cm).
+#   · 판별(로봇에서 2 분): FixStand 로 **발이 눈으로 평평하게 바닥에 닿고 하네스 장력 0** 인 채
+#     20 초 × 2 방위(180° 반대) → --onboard 로 그 구간 P 를 본다. 두 방위 평균이 ±1° 안이면
+#     편향 없음(이 블록은 그대로 0). −3° 이상이 두 방위에서 같이 나오면 편향 → 그 값을 넣는다.
+#   · 그래도 시험해 보려면 **하네스 + 환경변수로 절반부터**(config 는 손대지 않는다):
+#       G1_IMU_CAL_DEG="-2.11,0" ./tools/run_g1_with_gui.sh eth0 --policy v1 --dump
+#     판정: 뒤로 기움·잔발이 **줄면** 편향이 맞았던 것, **늘면** 즉시 중단(자세 가설이 맞은 것).
+imu_cal:
+  pitch_deg: 0.0
+  roll_deg:  0.0

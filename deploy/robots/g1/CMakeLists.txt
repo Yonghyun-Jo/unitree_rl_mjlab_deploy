@@ -85,7 +85,7 @@ file(GLOB_RECURSE ADD_SRC_LIST
   ${PROJECT_SOURCE_DIR}/src/*.cpp
 )
 if(NOT G1_HAVE_ARCADE)
-  list(FILTER ADD_SRC_LIST EXCLUDE REGEX "/src/ArcadeHost\\.cpp$")  # 아케이드 없는 빌드 = 지금과 같은 소스 목록
+  list(FILTER ADD_SRC_LIST EXCLUDE REGEX "/src/Arcade(Host|Link)\\.cpp$")  # 아케이드 없는 빌드 = 지금과 같은 소스 목록
 endif()
 
 # 빌드 정보(커밋 · 고친 파일 여부) — 계측 CSV(G1_OBS_CSV) 머리에 싣는다. 빌드마다 git 을 읽고, 바뀌었을 때만 헤더를
@@ -110,6 +110,13 @@ if(G1_HAVE_ARCADE)
   target_compile_definitions(test_arcade_host PRIVATE G1_HAVE_ARCADE=1 G1_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
   target_compile_options(test_arcade_host PRIVATE -Wall -Wextra)
   target_link_libraries(test_arcade_host PRIVATE arcade_host_native arcade_onnxruntime ${CMAKE_DL_LIBS})
+  # 아케이드 경로 판정(ArcadeGate.h) + 한 정책 틱(ArcadeLink: 의도 칸 → core → 상태 칸)의 malloc 수준 할당 0 · config_arcade.yaml 대조.
+  # 같은 시험 파일을 run_unit_tests.sh 가 아케이드 없이도 g++ 로 바로 돌린다(그때는 ArcadeLink 틱 시험만 빠진다).
+  add_executable(test_arcade_gate EXCLUDE_FROM_ALL tests/test_arcade_gate.cpp src/ArcadeLink.cpp src/ArcadeHost.cpp)
+  target_compile_definitions(test_arcade_gate PRIVATE G1_HAVE_ARCADE=1 G1_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+  target_compile_options(test_arcade_gate PRIVATE -Wall -Wextra)
+  target_include_directories(test_arcade_gate PRIVATE /usr/include/eigen3)
+  target_link_libraries(test_arcade_gate PRIVATE arcade_host_native arcade_onnxruntime yaml-cpp ${CMAKE_DL_LIBS})
 endif()
 link_libraries(${PROJECT_NAME}_lib)
 
