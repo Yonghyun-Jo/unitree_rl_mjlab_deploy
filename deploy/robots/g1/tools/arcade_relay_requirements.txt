@@ -1,0 +1,2 @@
+websockets>=12,<14
+msgpack>=1.0

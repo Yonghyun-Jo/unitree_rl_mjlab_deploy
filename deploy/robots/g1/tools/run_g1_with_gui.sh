@@ -21,6 +21,11 @@
 #      관절각만 찍지 발-z 명령을 모른다. min_swing 같은 걸 판정하려면 켜야 한다.
 #      1 kHz 스레드는 이걸 켜도 파일을 만지지 않는다(StateDump.h 가 링+쓰기스레드로 갈랐다).
 #
+#   중계 전용 (G1 아케이드):
+#     ./run_g1_with_gui.sh eth0 --policy v1 --no-gui
+#   viser GUI(masked_gui.py)를 띄우지 않는다 — GUI 는 0x6704 프레임을 같은 shm 에 써서 arcade_relay.py(0x6705)와
+#   싸운다. GUI 채널은 arcade_relay.py 에 맡긴다(따로 띄운다). 플래그가 없으면 종전과 같다.
+#
 # The viser GUI runs in the background (writes /dev/shm/g1_masked_gui); g1_ctrl runs in the
 # foreground so its terminal keyboard still works as a backup. GUI + g1_ctrl MUST be on the
 # same host (shared /dev/shm) — true for the standard tethered control-PC deploy. The browser
@@ -57,12 +62,13 @@ list_slots() {
   done
 }
 
-NET="lo"; POLICY=""; DUMP=0
+NET="lo"; POLICY=""; DUMP=0; NOGUI=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --policy) POLICY="${2:-}"; shift 2 ;;
     --policy=*) POLICY="${1#*=}"; shift ;;
     --dump) DUMP=1; shift ;;
+    --no-gui) NOGUI=1; shift ;;
     --list) list_slots; exit 0 ;;
     -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
     *) NET="$1"; shift ;;
@@ -121,24 +127,31 @@ fi
 # — SIGKILL, 구버전 바이너리 — 까지 여기서 덮는다). tty 가 아니면 stty 가 실패하므로 조용히 skip.
 STTY_SAVE="$(stty -g 2>/dev/null || true)"
 
-echo "[run] starting browser GUI (viser) -> /dev/shm/g1_masked_gui ..."
-# 🔴 setsid 로 «자기 프로세스 그룹» 에 띄운다. uv 가 python 을 감싸기 때문에 자식(uv)만 죽이면
-#    손자(viser python)가 남는다 — 하루에 여러 번 돌리면 그만큼 쌓이고, 남은 GUI 가 /dev/shm 을
-#    계속 써서 다음 실행과 싸운다. 실측으로 매 실행 2개씩 샜다(robot.sh verify 가 지적).
-setsid bash -c 'cd "$1" && exec "$2" run --with viser python "$3"' _ "$REPO" "$UV" "$HERE/masked_gui.py" &
-GUI_PID=$!
+GUI_PID=""
+if [[ "$NOGUI" == "1" ]]; then
+  echo "[run] --no-gui: GUI 채널(/dev/shm/g1_masked_gui)은 arcade_relay 에 맡긴다 — viser GUI 를 띄우지 않는다"
+else
+  echo "[run] starting browser GUI (viser) -> /dev/shm/g1_masked_gui ..."
+  # 🔴 setsid 로 «자기 프로세스 그룹» 에 띄운다. uv 가 python 을 감싸기 때문에 자식(uv)만 죽이면
+  #    손자(viser python)가 남는다 — 하루에 여러 번 돌리면 그만큼 쌓이고, 남은 GUI 가 /dev/shm 을
+  #    계속 써서 다음 실행과 싸운다. 실측으로 매 실행 2개씩 샜다(robot.sh verify 가 지적).
+  setsid bash -c 'cd "$1" && exec "$2" run --with viser python "$3"' _ "$REPO" "$UV" "$HERE/masked_gui.py" &
+  GUI_PID=$!
+fi
 cleanup() {
   # 그룹 전체(-PID)를 죽인다. 그래야 손자까지 간다.
-  kill -TERM -"$GUI_PID" 2>/dev/null || kill "$GUI_PID" 2>/dev/null
-  sleep 0.3
-  kill -KILL -"$GUI_PID" 2>/dev/null || true
-  rm -f /dev/shm/g1_masked_gui
+  if [[ -n "$GUI_PID" ]]; then
+    kill -TERM -"$GUI_PID" 2>/dev/null || kill "$GUI_PID" 2>/dev/null
+    sleep 0.3
+    kill -KILL -"$GUI_PID" 2>/dev/null || true
+    rm -f /dev/shm/g1_masked_gui
+  fi
   if [[ -n "$STTY_SAVE" ]]; then
     stty "$STTY_SAVE" 2>/dev/null || stty sane 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
-sleep 1
+[[ -n "$GUI_PID" ]] && sleep 1
 
 # 🔴 «이 시험이 어느 정책이었나» 를 로그 옆에 남긴다.
 #    안 남기면 나중에 CSV·그래프만 보고 어느 슬롯이었는지 알 방법이 없다 — 하루에 후보를
