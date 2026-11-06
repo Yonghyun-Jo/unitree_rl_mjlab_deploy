@@ -5,21 +5,26 @@
 //   ② arcade_qd_warn_does_not_force_mode — qd_warn 판정 함수의 결과는 Release · Hold · Passive 뿐(«폴백 모드 강제» 없음):
 //      걷기(mode1) = Release · UprightOnly 선 자세 = Hold(옛 경로는 g_mode.force) · GroundCapable 낮은 자세 = Passive ·
 //      점프 · 브리지(core 가 처분 보류) = Hold
-//   ③ 작은 것: G1_ARCADE 값 · joint_ids_map 항등 · mlockall 시도 조건
-//   ④ config_arcade_has_no_velocity_or_dance — config_arcade.yaml(yaml-cpp 파싱): 어느 상태에도 Velocity · Mimic_Dance1_subject2
-//      로 가는 전이(리모컨 · 키보드)와 키 v 가 없다 · Passive(LT+B · p) · f · m 은 남았다 · 상태 이름(FSM _) 그대로 · Passive 에서
-//      닿는 상태 = {Passive, FixStand, Mimic_Masked} · 그 전이들을 config.yaml 에서 뺀 것과 나머지 키가 전부 같다
+//   ③ 작은 것: G1_ARCADE 값 · joint_ids_map 항등 · mlockall 시도 조건(CAP_IPC_LOCK ∨ 무한 ∨ memlock ≥ VmSize × 1.2 · CapEff 비트 14)
+//   ④ arcade_config_from_drops_six_transitions — 실제 config.yaml 을 읽어 ArcadeConfig.h arcade_config_from 결과를 대조(사본 파일 없음 —
+//      정본 = config.yaml 하나): 어느 상태에도 Velocity · Mimic_Dance1_subject2 로 가는 전이(리모컨 · 키보드)와 키 v 가 없다 ·
+//      Passive(LT+B · p) · f · m 은 남았다 · Passive 에서 닿는 상태 = {Passive, FixStand, Mimic_Masked} · 원본에서 6 전이(시험 쪽
+//      독립 목록)만 지운 것과 그 밖 키가 전부 같다 · 원본 노드는 그대로 · 지울 전이가 없는 config · 새 상태에 닿는 config · m 없는
+//      config 는 거부 + 이유 · 6 개 밖 위험 전이도 지운다
 //   ⑤ (G1_HAVE_ARCADE 빌드만 — CMake 타깃 test_arcade_gate) arcade_link_tick_allocates_nothing — ArcadeLink(묶음 bt5): 기동 거부
-//      (슬롯 다름 · 항등 아님) · enter 의 측정 자세 비유한 = 거부 · enter 직후 run_q_des = 측정 q(0 rad 창 없음) · 한 정책 틱
+//      (상태 칸 open · flock 실패 — U4 · 슬롯 다름 · 항등 아님 · 게인 다름) · G1_ARCADE_STATUS_SHM=0 은 칸 없이 · 기동 요약의 묶음
+//      정보(manifest md5 · board · g1_arcade 커밋 · dirty, 없으면 «?» — U5) · enter 의 측정 자세 비유한 = 거부 · enter 직후 run_q_des = 측정 q(0 rad 창 없음) · 한 정책 틱
 //      (의도 칸 읽기 → poll → core 등급 · 관문 · qd 판정 → ArcadeHost::tick → 상태 칸 쓰기)의 우리 코드 malloc · calloc · realloc ·
 //      operator new · free · delete 0(예열 뒤, 걷기 · Space 점프 포함) — glibc 안쪽(open 등)까지 malloc 수준으로 센다.
 //      ORT Run 안쪽(부른 곳 = libonnxruntime)은 R-B5 대로 따로 세어 찍기만.
 //   g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include test_arcade_gate.cpp -lyaml-cpp -o /tmp/t && /tmp/t   (①~④)
 //   ⑤ = cmake -S .. -B /tmp/a -DG1_ARCADE_DIR=/home/piene/g1_arcade_2b && cmake --build /tmp/a --target test_arcade_gate &&
 //       G1_ARCADE_BUNDLE=/home/piene/g1_arcade_2b/build/bundle_bt5 /tmp/a/test_arcade_gate   (tests/run_unit_tests.sh 가 돌린다)
+#include "ArcadeConfig.h"
 #include "ArcadeGate.h"
 #if G1_HAVE_ARCADE
 #include "ArcadeLink.h"
+#include "arcade_host/bundle_loader.h"  // arcade::md5_file(U5 시험)
 #include <onnxruntime_cxx_api.h>
 #include <Eigen/Dense>
 #endif
@@ -27,6 +32,8 @@
 #include <yaml-cpp/yaml.h>
 
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <sys/file.h>
 #include <unistd.h>
 
 #include <cmath>
@@ -261,11 +268,34 @@ static void small_rules() {
   chk(!ag::ids_identity(sw), "③ 자리 바뀜 → 항등 아님");
   chk(!ag::ids_identity(std::vector<float>(id.begin(), id.begin() + 28)), "③ 28 개 → 항등 아님");
   const std::uint64_t MB = 1u << 20;
-  chk(ag::mlock_worth_trying(true, 0, 500 * MB), "③ memlock 무한 → 시도");
-  chk(ag::mlock_worth_trying(false, 2000 * MB, 500 * MB), "③ memlock ≥ 2×RSS → 시도");
-  chk(!ag::mlock_worth_trying(false, 900 * MB, 500 * MB), "③ memlock < 2×RSS → 생략");
-  chk(!ag::mlock_worth_trying(false, 64 * 1024, 500 * MB), "③ memlock 64 KB → 생략");
-  chk(!ag::mlock_worth_trying(false, 2000 * MB, 0), "③ RSS 를 못 읽음 → 생략");
+  {  // U2 mlock 판정(최종 검토 I7): CAP_IPC_LOCK ∨ 무한 ∨ soft ≥ VmSize × 1.2 — 기준은 RSS 가 아니라 VmSize(MCL_CURRENT 가 매핑 전체를 잠근다)
+    const std::uint64_t vm = 1149 * MB;                            // com1 실측 VmSize(VmRSS 830 MB)
+    chk(!ag::mlock_worth_trying(false, 1000 * MB, vm, false), "③ 한도 부족(1000 MB < 1.2×VmSize 1379 MB) → 생략");
+    chk(ag::mlock_worth_trying(false, 1400 * MB, vm, false), "③ 1400 MB ≥ 1.2×VmSize → 시도(옛 2×RSS 기준 1660 MB 면 생략이었다)");
+    chk(ag::mlock_worth_trying(false, 7732 * MB, vm, false), "③ 한도 충분(com1 memlock 7.5 GB) → 시도");
+    chk(ag::mlock_worth_trying(false, vm + vm / 5, vm, false) && !ag::mlock_worth_trying(false, vm + vm / 5 - 1, vm, false),
+        "③ 경계: soft = VmSize × 1.2 → 시도 · 1 B 모자라면 생략");
+    chk(!ag::mlock_worth_trying(false, 1300 * MB, vm, false), "③ 1300 MB < 1.2×VmSize → 생략(옛 2×RSS 기준은 RSS 600 MB 면 시도 — 실제 잠글 양은 VmSize)");
+    chk(ag::mlock_worth_trying(true, 0, vm, false), "③ memlock 무한 → 시도");
+    chk(ag::mlock_worth_trying(false, 64 * 1024, vm, true), "③ CAP_IPC_LOCK → 한도(64 KB)와 무관하게 시도");
+    chk(ag::mlock_worth_trying(false, 0, 0, true), "③ CAP_IPC_LOCK → VmSize 를 못 읽어도 시도");
+    chk(!ag::mlock_worth_trying(false, 7732 * MB, 0, false), "③ VmSize 를 못 읽음(CAP 없음 · 한도 유한) → 생략");
+    chk(std::strcmp(ag::mlock_verdict(false, 64 * 1024, vm, true).why, "CAP_IPC_LOCK") == 0 &&
+            std::strcmp(ag::mlock_verdict(true, 0, vm, false).why, "memlock unlimited") == 0 &&
+            std::strstr(ag::mlock_verdict(false, 1000 * MB, vm, false).why, "<") != nullptr,
+        "③ 판정 근거 글(로그)");
+    // CapEff(/proc/self/status, 16 진) 비트 14
+    std::uint64_t ce = 0, kb = 0;
+    chk(ag::proc_status_field("CapEff:\t0000000000004000\n", "CapEff:", 16, ce) && ce == 0x4000 && ag::cap_ipc_lock_in(ce),
+        "③ CapEff 0x4000 → CAP_IPC_LOCK");
+    chk(ag::proc_status_field("CapEff:\t000001ffffffffff\n", "CapEff:", 16, ce) && ag::cap_ipc_lock_in(ce), "③ CapEff 전부(root) → CAP_IPC_LOCK");
+    chk(ag::proc_status_field("CapEff:\t0000000000003fff\n", "CapEff:", 16, ce) && !ag::cap_ipc_lock_in(ce) &&
+            ag::proc_status_field("CapEff:\t0000000000000000\n", "CapEff:", 16, ce) && !ag::cap_ipc_lock_in(ce),
+        "③ CapEff 0x3fff · 0 → CAP 없음");
+    chk(ag::proc_status_field("VmSize:\t 1176632 kB\n", "VmSize:", 10, kb) && kb == 1176632, "③ VmSize kB 줄");
+    chk(!ag::proc_status_field("VmRSS:\t 1 kB\n", "VmSize:", 10, kb) && !ag::proc_status_field("CapEff:\t\n", "CapEff:", 16, ce),
+        "③ 다른 칸 · 수 없음 → false");
+  }
   {  // F1: 거부 때 직전 q — 유한 칸 = 측정값 · 비유한 칸 = default
     float qm[29], qd[29], out[29];
     for (int i = 0; i < 29; ++i) { qm[i] = 0.1f * i + 0.05f; qd[i] = -1.f - i; out[i] = 777.f; }
@@ -278,8 +308,12 @@ static void small_rules() {
 }
 
 // ── ④ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-static const char* const kGone[] = {"Velocity", "Mimic_Dance1_subject2"};
-static bool gone_target(const std::string& t) { return t == kGone[0] || t == kGone[1]; }
+// 시험 쪽 독립 목록(ArcadeConfig.h 의 kArcadeRemoved 를 쓰지 않는다 — 함수가 지운 것을 따로 대조): 상태 · 칸 · 대상
+struct Tr { const char* st; const char* sect; const char* to; };
+static const Tr kSix[] = {{"FixStand", "transitions", "Velocity"},          {"FixStand", "keyboard_transitions", "Velocity"},
+                          {"Velocity", "transitions", "Mimic_Dance1_subject2"}, {"Mimic_Dance1_subject2", "transitions", "Velocity"},
+                          {"Mimic_Masked", "transitions", "Velocity"},      {"Mimic_Masked", "keyboard_transitions", "Velocity"}};
+static bool gone_target(const std::string& t) { return t == "Velocity" || t == "Mimic_Dance1_subject2"; }
 
 // 두 노드가 같은가(스칼라 = 글자, 맵 = 키 집합 · 값, 목록 = 차례).
 static bool same(const YAML::Node& a, const YAML::Node& b, const std::string& at, std::string& where) {
@@ -307,34 +341,44 @@ static bool same(const YAML::Node& a, const YAML::Node& b, const std::string& at
   }
 }
 
-static void config_arcade_has_no_velocity_or_dance() {
-  const std::string dir = std::string(G1_SOURCE_DIR) + "/config/";
-  YAML::Node base, arc;
-  try {
-    base = YAML::LoadFile(dir + "config.yaml");
-    arc = YAML::LoadFile(dir + "config_arcade.yaml");
-  } catch (const std::exception& e) {
-    chk(false, (std::string("④ config 를 못 읽었다: ") + e.what()).c_str());
-    return;
-  }
-  const YAML::Node fsm = arc["FSM"];
-  std::string where;
-  chk(same(base["FSM"]["_"], fsm["_"], "FSM._", where), ("④ 상태 이름 · id · type 그대로: " + where).c_str());
-  // 어느 상태에도 Velocity · Dance 로 가는 전이 · 키 v 가 없다
+// 결과 노드의 FSM 에 Velocity · Dance 로 가는 전이 · 키 v 가 몇 개 남았나
+static int dangerous_left(const YAML::Node& fsm) {
   int bad = 0;
-  for (const auto& st : fsm["_"]) {
+  for (const auto& st : fsm) {
     const std::string name = st.first.as<std::string>();
+    if (name == "_" || !st.second.IsMap()) continue;
     for (const char* sect : {"transitions", "keyboard_transitions"}) {
-      const YAML::Node t = fsm[name][sect];
-      if (!t) continue;
+      const YAML::Node t = st.second[sect];
+      if (!t || !t.IsMap()) continue;
       for (const auto& kv : t) {
         if (gone_target(kv.first.as<std::string>())) { std::printf("  남은 전이: %s.%s.%s\n", name.c_str(), sect, kv.first.as<std::string>().c_str()); ++bad; }
-        if (std::string(sect) == "keyboard_transitions" && kv.second.as<std::string>() == "v") ++bad;
+        if (std::string(sect) == "keyboard_transitions" && kv.second.IsScalar() && kv.second.Scalar() == "v") ++bad;
       }
     }
   }
-  chk(bad == 0, "④ Velocity · Mimic_Dance1_subject2 로 가는 전이 · 키 v 없음");
-  // 남겨야 하는 것
+  return bad;
+}
+
+static void arcade_config_from_drops_six_transitions() {
+  namespace ac = g1::arcade_config;
+  const std::string path = std::string(G1_SOURCE_DIR) + "/config/config.yaml";
+  YAML::Node base;
+  try {
+    base = YAML::LoadFile(path);
+  } catch (const std::exception& e) {
+    chk(false, (std::string("④ config.yaml 을 못 읽었다: ") + e.what()).c_str());
+    return;
+  }
+  const YAML::Node before = YAML::Clone(base);  // 원본이 그대로인지 볼 사본
+  YAML::Node arc;
+  std::string err, removed, where;
+  const bool ok = ac::arcade_config_from(base, arc, err, &removed);
+  chk(ok, ("④ 실제 config.yaml → 아케이드 설정: " + err).c_str());
+  if (!ok) return;
+  std::printf("  · ④ 지움 %s\n", removed.c_str());
+  chk(same(before, base, "", where), ("④ 원본 노드는 그대로(사본에서 지움): " + where).c_str());
+  const YAML::Node fsm = static_cast<const YAML::Node&>(arc)["FSM"];
+  chk(dangerous_left(fsm) == 0, "④ 결과에 Velocity · Mimic_Dance1_subject2 로 가는 전이 · 키 v 없음");
   auto is = [&](const char* st, const char* sect, const char* tgt, const char* want) {
     const YAML::Node n = fsm[st][sect][tgt];
     return n && n.IsScalar() && n.Scalar() == want;
@@ -346,40 +390,64 @@ static void config_arcade_has_no_velocity_or_dance() {
       "④ FixStand → Passive (LT+B · p) · Mimic_Masked (m)");
   chk(is("Mimic_Masked", "transitions", "Passive", "LT + B.on_pressed") && is("Mimic_Masked", "keyboard_transitions", "Passive", "p"),
       "④ Mimic_Masked → Passive (LT+B · p)");
-  // Passive 에서 닿는 상태(리모컨 · 키보드 전이 · 모든 상태의 Passive 안전 전이는 코드가 단다)
-  std::set<std::string> seen{"Passive"};
-  std::vector<std::string> todo{"Passive"};
-  while (!todo.empty()) {
-    const std::string s = todo.back();
-    todo.pop_back();
-    for (const char* sect : {"transitions", "keyboard_transitions"})
-      if (const YAML::Node t = fsm[s][sect])
-        for (const auto& kv : t) {
-          const std::string to = kv.first.as<std::string>();
-          if (seen.insert(to).second) todo.push_back(to);
-        }
+  chk(ac::reachable_from_passive(fsm) == std::set<std::string>({"Passive", "FixStand", "Mimic_Masked"}),
+      "④ 닿는 상태 = Passive · FixStand · Mimic_Masked");
+  // 원본에서 시험 쪽 목록 6 개(만)를 지운 것 == 함수 결과 (그 밖 키 전부 같음 — FSM._ · 정책 · 클립 · 게인 · imu_cal …)
+  YAML::Node want = YAML::Clone(before);
+  int present = 0;
+  for (const Tr& t : kSix) {
+    YAML::Node sec = want["FSM"][t.st][t.sect];
+    if (sec && sec.IsMap() && sec[t.to]) { sec.remove(t.to); ++present; }
   }
-  chk(seen == std::set<std::string>({"Passive", "FixStand", "Mimic_Masked"}), "④ 닿는 상태 = Passive · FixStand · Mimic_Masked");
-  // config.yaml 에서 그 전이들만 뺀 것 == config_arcade.yaml (나머지 키 전부 같음 — 정책 · 클립 · 게인 · imu_cal …)
-  YAML::Node want = YAML::Clone(base);
-  int removed = 0;
-  for (const auto& st : want["FSM"]["_"]) {
-    const std::string name = st.first.as<std::string>();
-    for (const char* sect : {"transitions", "keyboard_transitions"}) {
-      YAML::Node t = want["FSM"][name][sect];
-      if (!t) continue;
-      std::vector<std::string> drop;
-      for (const auto& kv : t)
-        if (gone_target(kv.first.as<std::string>()) ||
-            (std::string(sect) == "keyboard_transitions" && kv.second.as<std::string>() == "v"))
-          drop.push_back(kv.first.as<std::string>());
-      for (const std::string& k : drop) { t.remove(k); ++removed; }
-    }
-  }
-  chk(removed == 6, ("④ config.yaml 에서 뺀 전이 6 개(FixStand RT+A·v · Velocity RB+A · Dance RT+A · Mimic_Masked RT+A·v) — 실제 " +
-                     std::to_string(removed)).c_str());
+  chk(present == 6, ("④ config.yaml 에 위험 전이 6 개가 있다 — 실제 " + std::to_string(present)).c_str());
+  chk(removed.rfind("6 개:", 0) == 0, ("④ 함수가 지운 수 = 6 — " + removed).c_str());
   where.clear();
-  chk(same(want, arc, "", where), ("④ 전이 말고는 config.yaml 과 같다: " + where).c_str());
+  chk(same(want, arc, "", where), ("④ 6 전이 말고는 config.yaml 과 같다: " + where).c_str());
+
+  // 거부: 지울 전이가 원본에 없다(이미 바뀐 config) — 조용히 넘어가지 않는다
+  for (const Tr& t : kSix) {
+    YAML::Node b2 = YAML::Clone(before);
+    YAML::Node sec = b2["FSM"][t.st][t.sect];
+    sec.remove(t.to);
+    YAML::Node out2 = YAML::Node(42);  // 거부면 손대지 않는다
+    std::string e2;
+    const std::string name = std::string(t.st) + "." + t.sect + "." + t.to;
+    chk(!ac::arcade_config_from(b2, out2, e2) && e2.find(name) != std::string::npos && out2.IsScalar() && out2.as<int>() == 42,
+        ("④ " + name + " 이 없는 config → 거부 + 이유(그 전이 이름) · out 그대로").c_str());
+  }
+  {  // 거부: 지운 뒤 Passive 에서 새 상태에 닿는다(새 위험 전이)
+    YAML::Node b3 = YAML::Clone(before);
+    b3["FSM"]["FixStand"]["keyboard_transitions"]["Mimic_Dance1_subject3"] = "d";
+    std::string e3;
+    YAML::Node out3;
+    chk(!ac::arcade_config_from(b3, out3, e3) && e3.find("Mimic_Dance1_subject3") != std::string::npos,
+        "④ Passive 에서 닿는 새 상태(FixStand d → Mimic_Dance1_subject3) → 거부 + 그 이름");
+  }
+  {  // 거부: 아케이드 진입(m)이 없어짐
+    YAML::Node b4 = YAML::Clone(before);
+    b4["FSM"]["FixStand"]["keyboard_transitions"].remove("Mimic_Masked");
+    std::string e4;
+    YAML::Node out4;
+    chk(!ac::arcade_config_from(b4, out4, e4) && e4.find("{FixStand, Passive}") != std::string::npos,
+        "④ FixStand m 없음 → 거부(닿는 상태 {FixStand, Passive})");
+  }
+  {  // 6 개 밖의 위험 전이(새로 생긴 Passive RT+A → Velocity · 키 v)도 지운다 — 목록에 나온다
+    YAML::Node b5 = YAML::Clone(before);
+    b5["FSM"]["Passive"]["transitions"]["Velocity"] = "RT + A.on_pressed";
+    b5["FSM"]["FixStand"]["keyboard_transitions"]["Passive2"] = "v";
+    std::string e5, r5;
+    YAML::Node out5;
+    const bool ok5 = ac::arcade_config_from(b5, out5, e5, &r5);
+    chk(ok5 && dangerous_left(static_cast<const YAML::Node&>(out5)["FSM"]) == 0 && r5.rfind("8 개:", 0) == 0 &&
+            r5.find("Passive.transitions.Velocity") != std::string::npos && r5.find("FixStand.keyboard_transitions.Passive2(v)") != std::string::npos,
+        ("④ 6 개 밖 위험 전이도 지우고 로그 목록에 — " + (ok5 ? r5 : e5)).c_str());
+  }
+  {  // FSM 이 없다
+    YAML::Node b6 = YAML::Load("a: 1");
+    std::string e6;
+    YAML::Node out6;
+    chk(!ac::arcade_config_from(b6, out6, e6) && e6.find("FSM") != std::string::npos, "④ FSM 없는 노드 → 거부");
+  }
 }
 
 // ── ⑤ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -443,6 +511,45 @@ static void arcade_link_tick_allocates_nothing() {
   for (int i = 0; i < 29; ++i) { a.kp[i] = kp[i]; a.kd[i] = kd[i]; }
   a.joint_ids_map = d["joint_ids_map"].as<std::vector<float>>();
 
+  {  // U4(검토 M10): 아케이드 상태 칸(0x6708) 열기 · flock 실패 → 기동 거부 + 이유(묶음을 싣기 전) · 일부러 끔(0)만 칸 없이 뜬다
+    g1::arcade_status::ArcadeStatusWriter& sw0 = g1::arcade_status::ArcadeStatusWriter::shared();
+    sw0.close_for_test();
+    g1::ArcadeLink l;
+    setenv("G1_ARCADE_STATUS_SHM", "/nonexistent_g1_arcade_gate_dir/status", 1);
+    chk(!l.open(a, err, summary) && err.find("상태 칸(0x6708)") != std::string::npos && err.find("open 실패") != std::string::npos,
+        ("U4 상태 칸 open 실패 → 기동 거부 + 이유: " + err).c_str());
+    const int fd = ::open(spath.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);  // 다른 쓰는 쪽(flock 은 열린 파일마다 — 같은 프로세스도 막힌다)
+    chk(fd >= 0 && ::flock(fd, LOCK_EX | LOCK_NB) == 0, "U4 시험: 다른 쓰는 쪽이 상태 칸 flock");
+    setenv("G1_ARCADE_STATUS_SHM", spath.c_str(), 1);
+    chk(!l.open(a, err, summary) && err.find("다른 프로세스") != std::string::npos && !sw0.on(),
+        ("U4 상태 칸 flock 실패(다른 쓰는 쪽) → 기동 거부 + 이유: " + err).c_str());
+    if (fd >= 0) ::close(fd);  // flock 풀림
+    setenv("G1_ARCADE_STATUS_SHM", "0", 1);
+    g1::ArcadeLink l0;
+    chk(l0.open(a, err, summary) && !sw0.on() && summary.find("status (off — G1_ARCADE_STATUS_SHM=0)") != std::string::npos,
+        ("U4 G1_ARCADE_STATUS_SHM=0(일부러 끔) → 칸 없이 뜬다 · 로그에 off: " + err).c_str());
+    setenv("G1_ARCADE_STATUS_SHM", spath.c_str(), 1);
+  }
+  {  // U5(검토 M4): 기동 요약에 묶음 manifest md5 · board · g1_arcade 커밋 · dirty(정보만)
+    std::string md5;
+    chk(arcade::md5_file(std::string(bundle) + "/manifest.json", md5), "U5 시험: manifest md5");
+    const YAML::Node m = YAML::LoadFile(std::string(bundle) + "/manifest.json");
+    const std::string want = "manifest md5 " + md5 + " · board " + m["board"].Scalar() + " · g1_arcade " + m["g1_arcade_commit"].Scalar() +
+                             " · dirty " + m["dirty"].Scalar();
+    chk(g1::bundle_manifest_info(bundle) == want, ("U5 묶음 정보 = " + want + " — 실제 " + g1::bundle_manifest_info(bundle)).c_str());
+    char tdir[] = "/tmp/g1_arcade_gate_manifest_XXXXXX";
+    if (mkdtemp(tdir)) {
+      const std::string mp = std::string(tdir) + "/manifest.json";
+      if (std::FILE* f = std::fopen(mp.c_str(), "w")) { std::fputs("{\"version\": 1, \"board\": \"bt5\"}\n", f); std::fclose(f); }
+      std::string m2;
+      arcade::md5_file(mp, m2);
+      chk(g1::bundle_manifest_info(tdir) == "manifest md5 " + m2 + " · board bt5 · g1_arcade ? · dirty ?", "U5 없는 칸 → «?»");
+      std::remove(mp.c_str());
+      ::rmdir(tdir);
+    }
+    chk(g1::bundle_manifest_info("/nonexistent_g1_arcade_bundle") == "manifest md5 ? · board ? · g1_arcade ? · dirty ?", "U5 manifest 없음 → 전부 «?»");
+  }
+
   {  // 기동 거부
     g1::ArcadeLink l;
     g1::ArcadeLink::OpenArgs b = a;
@@ -459,6 +566,8 @@ static void arcade_link_tick_allocates_nothing() {
   g1::ArcadeLink link;
   if (!link.open(a, err, summary)) { chk(false, ("⑤ ArcadeLink::open: " + err).c_str()); return; }
   std::printf("  · open: %s\n", summary.c_str());
+  chk(summary.find("manifest md5 ") != std::string::npos && summary.find("status " + spath) != std::string::npos,
+      "U5 기동 요약 한 줄에 묶음 정보 · 상태 칸 경로");
 
   // 서 있는 상태(슬롯 기본 자세 · 직립 · 속도 0)
   FakeData fd;
@@ -559,8 +668,8 @@ int main() {
   small_rules();
   std::printf("%s small_rules (G1_ARCADE · joint_ids_map · mlockall)\n", fail > f0 ? "FAIL" : "ok  ");
   f0 = fail;
-  config_arcade_has_no_velocity_or_dance();
-  std::printf("%s config_arcade_has_no_velocity_or_dance\n", fail > f0 ? "FAIL" : "ok  ");
+  arcade_config_from_drops_six_transitions();
+  std::printf("%s arcade_config_from_drops_six_transitions\n", fail > f0 ? "FAIL" : "ok  ");
 #if G1_HAVE_ARCADE
   f0 = fail;
   arcade_link_tick_allocates_nothing();

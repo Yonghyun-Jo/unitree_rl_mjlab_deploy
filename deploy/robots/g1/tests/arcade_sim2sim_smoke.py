@@ -17,6 +17,7 @@ python 3.8 문법(로봇에서도 돈다 — 단 이 연기는 com1 sim 전용).
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import pty
@@ -103,7 +104,7 @@ def main():
     if err:
         print("🔴 " + err)
         return 1
-    for p in (INTENT, STATUS, INTENT + ".tmp"):
+    for p in [INTENT, STATUS, INTENT + ".tmp"] + glob.glob(INTENT + ".*.tmp"):   # 임시 파일 = <칸>.<pid>.tmp(쓰는 쪽마다)
         if os.path.exists(p):
             print("🔴 %s 가 이미 있다 — 남의 것일 수 있어 거부(지우지 않는다)" % p)
             return 1
@@ -244,7 +245,7 @@ def main():
             xv.wait(timeout=8)
         except Exception:
             xv.kill()
-        for p in (INTENT, STATUS, INTENT + ".tmp"):   # 이 스크립트(와 그 g1_ctrl)가 만든 것 — 시작 때 없음을 확인했다
+        for p in (INTENT, STATUS, ish.tmp_path(INTENT)):   # 이 스크립트(와 그 g1_ctrl)가 만든 것 — 시작 때 없음을 확인했다
             if os.path.exists(p):
                 os.remove(p)
 

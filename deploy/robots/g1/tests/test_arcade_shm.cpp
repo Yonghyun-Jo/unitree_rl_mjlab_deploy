@@ -1,7 +1,7 @@
 // test_arcade_shm.cpp — 아케이드 의도 칸(ArcadeIntent.h, 0x6707) 판정 + 아케이드 상태 칸(ArcadeStatus.h, 0x6708) seqlock.
 //   intent_stale_zero_after_15_ticks · event_applied_once_per_event_seq · old_event_dropped ·
 //   rearm_requires_neutral_after_stale_and_stay_start · nonfinite_axis_is_zero · stale_drops_event_seq(stale 중 바뀐 event_seq) ·
-//   event_bits_match_core(G1_HAVE_ARCADE 일 때만) · read_intent_file(임시 경로) · status_seqlock_never_torn(1e5) · status_write_allocates_nothing
+//   event_bits_match_core(G1_HAVE_ARCADE 일 때만) · read_intent_file(임시 경로 — 없음 · 36 B · 짧음 · 긺 37 B · 남의 magic) · status_open_failure_reasons(U4) · status_seqlock_never_torn(1e5) · status_write_allocates_nothing
 //   시험 경로는 임시 폴더다 — 실제 /dev/shm/g1_arcade_* 를 건드리지 않는다.
 //   g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include -pthread test_arcade_shm.cpp -o /tmp/t && /tmp/t
 //   (core 대조: -DG1_HAVE_ARCADE -I<g1_arcade>/core/include)
@@ -289,6 +289,17 @@ static void read_intent_file_roundtrip() {
     chk(read_intent_file(p.c_str(), out) && std::memcmp(&out, &f, sizeof f) == 0, "36 B 프레임을 그대로 읽는다");
     fp = std::fopen(p.c_str(), "wb"); std::fwrite(&f, 1, sizeof f - 1, fp); std::fclose(fp);
     chk(!read_intent_file(p.c_str(), out), "짧은 파일 = false");
+    {   // U3(검토 M2): 긴 파일(맞는 36 B 프레임 + 1 B) — 앞 36 B 를 프레임으로 치지 않는다
+        const unsigned char extra = 0;
+        fp = std::fopen(p.c_str(), "wb"); std::fwrite(&f, 1, sizeof f, fp); std::fwrite(&extra, 1, 1, fp); std::fclose(fp);
+        ArcadeIntentFrame keep = mk(5);
+        out = keep;
+        chk(!read_intent_file(p.c_str(), out) && std::memcmp(&out, &keep, sizeof keep) == 0, "37 B 파일 = false(out 그대로)");
+        fp = std::fopen(p.c_str(), "wb");
+        for (int k = 0; k < 4; ++k) std::fwrite(&f, 1, sizeof f, fp);   // 프레임 넷이 이어 붙은 144 B
+        std::fclose(fp);
+        chk(!read_intent_file(p.c_str(), out), "144 B 파일(프레임 넷) = false");
+    }
     f.magic = 0x6704;
     fp = std::fopen(p.c_str(), "wb"); std::fwrite(&f, 1, sizeof f, fp); std::fclose(fp);
     chk(!read_intent_file(p.c_str(), out), "남의 magic = false");
@@ -311,6 +322,33 @@ struct TmpShm {
     TmpShm() { std::snprintf(dir, sizeof dir, "/dev/shm/g1_arcade_shm_test_XXXXXX"); if (!mkdtemp(dir)) dir[0] = 0; path = std::string(dir) + "/status"; }
     ~TmpShm() { std::remove(path.c_str()); if (dir[0]) ::rmdir(dir); }
 };
+
+// U4(검토 M10): 열기 실패 · flock(다른 쓰는 쪽) 실패의 이유가 last_error() 에 남고, G1_ARCADE_STATUS_SHM=0 은 «끔» 으로 구분된다
+// (ArcadeLink::open 이 실패면 기동 거부 · 끔이면 칸 없이 — tests/test_arcade_gate.cpp ⑤ 가 그 거부를 본다).
+static void status_open_failure_reasons() {
+    {
+        ArcadeStatusWriter w;
+        chk(!w.open("/nonexistent_g1_arcade_shm_dir/status") && !w.on() && std::strstr(w.last_error(), "open 실패") != nullptr,
+            "상태 칸 open 실패 → last_error «open 실패»");
+    }
+    {
+        TmpShm t; ArcadeStatusWriter a, b;
+        chk(a.open(t.path.c_str()) && a.on(), "상태 칸 첫 쓰는 쪽");
+        chk(!b.open(t.path.c_str()) && !b.on() && std::strstr(b.last_error(), "다른 프로세스") != nullptr,
+            "두 번째 쓰는 쪽 → flock 실패 · last_error «다른 프로세스»");
+        a.close_for_test();
+        chk(b.open(t.path.c_str()) && b.on() && b.last_error()[0] == '\0', "첫 쪽이 닫으면 열린다 · last_error 비움");
+        b.close_for_test();
+    }
+    {
+        ArcadeStatusWriter w;
+        setenv("G1_ARCADE_STATUS_SHM", "0", 1);
+        chk(!w.open_from_env_or_default() && w.off_by_env() && w.last_error()[0] == '\0', "G1_ARCADE_STATUS_SHM=0 → 끔(off_by_env · 오류 아님)");
+        setenv("G1_ARCADE_STATUS_SHM", "/nonexistent_g1_arcade_shm_dir/status", 1);
+        chk(!w.open_from_env_or_default() && !w.off_by_env() && w.last_error()[0] != '\0', "환경 경로 열기 실패 → 끔 아님 · 이유 있음");
+        unsetenv("G1_ARCADE_STATUS_SHM");
+    }
+}
 
 static void status_seqlock_never_torn() {
     TmpShm t; ArcadeStatusWriter w;
@@ -374,6 +412,7 @@ int main() {
     event_bits_match_core();
     read_intent_file_allocates_nothing();
     read_intent_file_roundtrip();
+    status_open_failure_reasons();
     status_seqlock_never_torn();
     status_write_allocates_nothing();
     if (fail) { std::printf("%d FAIL\n", fail); return 1; }

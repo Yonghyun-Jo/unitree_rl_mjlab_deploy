@@ -2397,6 +2397,7 @@ void State_Mimic::arcade_qd_guard_(const g1::arcade_gate::CoreSafety& cs)
 void State_Mimic::arcade_policy_loop_()
 {
     using clock = std::chrono::high_resolution_clock;
+    g1::arcade_pretouch_stack();   // 스택 256 KiB 선터치 — 이 스레드 스택은 생성자 mlockall 뒤에 생겨 안 잠겼다(ArcadeLink.h)
     g1::ArcadeLink& A = *g_arc;
     const auto dt = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(env->step_dt));
     auto sleepTill = clock::now() + dt;

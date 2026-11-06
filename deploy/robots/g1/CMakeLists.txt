@@ -110,7 +110,8 @@ if(G1_HAVE_ARCADE)
   target_compile_definitions(test_arcade_host PRIVATE G1_HAVE_ARCADE=1 G1_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
   target_compile_options(test_arcade_host PRIVATE -Wall -Wextra)
   target_link_libraries(test_arcade_host PRIVATE arcade_host_native arcade_onnxruntime ${CMAKE_DL_LIBS})
-  # 아케이드 경로 판정(ArcadeGate.h) + 한 정책 틱(ArcadeLink: 의도 칸 → core → 상태 칸)의 malloc 수준 할당 0 · config_arcade.yaml 대조.
+  # 아케이드 경로 판정(ArcadeGate.h) + 한 정책 틱(ArcadeLink: 의도 칸 → core → 상태 칸)의 malloc 수준 할당 0 · 아케이드 FSM 설정
+  # (ArcadeConfig.h — config.yaml 에서 위험 전이를 지운 노드) 대조.
   # 같은 시험 파일을 run_unit_tests.sh 가 아케이드 없이도 g++ 로 바로 돌린다(그때는 ArcadeLink 틱 시험만 빠진다).
   add_executable(test_arcade_gate EXCLUDE_FROM_ALL tests/test_arcade_gate.cpp src/ArcadeLink.cpp src/ArcadeHost.cpp)
   target_compile_definitions(test_arcade_gate PRIVATE G1_HAVE_ARCADE=1 G1_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

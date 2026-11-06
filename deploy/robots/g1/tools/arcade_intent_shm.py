@@ -4,7 +4,8 @@
 ⚠ 칸 배치는 그 구조체와 같은 커밋으로만 바꾼다 — tests/test_arcade_shm_layout.py 가 정규식으로 대조한다.
 
 write_intent(fwd, side, turn, run, events, event_age_ms) — 호출마다 seq(하트비트)를 +1, events 가 0 이 아니면 event_seq 도 +1.
-  os.replace 로 통째 교체(찢긴 읽기 없음 · gui_shm.py 와 같은 방식). 값이 같아도 매번 쓴다(하트비트).
+  os.replace 로 통째 교체(찢긴 읽기 없음 · gui_shm.py 와 같은 방식 — 임시 파일 = <dst>.<pid>.tmp, 쓰는 쪽마다 따로). 값이 같아도
+  매번 쓴다(하트비트).
   events = 마지막 이벤트 비트(EV_*, event_seq 와 짝) · event_age_ms = 쓰는 쪽이 아는 그 이벤트의 나이(읽는 쪽이 500 ms 넘으면 버린다).
   «끈적한 이벤트»: 0 이 아닌 events 를 주면 새 이벤트(event_seq +1)다. 이후 events=0 으로 부르면 마지막 비트와 event_seq 를 그대로
   다시 싣고 age 만 지금 시각으로 갱신한다(읽는 쪽이 이벤트 프레임을 놓쳐도 소실되지 않게 · 중복 적용은 event_seq 가 막는다).
@@ -46,6 +47,11 @@ def _clamp(x: float) -> float:
     return max(-1.0, min(1.0, x))
 
 
+def tmp_path(dst: str) -> str:
+    """원자 교체용 임시 파일 = <dst>.<pid>.tmp — 쓰는 쪽이 둘이면(중계 · 시험 재생기가 겹치면) 서로의 임시 파일을 덮지 않게(검토 I6)."""
+    return "%s.%d.tmp" % (dst, os.getpid())
+
+
 def write_intent(fwd: float, side: float, turn: float, run: int = 0, events: int = 0,
                  event_age_ms: int = 0, path: Optional[str] = None) -> None:
     """프레임 하나를 원자 교체로 낸다. path 기본 = SHM_PATH(호출 때 읽는다 — 시험이 바꿔 끼운다)."""
@@ -65,7 +71,7 @@ def write_intent(fwd: float, side: float, turn: float, run: int = 0, events: int
     buf = struct.pack(FMT, MAGIC, _state["seq"], _clamp(fwd), _clamp(side), _clamp(turn),
                       1 if run else 0, _state["events"], _state["event_seq"], age)
     dst = path if path is not None else SHM_PATH
-    tmp = dst + ".tmp"
+    tmp = tmp_path(dst)
     with open(tmp, "wb") as f:
         f.write(buf)
     os.replace(tmp, dst)

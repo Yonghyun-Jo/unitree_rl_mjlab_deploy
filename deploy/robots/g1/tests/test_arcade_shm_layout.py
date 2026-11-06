@@ -115,7 +115,16 @@ def test_intent_write_read_roundtrip():
         c = m.read(p)
         assert c["events"] == 17 and c["event_age_ms"] == 30 and c["event_seq"] == (a["event_seq"] + 1) & 0xFFFFFFFF
         assert c["seq"] == (b["seq"] + 1) & 0xFFFFFFFF
-        assert not os.path.exists(p + ".tmp"), "os.replace 로 교체하면 .tmp 가 남지 않는다"
+        assert m.tmp_path(p) == "%s.%d.tmp" % (p, os.getpid()), "임시 파일 = <dst>.<pid>.tmp(쓰는 쪽이 둘이면 서로 안 덮는다)"
+        assert not os.path.exists(m.tmp_path(p)) and not os.path.exists(p + ".tmp"), "os.replace 로 교체하면 임시 파일이 남지 않는다"
+        seen = []                                                         # 실제로 그 이름으로 쓰고 바꾸는가
+        real_replace = os.replace
+        try:
+            os.replace = lambda a, b: (seen.append((a, b)), real_replace(a, b))
+            m.write_intent(0, 0, 0, path=p)
+        finally:
+            os.replace = real_replace
+        assert seen == [(m.tmp_path(p), p)], seen
         m._state["seq"] = 0xFFFFFFFF                                      # uint32 감김
         m.write_intent(0, 0, 0, path=p)
         assert m.read(p)["seq"] == 0

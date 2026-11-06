@@ -95,19 +95,23 @@ class ArcadeStatusWriter {
 public:
     static ArcadeStatusWriter& shared() { static ArcadeStatusWriter w; return w; }
 
+    // false = 끔(G1_ARCADE_STATUS_SHM=0 — off_by_env()) 또는 실패(last_error() 에 이유). 아케이드 경로(ArcadeLink::open)는 실패면
+    // 기동 거부한다(HUD 없이 뜨지 않는다 — 검토 M10).
     bool open_from_env_or_default() {
         if (words_) return true;
         bool unknown = false;
         const char* env = std::getenv("G1_ARCADE_STATUS_SHM");
         const char* p = path_from_env_value(env, &unknown);
         if (unknown) std::fprintf(stderr, "[arcade_status] G1_ARCADE_STATUS_SHM='%s' 는 모르는 값 — 기본 경로 %s\n", env, DEFAULT_PATH);
+        off_by_env_ = (p == nullptr);
         if (!p) return false;
         return open(p);
     }
 
-    // 멱등 — 이미 열렸으면 true. 실패하면 이유를 stderr 한 줄(그 뒤 write() 는 no-op).
+    // 멱등 — 이미 열렸으면 true. 실패하면 이유를 stderr 한 줄 + last_error()(그 뒤 write() 는 no-op).
     bool open(const char* path) {
         if (words_) return true;
+        err_[0] = '\0';
         if (!path || !*path || std::strlen(path) >= sizeof(path_)) return fail_("경로가 비었거나 너무 길다", path);
         const int fd = ::open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
         if (fd < 0) return fail_("open", path);
@@ -115,7 +119,8 @@ public:
             const int e = errno;
             ::close(fd);
             if (e == EWOULDBLOCK) {
-                std::fprintf(stderr, "[arcade_status] %s 를 다른 프로세스가 쓰고 있다 — 이 프로세스는 쓰지 않는다\n", path);
+                std::snprintf(err_, sizeof(err_), "%s 를 다른 프로세스가 쓰고 있다(flock — 다른 g1_ctrl?)", path);
+                std::fprintf(stderr, "[arcade_status] %s — 이 프로세스는 쓰지 않는다\n", err_);
                 return false;
             }
             errno = e;
@@ -156,6 +161,8 @@ public:
     }
 
     bool on() const { return words_ != nullptr; }
+    bool off_by_env() const { return off_by_env_; }   // 마지막 open_from_env_or_default 가 G1_ARCADE_STATUS_SHM=0 으로 껐다
+    const char* last_error() const { return err_; }    // 마지막 실패 이유(없으면 "")
     const char* path() const { return path_; }
     const Word* words() const { return words_; }
 
@@ -163,18 +170,22 @@ public:
     void close_for_test() {
         if (words_) ::munmap(static_cast<void*>(words_), sizeof(ArcadeStatus));
         if (fd_ >= 0) ::close(fd_);
-        words_ = nullptr; fd_ = -1; path_[0] = '\0'; seq_ = 0;
+        words_ = nullptr; fd_ = -1; path_[0] = '\0'; seq_ = 0; err_[0] = '\0'; off_by_env_ = false;
     }
 
 private:
     bool fail_(const char* what, const char* path) {
-        std::fprintf(stderr, "[arcade_status] %s 실패 (%s): %s — 아케이드 상태 칸을 쓰지 않는다\n", what, path ? path : "(null)", std::strerror(errno));
+        const int e = errno;
+        std::snprintf(err_, sizeof(err_), "%s 실패 (%s): %s", what, path ? path : "(null)", std::strerror(e));
+        std::fprintf(stderr, "[arcade_status] %s — 아케이드 상태 칸을 쓰지 않는다\n", err_);
         return false;
     }
     Word* words_ = nullptr;
     int fd_ = -1;
     uint32_t seq_ = 0;
+    bool off_by_env_ = false;
     char path_[256] = {};
+    char err_[320] = {};
 };
 
 }  // namespace g1::arcade_status

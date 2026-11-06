@@ -2,6 +2,10 @@
 #if G1_HAVE_ARCADE
 #include "ArcadeLink.h"
 
+#include <yaml-cpp/yaml.h>
+
+#include "arcade_host/bundle_loader.h"  // arcade::md5_file(묶음 manifest md5 — 기동 로그)
+
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -25,6 +29,14 @@ bool ArcadeLink::open(const OpenArgs& a, std::string& err, std::string& summary)
     err = "G1_ARCADE_BUNDLE(아케이드 묶음 폴더 — g1_arcade tools/arcade bundle 이 만든 것)이 없다";
     return false;
   }
+  // 아케이드 상태 칸(0x6708) — 열기 · flock 이 실패하면 거부(HUD 없이 뜨지 않는다, 검토 M10). 묶음 · ORT 를 싣기 전에(빨리 거부).
+  //   G1_ARCADE_STATUS_SHM=0(일부러 끔)만 상태 칸 없이 뜬다(기동 로그 «status (off — G1_ARCADE_STATUS_SHM=0)»).
+  arcade_status::ArcadeStatusWriter& sw = arcade_status::ArcadeStatusWriter::shared();
+  if (!sw.open_from_env_or_default() && !sw.off_by_env()) {
+    err = std::string("아케이드 상태 칸(0x6708)을 못 연다: ") + sw.last_error() +
+          " — HUD 없이 뜨지 않는다(다른 g1_ctrl 이 쥐고 있으면 그것부터 끌 것 · 경로 = G1_ARCADE_STATUS_SHM)";
+    return false;
+  }
   std::string why;
   if (!host_.open(a.bundle_dir, a.kp, a.kd, why)) {
     err = "ArcadeHost::open(" + a.bundle_dir + "): " + why;
@@ -44,8 +56,6 @@ bool ArcadeLink::open(const OpenArgs& a, std::string& err, std::string& summary)
   intent_.events.clear();
   intent_.events.reserve(8);  // 이벤트 비트 5 종(ArcadeIntent.h INTENT_EV_*) — 틱의 push_back 이 이 용량 안
   obs_ = arcade::ObservableState{};
-  arcade_status::ArcadeStatusWriter& sw = arcade_status::ArcadeStatusWriter::shared();
-  sw.open_from_env_or_default();  // 실패 · 끔이면 write 는 no-op(이유는 writer 가 stderr 한 줄)
 
   std::string role_list;
   for (const std::string& r : roles) role_list += (role_list.empty() ? "" : ",") + r;
@@ -54,9 +64,30 @@ bool ArcadeLink::open(const OpenArgs& a, std::string& err, std::string& summary)
                 "bundle=%s sessions=%d warm_up ok · roles [%s] · gains match slot '%s' (꾸러미 %d 개 kp/kd) · joint_ids_map "
                 "identity · intent %s · status %s",
                 a.bundle_dir.c_str(), host_.session_count(), role_list.c_str(), a.slot_name.c_str(), host_.session_count(),
-                intent_path_.c_str(), sw.on() ? sw.path() : "(off)");
-  summary = buf;
+                intent_path_.c_str(), sw.on() ? sw.path() : "(off — G1_ARCADE_STATUS_SHM=0)");
+  summary = std::string(buf) + " · " + bundle_manifest_info(a.bundle_dir);  // 묶음 출처(정보만 — 거부 조건 아님, 검토 M4)
   return true;
+}
+
+std::string bundle_manifest_info(const std::string& bundle_dir) {
+  const std::string mp = bundle_dir + "/manifest.json";
+  std::string md5;
+  if (!arcade::md5_file(mp, md5)) md5 = "?";
+  std::string board = "?", commit = "?", dirty = "?";
+  try {  // manifest = JSON(= YAML 흐름 꼴) — yaml-cpp 로 읽는다. 칸이 없거나 형이 다르면 «?»
+    const YAML::Node m = YAML::LoadFile(mp);
+    auto scalar = [&](const char* k) -> std::string {
+      const YAML::Node n = m[k];
+      return (n && n.IsScalar() && !n.Scalar().empty()) ? n.Scalar() : std::string("?");
+    };
+    if (m.IsMap()) {
+      board = scalar("board");
+      commit = scalar("g1_arcade_commit");
+      dirty = scalar("dirty");
+    }
+  } catch (const std::exception&) {
+  }
+  return "manifest md5 " + md5 + " · board " + board + " · g1_arcade " + commit + " · dirty " + dirty;
 }
 
 bool ArcadeLink::enter(const ArcadeSense& m, const float* default_q) {
@@ -130,52 +161,70 @@ void ArcadeLink::run_q_des(std::array<float, 29>& out) {
   out = q_last_;
 }
 
-// /proc/self/status 의 VmSize · VmRSS · VmLck [kB] — 못 읽으면 -1. (잠근 양을 로봇에서 실제로 보려고)
-static std::string vm_tail() {
-  long sz = -1, rss = -1, lck = -1;
+// /proc/self/status 의 VmSize · VmRSS · VmLck [kB] · CapEff(16 진). 못 읽은 칸은 -1 / 0(기동 때 한 번 — 실시간 경로 밖).
+struct ProcStatus {
+  long long vmsize_kb = -1, vmrss_kb = -1, vmlck_kb = -1;
+  std::uint64_t cap_eff = 0;
+  bool have_cap = false;
+};
+static ProcStatus read_proc_status() {
+  ProcStatus ps;
   if (std::FILE* f = std::fopen("/proc/self/status", "r")) {
     char line[256];
     while (std::fgets(line, sizeof(line), f)) {
-      long v;
-      if (std::sscanf(line, "VmSize: %ld kB", &v) == 1) sz = v;
-      else if (std::sscanf(line, "VmRSS: %ld kB", &v) == 1) rss = v;
-      else if (std::sscanf(line, "VmLck: %ld kB", &v) == 1) lck = v;
+      std::uint64_t v = 0;
+      if (arcade_gate::proc_status_field(line, "VmSize:", 10, v)) ps.vmsize_kb = static_cast<long long>(v);
+      else if (arcade_gate::proc_status_field(line, "VmRSS:", 10, v)) ps.vmrss_kb = static_cast<long long>(v);
+      else if (arcade_gate::proc_status_field(line, "VmLck:", 10, v)) ps.vmlck_kb = static_cast<long long>(v);
+      else if (arcade_gate::proc_status_field(line, "CapEff:", 16, v)) { ps.cap_eff = v; ps.have_cap = true; }
     }
     std::fclose(f);
   }
+  return ps;
+}
+
+// 잠근 양을 로봇에서 실제로 보려고(잠근 뒤라 VmLck 가 실제 잠긴 양)
+static std::string vm_tail() {
+  const ProcStatus ps = read_proc_status();
   char b[120];
-  std::snprintf(b, sizeof(b), " · VmSize %.1f MB · VmRSS %.1f MB · VmLck %.1f MB", sz / 1024.0, rss / 1024.0, lck / 1024.0);
+  std::snprintf(b, sizeof(b), " · VmSize %.1f MB · VmRSS %.1f MB · VmLck %.1f MB", ps.vmsize_kb / 1024.0, ps.vmrss_kb / 1024.0,
+                ps.vmlck_kb / 1024.0);
   return b;
 }
 
 std::string arcade_try_mlock_current() {
   rlimit rl{};
   if (getrlimit(RLIMIT_MEMLOCK, &rl) != 0) return std::string("skip (getrlimit 실패: ") + std::strerror(errno) + ")";
-  long pages = 0, rss_pages = 0;
-  if (std::FILE* f = std::fopen("/proc/self/statm", "r")) {
-    if (std::fscanf(f, "%ld %ld", &pages, &rss_pages) != 2) rss_pages = 0;
-    std::fclose(f);
-  }
-  const std::uint64_t page = static_cast<std::uint64_t>(sysconf(_SC_PAGESIZE));
-  const std::uint64_t rss = static_cast<std::uint64_t>(rss_pages > 0 ? rss_pages : 0) * page;
+  const ProcStatus ps = read_proc_status();
+  const std::uint64_t vmsize = ps.vmsize_kb > 0 ? static_cast<std::uint64_t>(ps.vmsize_kb) * 1024u : 0u;
+  const bool cap = ps.have_cap && arcade_gate::cap_ipc_lock_in(ps.cap_eff);
   const bool unlimited = rl.rlim_cur == RLIM_INFINITY;
   const std::uint64_t soft = unlimited ? 0 : static_cast<std::uint64_t>(rl.rlim_cur);
+  const arcade_gate::MlockVerdict v = arcade_gate::mlock_verdict(unlimited, soft, vmsize, cap);
   char lim[48];
   if (unlimited) std::snprintf(lim, sizeof(lim), "unlimited");
   else std::snprintf(lim, sizeof(lim), "%.1f MB", soft / 1048576.0);
-  char buf[320];
-  if (!arcade_gate::mlock_worth_trying(unlimited, soft, rss)) {
-    std::snprintf(buf, sizeof(buf), "skip (memlock %s < 2×RSS %.1f MB — 잠그지 않는다)", lim, rss / 1048576.0);
-    return std::string(buf) + vm_tail();
-  }
+  // 판정 근거: 한도 · VmSize(×1.2) · CAP_IPC_LOCK(CapEff 비트 14) — 로봇에서 «왜 잠갔나/안 잠갔나» 를 로그 한 줄로
+  char basis[256];
+  std::snprintf(basis, sizeof(basis), "memlock soft %s · VmSize %.1f MB (x1.2 = %.1f MB) · CAP_IPC_LOCK %s · 판정 %s", lim,
+                vmsize / 1048576.0, (vmsize + vmsize / 5) / 1048576.0,
+                !ps.have_cap ? "? (CapEff 못 읽음)" : (cap ? "있음" : "없음"), v.why);
+  if (!v.try_lock) return std::string("skip (") + basis + " — 잠그지 않는다)" + vm_tail();
   if (mlockall(MCL_CURRENT) != 0) {
     const int e = errno;
-    std::snprintf(buf, sizeof(buf), "fail errno=%d %s (RSS %.1f MB · memlock %s) — 잠그지 않고 계속", e, std::strerror(e),
-                  rss / 1048576.0, lim);
-    return std::string(buf) + vm_tail();
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "fail errno=%d %s (", e, std::strerror(e));
+    return std::string(buf) + basis + ") — 잠그지 않고 계속" + vm_tail();
   }
-  std::snprintf(buf, sizeof(buf), "ok (MCL_CURRENT · RSS %.1f MB · memlock %s · MCL_FUTURE 안 씀)", rss / 1048576.0, lim);
-  return std::string(buf) + vm_tail();  // 잠근 뒤라 VmLck 가 실제 잠긴 양
+  return std::string("ok (MCL_CURRENT · ") + basis + " · MCL_FUTURE 안 씀)" + vm_tail();
+}
+
+// 정책 스레드 스택 선터치(최종 검토 I7) — 머리 설명은 ArcadeLink.h. 따로 된 함수(noinline)라 돌아온 뒤 그 자리를 뒤 호출
+// (ArcadeLink::tick → ArcadeHost::tick → ORT Run)이 다시 쓴다(부르는 쪽 지역 변수로 두면 그 프레임 «아래» 가 쓰여 소용없다).
+__attribute__((noinline)) void arcade_pretouch_stack() noexcept {
+  volatile unsigned char touch[kArcadePretouchStackBytes];
+  for (std::size_t i = sizeof(touch); i > 0; i -= 4096) touch[i - 1] = 0;  // 위(지금 스택 꼭대기 쪽)에서 아래로, 쪽마다 한 번
+  touch[0] = 0;
 }
 
 }  // namespace g1

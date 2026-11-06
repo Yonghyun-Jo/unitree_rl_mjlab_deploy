@@ -23,7 +23,9 @@
 #include "SafetyPolicy.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
 namespace g1::arcade_gate {
@@ -94,10 +96,39 @@ inline void refusal_fallback_q(const float* q_meas, const float* q_default, floa
   for (int i = 0; i < 29; ++i) out[i] = std::isfinite(q_meas[i]) ? q_meas[i] : q_default[i];
 }
 
-// mlockall(MCL_CURRENT) 을 시도할 만한가(R-B7): memlock 한도(soft)가 무한이거나 지금 RSS 의 2 배 이상일 때만. MCL_FUTURE 는 쓰지
-// 않는다(로봇 한도를 넘는 뒤 할당이 실패해 제어기가 죽을 수 있다 — 안전 > 폴트 0). 실패해도 기동은 계속한다(호출부).
-inline bool mlock_worth_trying(bool soft_unlimited, std::uint64_t soft_bytes, std::uint64_t rss_bytes) {
-  return soft_unlimited || (rss_bytes > 0 && soft_bytes / 2 >= rss_bytes);
+// mlockall(MCL_CURRENT) 을 시도할 만한가(R-B7 · 최종 검토 I7). MCL_CURRENT 는 RSS 가 아니라 «지금 매핑 전체(VmSize)» 를 잠근다
+// (com1 실측 VmLck = VmSize 1149 MB, RSS 830 MB) — 그래서 기준은 VmSize:
+//   CAP_IPC_LOCK 유효(/proc/self/status CapEff 비트 14 — 한도와 무관하게 잠글 수 있다) ∨ memlock soft 무한 ∨ soft ≥ VmSize × 1.2.
+//   VmSize 를 못 읽으면(0) 한도 비교로는 시도하지 않는다. MCL_FUTURE 는 쓰지 않는다(로봇 한도를 넘는 뒤 할당이 실패해 제어기가
+//   죽을 수 있다 — 안전 > 폴트 0). 시도가 실패해도 기동은 계속한다(호출부). why = 판정 근거(기동 로그).
+inline constexpr int CAP_IPC_LOCK_BIT = 14;  // linux/capability.h CAP_IPC_LOCK
+inline bool cap_ipc_lock_in(std::uint64_t cap_eff) { return ((cap_eff >> CAP_IPC_LOCK_BIT) & 1u) != 0; }
+
+struct MlockVerdict {
+  bool try_lock;
+  const char* why;
+};
+inline MlockVerdict mlock_verdict(bool soft_unlimited, std::uint64_t soft_bytes, std::uint64_t vmsize_bytes, bool cap_ipc_lock) {
+  if (cap_ipc_lock) return {true, "CAP_IPC_LOCK"};
+  if (soft_unlimited) return {true, "memlock unlimited"};
+  if (vmsize_bytes == 0) return {false, "VmSize 를 못 읽음"};
+  if (soft_bytes >= vmsize_bytes + vmsize_bytes / 5) return {true, "memlock >= 1.2 x VmSize"};
+  return {false, "memlock < 1.2 x VmSize"};
+}
+inline bool mlock_worth_trying(bool soft_unlimited, std::uint64_t soft_bytes, std::uint64_t vmsize_bytes, bool cap_ipc_lock) {
+  return mlock_verdict(soft_unlimited, soft_bytes, vmsize_bytes, cap_ipc_lock).try_lock;
+}
+
+// /proc/self/status 한 줄에서 «key» 칸의 수(base 10 = kB 칸 · 16 = CapEff). key 로 시작하고 수가 있으면 true.
+inline bool proc_status_field(const char* line, const char* key, int base, std::uint64_t& out) {
+  const std::size_t n = std::strlen(key);
+  if (!line || std::strncmp(line, key, n) != 0) return false;
+  char* end = nullptr;
+  const char* p = line + n;
+  const unsigned long long v = std::strtoull(p, &end, base);
+  if (end == p) return false;
+  out = static_cast<std::uint64_t>(v);
+  return true;
 }
 
 }  // namespace g1::arcade_gate

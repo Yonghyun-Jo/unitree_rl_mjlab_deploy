@@ -14,6 +14,7 @@
 #if G1_HAVE_ARCADE
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -114,8 +115,20 @@ inline ArcadeStatus arcade_status_frame(const ArcadeLink::Tick& t, uint32_t tick
   return s;
 }
 
-// mlockall(MCL_CURRENT) 을 «시도만» 한다(R-B7 — arcade_gate::mlock_worth_trying 일 때만, MCL_FUTURE 없음). 결과 한 줄(기동 로그).
+// 묶음 출처 한 줄(기동 요약 — 정보만, 거부 조건 아님): «manifest md5 <manifest.json md5> · board <판> · g1_arcade <묶음을 만든 커밋> ·
+// dirty <true/false>». manifest 가 없거나 칸이 없으면 그 자리는 «?».
+std::string bundle_manifest_info(const std::string& bundle_dir);
+
+// mlockall(MCL_CURRENT) 을 «시도만» 한다(R-B7 — arcade_gate::mlock_verdict 가 «시도» 일 때만: CAP_IPC_LOCK ∨ memlock 무한 ∨
+// memlock ≥ VmSize × 1.2, MCL_FUTURE 없음). 결과 한 줄(기동 로그 — 판정 근거 한도 · VmSize · CAP 포함). 실패해도 기동은 계속.
 std::string arcade_try_mlock_current();
+
+// 정책 스레드 스택 선터치(최종 검토 I7) — 정책 스레드 첫머리에서 한 번. 이 스레드는 생성자의 mlockall(MCL_CURRENT) «뒤» 에
+// 생기므로(MCL_FUTURE 안 씀) 스택이 잠기지 않았고, 첫 깊은 호출(ORT Run)의 스택 쪽 fault 가 틱 안에서 난다. 256 KiB 를 쪽마다 한 번
+// 써 두면 그 쪽들이 지금 올라온다(잠기지는 않는다 — 메모리가 모자라면 다시 나갈 수 있다). 크기 = 스레드 스택 한도(glibc 기본 =
+// RLIMIT_STACK, 보통 8 MiB) 안 · 정책 틱 호출 깊이(ORT Run 포함)보다 넉넉하게.
+inline constexpr std::size_t kArcadePretouchStackBytes = 256 * 1024;
+void arcade_pretouch_stack() noexcept;
 
 }  // namespace g1
 #endif  // G1_HAVE_ARCADE

@@ -3,7 +3,10 @@
 #include "FSM/State_FixStand.h"
 #include "FSM/State_RLBase.h"
 #include "State_Mimic.h"
-#include "ArcadeGate.h"   // G1_ARCADE 값(arcade_request) — 아케이드 경로면 FSM 설정 = config_arcade.yaml
+#include "ArcadeGate.h"   // G1_ARCADE 값(arcade_request) — 아케이드 경로면 FSM 설정 = config.yaml 에서 위험 전이를 지운 노드
+#if G1_HAVE_ARCADE
+#include "ArcadeConfig.h" // arcade_config_from(config.yaml 노드) — 아케이드 경로의 FSM 설정(정본 = config.yaml 하나)
+#endif
 #include <atomic>
 #include <cmath>
 #include <mutex>
@@ -105,8 +108,9 @@ int main(int argc, char** argv)
 
     // Load parameters
     auto vm = param::helper(argc, argv);
-    // 아케이드 경로(G1_ARCADE=1): FSM 전이를 config_arcade.yaml(config.yaml 에서 Velocity · Dance · v 전이를 뺀 사본)로 — CtrlFSM 과
-    // 각 FSMState 생성자가 param::config 를 읽기 «전» 이다(param.h 는 config.yaml 만 싣는다 — 🅑 무변경, 2b-facts B15).
+    // 아케이드 경로(G1_ARCADE=1): FSM 설정 = param.h 가 읽은 config.yaml 노드에서 위험 전이(Velocity · Dance · 키 v)를 지운 사본
+    // (ArcadeConfig.h arcade_config_from — 정본은 config.yaml 하나) — CtrlFSM 과 각 FSMState 생성자가 param::config 를 읽기 «전» 이다
+    // (param.h 는 config.yaml 만 싣는다 — 🅑 무변경, 2b-facts B15).
     switch (g1::arcade_gate::arcade_request(std::getenv("G1_ARCADE"))) {
         case g1::arcade_gate::Request::Off:
             break;
@@ -115,14 +119,22 @@ int main(int argc, char** argv)
             die_startup_main();
         case g1::arcade_gate::Request::On: {
 #if G1_HAVE_ARCADE
-            const std::filesystem::path p = param::config_dir / "config_arcade.yaml";
+            const std::string src = (param::config_dir / "config.yaml").string();
+            YAML::Node arc;
+            std::string why, removed;
+            bool ok = false;
             try {
-                param::config = YAML::LoadFile(p.string());
+                ok = g1::arcade_config::arcade_config_from(param::config, arc, why, &removed);
             } catch (const std::exception& e) {
-                spdlog::critical("[arcade] {} 를 못 읽었다: {} — 기동 거부.", p.string(), e.what());
+                why = std::string("yaml: ") + e.what();
+            }
+            if (!ok) {
+                spdlog::critical("[arcade] 아케이드 FSM 설정을 만들 수 없다({}): {} — 기동 거부.", src, why);
                 die_startup_main();
             }
-            spdlog::info("[arcade] G1_ARCADE=1 — FSM 설정 = {} (Velocity · Dance · 키 v 전이 없음 · Passive LT+B/p · f · m)", p.string());
+            param::config = arc;   // 원본 노드는 arcade_config_from 이 건드리지 않았다(사본에서 지움)
+            spdlog::info("[arcade] G1_ARCADE=1 — FSM 설정 = {} 에서 위험 전이를 지운 노드(지움 {}) · 남은 전이 Passive LT+B/p · f · m",
+                         src, removed);
 #else
             spdlog::critical("[arcade] 이 g1_ctrl 은 아케이드 없이 빌드됨(G1_ARCADE_DIR 없음 — cmake 경고 «아케이드 없음») — "
                              "G1_ARCADE=1 을 쓸 수 없다. -DG1_ARCADE_DIR=<g1_arcade> 로 다시 빌드할 것. 기동 거부.");

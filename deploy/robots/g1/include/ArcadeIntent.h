@@ -24,6 +24,7 @@
 //   · 축은 [-1, 1] 로 clamp, 비유한은 0.
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cerrno>
 
 #include <fcntl.h>
@@ -116,15 +117,19 @@ inline IntentApply poll_intent(const ArcadeIntentFrame* f, IntentPollState& st) 
 
 // 파일 읽기. 🔴 정책 틱의 시스템 콜 3 개(open · read · close) = 의도 칸 읽기의 예외다(기존 GuiPoll 의 파일 읽기 선례 —
 // 쓰는 쪽이 os.replace 로 파일을 통째 바꾸므로 mmap 한 번으로는 새 파일을 못 본다). stdio(fopen)는 glibc malloc·락을 타므로 쓰지 않는다:
-// 할당 0(tests/test_arcade_shm.cpp read_intent_file_allocates_nothing). 36 B 가 한 번에 다 읽히고 magic 이 맞을 때만 true —
-// 짧은 읽기 · EINTR · 열기 실패 = «프레임 없음»(호출부가 nullptr 로 poll_intent). 열린 파일은 한 프레임이다(찢김 없음).
+// 할당 0(tests/test_arcade_shm.cpp read_intent_file_allocates_nothing). 37 B 까지 읽어 정확히 36 B 이고 magic 이 맞을 때만 true —
+// 짧은 파일 · 긴 파일(36 B 가 아님 = 다른 배치 · 덧붙은 쓰기, 검토 M2) · EINTR · 열기 실패 = «프레임 없음»(호출부가 nullptr 로
+// poll_intent). 열린 파일은 한 프레임이다(찢김 없음).
 inline bool read_intent_file(const char* path, ArcadeIntentFrame& out) noexcept {
     const int fd = ::open(path ? path : ARCADE_INTENT_PATH, O_RDONLY | O_CLOEXEC);
     if (fd < 0) return false;
-    ArcadeIntentFrame g{};
-    const ssize_t n = ::read(fd, &g, sizeof(g));
+    unsigned char buf[sizeof(ArcadeIntentFrame) + 1];   // 한 바이트 더 — 긴 파일을 36 B 로 잘라 읽지 않게
+    const ssize_t n = ::read(fd, buf, sizeof(buf));
     ::close(fd);
-    if (n != static_cast<ssize_t>(sizeof(g)) || g.magic != ARCADE_INTENT_MAGIC) return false;
+    if (n != static_cast<ssize_t>(sizeof(ArcadeIntentFrame))) return false;
+    ArcadeIntentFrame g;
+    std::memcpy(&g, buf, sizeof(g));
+    if (g.magic != ARCADE_INTENT_MAGIC) return false;
     out = g;
     return true;
 }
