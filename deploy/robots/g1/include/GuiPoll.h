@@ -5,7 +5,12 @@
 //   0x6704 (v2)    GUI·PICO 브리지·replay_cmd 가 값이 바뀔 때만 seq 를 올린다. 끊김 감시 없음.
 //   0x6705 (relay) 로봇 위 중계 프로세스가 50 Hz 로 seq 를 올린다(하트비트). 이 프레임을 본 뒤 seq 가
 //                  STALE_TICKS 정책 틱 안 바뀌거나 파일이 사라지면 속도를 0 으로 한다(zero_vel, 에피소드당 1회).
-//                  보행 파라미터(period·height_scale·turn_k)와 clip_req 는 무시한다. 로그는 값이 바뀔 때만.
+//                  보행 파라미터(period·height_scale·turn_k)와 clip_req 는 무시한다.
+//                  체류마다 «속도 문»: 그 체류에서 속도 0 인 0x6705 프레임을 한 번 적용할 때까지 0x6705 속도는 0 으로 친다
+//                  (W 를 누른 채 Mimic 에 들어가면 바로 걷지 않게). mode_req·자세는 문과 상관없이 먹는다.
+//                  로그: mode_req·자세 누름은 바로. 속도만 바뀐 것은 GUI_RELAY_LOG_MIN_TICKS 틱에 한 번까지, 그리고 마지막으로
+//                  찍은 값에서 한 축이라도 GUI_RELAY_LOG_MIN_DV 이상 바뀌었을 때만(아날로그 패드는 속도가 매 틱 바뀐다 —
+//                  정책 스레드에서 printf·fflush 50 회/s 를 막는다). 찍을 때는 그 틱의 최신 값.
 #pragma once
 #include <cmath>
 #include <cstdint>
@@ -30,6 +35,8 @@ static constexpr int32_t GUI_CTRL_MAGIC = 0x6704;      // 0x6701 gui v1 · 0x670
 static constexpr int32_t GUI_CTRL_MAGIC_V1 = 0x6701;   // 옛 형식 — 읽지 않는다(한 번 알린다)
 static constexpr int32_t MAGIC_GUI_RELAY = 0x6705;     // 중계 전용(하트비트) — 같은 48 B 배치
 static constexpr int GUI_RELAY_STALE_TICKS = 15;       // 0.3 s @ 50 Hz
+static constexpr int   GUI_RELAY_LOG_MIN_TICKS = 25;   // 0.5 s @ 50 Hz — 0x6705 «속도만 바뀐» 로그 줄의 최소 간격(poll 수)
+static constexpr float GUI_RELAY_LOG_MIN_DV = 0.05f;   // 그리고 마지막으로 찍은 값에서 한 축이라도 이만큼 바뀌었을 때만
 
 struct GuiPollState {
     uint32_t last_seq = 0;
@@ -37,10 +44,14 @@ struct GuiPollState {
     bool     rebase = true;      // 체류(Mimic 진입)마다 enter() 가 세운다. 첫 poll 이 내린다
     int      stale_ticks = 0;    // 중계를 본 뒤 seq 가 안 바뀐(또는 파일이 없는) 연속 poll 수
     bool     relay_seen = false; // 마지막으로 읽은 유효 프레임이 0x6705 인가
-    // 마지막에 적용한 GUI 속도 — 0x6704·0x6705 어느 쪽이 적용했든(중계 «값이 바뀔 때만 로그» 의 기준). 체류 시작·
-    // 끊김(zero_vel)에서는 0 — 그때 State_Mimic 이 GUI 속도 전역을 0 으로 하므로 기준도 같이.
+    // 마지막으로 «로그 줄에 찍힌» GUI 속도 — 0x6704·0x6705 어느 쪽이 찍었든(중계 속도 로그의 기준). 체류 시작·
+    // 끊김(zero_vel)에서는 0 — 그때 State_Mimic 이 GUI 속도 전역을 0 으로 하고 그 사실을 찍으므로 기준도 같이.
     float    last_vx = 0.f, last_vy = 0.f, last_wz = 0.f;
     bool     nonfinite_run = false;   // 0x6705 비유한 프레임이 이어지는 중(첫 번만 알린다). 유한 프레임·기준선이 내린다
+    int      log_age = GUI_RELAY_LOG_MIN_TICKS;   // 마지막 GUI 로그 줄 뒤의 poll 수(이 값에서 멈춘다). 처음·체류 시작 = 다 참
+                                                  // → 그 체류의 첫 속도 변화는 바로 찍는다
+    bool     relay_vel_ok = false;     // 이 체류에서 속도 0 인 0x6705 프레임을 적용했나(«속도 문» 열림). 열리기 전엔 0x6705 속도 = 0
+    bool     relay_announced = false;  // 이 체류에서 0x6705 를 적용한 적 있나(«중계가 키보드 속도를 덮는다» 한 줄은 체류마다 한 번)
 };
 
 // 체류(Mimic 진입)마다 State_Mimic::enter() 가 부른다 — 정책 스레드가 뜨기 전이라 경합 없음.
@@ -52,6 +63,9 @@ inline void gui_poll_begin_stay(GuiPollState& st) {
     st.last_vx = st.last_vy = st.last_wz = 0.f;   // enter() 가 GUI 속도 전역(g_kb_*)을 0 으로 한다 — 파일이 없으면
                                                   // 기준선이 이 칸을 안 지우므로 여기서(안 지우면 중계 로그 일부가 빠진다)
     st.nonfinite_run = false;
+    st.log_age = GUI_RELAY_LOG_MIN_TICKS;         // 새 체류의 첫 속도 변화는 바로 찍는다
+    st.relay_vel_ok = false;                      // 속도 문을 닫는다 — 속도 0 인 0x6705 를 적용할 때까지 중계 속도 = 0
+    st.relay_announced = false;
 }
 
 // 중계 끊김 «에피소드» 중인가 — 0x6705 를 본 뒤 seq 가 GUI_RELAY_STALE_TICKS 틱 안 바뀌어 zero_vel 이 났고, 아직 새 하트비트가
@@ -75,6 +89,8 @@ struct GuiApply {
     bool zero_vel = false;       // 끊김 15 틱째 1회 — 호출부가 GUI 속도 전역만 0 으로
     bool log_line = false;
     bool rebased = false;        // 기준선만 잡았다(적용 없음) — 호출부가 안내 한 줄
+    bool relay_first = false;    // 이 체류의 첫 0x6705 적용 — 호출부가 «중계가 키보드 속도를 덮는다» 한 줄
+    bool vel_gate_opened = false; // 이 체류의 속도 문이 이 프레임(속도 0 인 0x6705)에서 열렸다 — 호출부가 한 줄
     // 비유한 값 프레임 — 호출부가 알림 한 줄. 0x6704 = seq 가 바뀐 나쁜 프레임마다 · 0x6705 = 이어지는 비유한 프레임의
     // 첫 번만(50 Hz 하트비트라 seq 가 매 틱 바뀐다 — 정책 스레드에서 printf·fflush 50 회/s 를 막는다)
     bool rejected_nonfinite = false;
@@ -97,6 +113,7 @@ inline void stale_tick(GuiPollState& st, GuiApply& r) {
 inline GuiApply poll_gui_frame(const GuiCtrl* f, GuiPollState& st)
 {
     GuiApply r;
+    if (st.log_age < GUI_RELAY_LOG_MIN_TICKS) ++st.log_age;   // 정책 틱(= poll)마다 하나 — 로그 간격의 시계
     if (!f || (f->magic != GUI_CTRL_MAGIC && f->magic != MAGIC_GUI_RELAY)) {
         st.rebase = false;                                // 기준선 없음 → 첫 실제 쓰기가 먹는다
         guipoll_detail::stale_tick(st, r);
@@ -157,12 +174,28 @@ inline GuiApply poll_gui_frame(const GuiCtrl* f, GuiPollState& st)
         r.height_scale = f->height_scale;
         r.turn_k = f->turn_k;
         r.clip_req = f->clip_req;
-        r.log_line = true;
+        r.log_line = true;                                // 0x6704: 종전 그대로(적용 프레임마다)
     } else {
-        r.log_line = (f->mode_req != 0) || r.m5_press ||
-                     f->vx != st.last_vx || f->vy != st.last_vy || f->wz != st.last_wz;
+        if (!st.relay_announced) { st.relay_announced = true; r.relay_first = true; }
+        // 속도 문: 이 체류에서 속도 0 인 프레임을 적용하기 전엔 중계 속도를 0 으로 친다(그 프레임 자체도 0 이다).
+        // 기준선 프레임(rebase)은 세지 않는다 — 진입 «뒤» 새 seq 로 온 0 을 봐야 연다. mode_req·자세는 위에서 이미 실렸다.
+        if (!st.relay_vel_ok && f->vx == 0.f && f->vy == 0.f && f->wz == 0.f) {
+            st.relay_vel_ok = true;
+            r.vel_gate_opened = true;
+        }
+        if (!st.relay_vel_ok) { r.vx = 0.f; r.vy = 0.f; r.wz = 0.f; }
+        // 속도만 바뀐 줄: GUI_RELAY_LOG_MIN_TICKS 틱에 한 번까지 · 마지막으로 찍은 값에서 GUI_RELAY_LOG_MIN_DV 이상일 때만.
+        // 비교는 «적용할 값»(문이 닫혀 있으면 0)과 — 줄에 찍히는 것이 그 값이다.
+        const bool vel_due = st.log_age >= GUI_RELAY_LOG_MIN_TICKS &&
+                             (std::fabs(r.vx - st.last_vx) >= GUI_RELAY_LOG_MIN_DV ||
+                              std::fabs(r.vy - st.last_vy) >= GUI_RELAY_LOG_MIN_DV ||
+                              std::fabs(r.wz - st.last_wz) >= GUI_RELAY_LOG_MIN_DV);
+        r.log_line = (f->mode_req != 0) || r.m5_press || vel_due;   // 모드 요청·자세 누름은 바로
     }
-    // 어느 쪽이 적용했든 «지금 GUI 속도» 로 — 0x6704 가 바꾼 뒤 중계가 옛 값으로 돌아와도 로그가 빠지지 않게
-    st.last_vx = f->vx; st.last_vy = f->vy; st.last_wz = f->wz;
+    // 줄을 찍는 프레임만 기준을 옮긴다(어느 쪽이 찍었든 — 그 줄에 지금 GUI 속도가 찍힌다)
+    if (r.log_line) {
+        st.last_vx = r.vx; st.last_vy = r.vy; st.last_wz = r.wz;
+        st.log_age = 0;
+    }
     return r;
 }

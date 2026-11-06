@@ -397,6 +397,13 @@ static void g_poll_gui()
         return;
     }
     if (!a.apply) return;
+    // 중계(0x6705) 안내 — 둘 다 체류마다 한 번뿐(GuiPoll.h 가 판정). 속도 문이 닫혀 있는 동안 중계 속도는 0 으로 적용된다
+    // (W 를 누른 채 Mimic 에 들어온 경우 — 키를 한 번 놓으면 열린다). 모드 요청·자세는 문과 상관없이 아래에서 먹는다.
+    if (a.relay_first || a.vel_gate_opened) {
+        if (a.relay_first)     printf("\r\n[gui relay] active — keyboard velocity is overridden by the relay\r\n");
+        if (a.vel_gate_opened) printf("\r\n[gui relay] velocity accepted after zero frame\r\n");
+        fflush(stdout);
+    }
     const bool mode_req_here = (a.mode_req != 0);
     if (mode_req_here) {
         g_reject_last = G1_REJECT_NONE;   // v2 의 mode_req 는 사람이 누른 1회성 입력 → 거부도 매번 한 줄 (키보드와 같다)
@@ -436,6 +443,7 @@ static void g_poll_gui()
     if (!a.log_line) return;
     // verify commands land (printed once per GUI change, not per step): if mode flaps or
     // base_vel oscillates here, the GUI is fighting the keyboard/joystick.
+    // 0x6705 의 «속도만 바뀐» 줄은 0.5 s 에 한 번까지 · 0.05 이상 바뀌었을 때만(GuiPoll.h) — 찍히는 값은 그 틱의 최신 값.
     printf("\r\n[gui seq=%u] mode=%d base_vel=[%+.2f %+.2f %+.2f] foot{period=%d hscale=%.2f turnk=%.2f}\r\n",
            g.seq, g_mode.mode(), g_kb_vx, g_kb_vy, g_kb_wz,
            g_loco.period_steps, g_loco.height_scale, g_loco.turn_k);
@@ -1651,7 +1659,9 @@ void State_Mimic::enter()
                                          // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
     gui_poll_begin_stay(g_gui_poll);     // GUI 파일은 지우지 않는다(GUI 가 다시 안 쓸 수 있다) — 이 체류의 첫 poll 이
                                          // 기준선만 잡는다(g_poll_gui). 아래에서 g_kb_* 를 0 으로 하므로 중계 로그 기준
-                                         // 속도도 0 으로(GuiPoll.h). 정책 스레드가 뜨기 전이라 경합 없음.
+                                         // 속도도 0 으로(GuiPoll.h). 중계 속도 문도 닫는다 — 이 체류에서 속도 0 인
+                                         // 0x6705 를 적용할 때까지 중계 속도는 0(누른 채 들어와도 바로 걷지 않게).
+                                         // 정책 스레드가 뜨기 전이라 경합 없음.
     // 🔴 모든 체류는 «멈춤» 으로 시작한다 — 속도 명령은 사람이 다시 준다. g_kb_* 는 체류를 넘어 남는데,
     //    Mimic 밖에서 쓴 «속도를 낮추는» 프레임(넘어져 Passive 인 동안 스틱을 놓음 vx=0 · FixStand 에서 GUI 정지)은
     //    위 기준선에 삼켜지므로, 안 지우면 p→f→m 뒤 스틱이 가운데인데도 옛 속도(최대 2.5 m/s)로 걷는다.

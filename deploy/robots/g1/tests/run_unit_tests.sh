@@ -11,8 +11,13 @@ run() {  # run <name> <g++ 인자...>
   else echo "FAIL $n"; tail -5 "$OUT/$n.log" "$OUT/$n.out" 2>/dev/null; fail=1; fi
 }
 for t in test_gait_lut test_gait_lut_v2 test_gait_min_swing test_joint_safety test_loco_gait_modes \
-         test_masked_loco_controller test_settle_stop test_deploy_features test_cmd_slew test_limb_lut test_gui_poll; do
+         test_masked_loco_controller test_settle_stop test_deploy_features test_cmd_slew test_limb_lut; do
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -I../include $t.cpp
+done
+# 중계 채널 판정(GuiPoll.h)은 g1_ctrl 릴리스 빌드와 같은 최적화(-O3 -DNDEBUG)로 — -O3 에서만 드러나는 UB 를 시험이 같이 겪게
+# (CMakeLists.txt 가 Release 를 못박는 이유와 같다). 상태 칸(test_masked_status)도 아래에서 같은 옵션.
+for t in test_gui_poll; do
+  [ -f $t.cpp ] && run $t -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include $t.cpp
 done
 # StateDump 는 쓰기 스레드(std::thread)가 있어 링크에 -pthread 가 필요하다 — 위 루프와 갈라 둔다.
 # Mimic 재진입(stay 를 여러 번 도는 것)에서 close() 없이 다시 열면 std::terminate 가 나던
@@ -20,8 +25,11 @@ done
 # ObsDump(G1_OBS_CSV — g1_arcade P1 대조 계측)도 같은 RT-안전 쓰기 구조 + 칸 대조·변이 시험·시퀀스 잠금.
 # 상태 칸(MaskedStatus.h, /dev/shm/g1_masked_status)도 — 쓰기 syscall·할당·쪽 fault 0(seccomp 자식 포함) · seqlock 찢김 0 ·
 # ModeRuntime.h 거부 문자열 ↔ 번호 표. 시험이 ModeRuntime.h 를 «소스로» 읽는다(이 폴더에서 실행 = ../include).
-for t in test_state_dump_writer test_obs_dump_writer test_masked_status; do
+for t in test_state_dump_writer test_obs_dump_writer; do
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -I../include -pthread $t.cpp
+done
+for t in test_masked_status; do   # 릴리스 빌드와 같은 -O3 -DNDEBUG (위 test_gui_poll 과 같은 이유 — 정책 스레드 쓰기의 seqlock·RT 판정)
+  [ -f $t.cpp ] && run $t -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include -pthread $t.cpp
 done
 # SafetyLog 도 같은 프로세스-공유 싱글턴 계약(멱등 open, 닫기는 소멸자에서만)을 잠근다 — 2026-09-22
 # Ruling 30. 스레드가 없어 -pthread 는 불필요.

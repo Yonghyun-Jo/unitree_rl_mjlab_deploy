@@ -10,9 +10,10 @@
 // 🔴 기록이지 재계산이 아니다(memory instrumentation-must-record-not-recompute) — 칸마다 원본이 그 틱에 쓰거나 본 «그 값».
 //    무엇을 어디서 옮기는지는 State_Mimic.cpp g_status_frame() 이 한 곳에서 적는다.
 // 🔴 정책 스레드 경로 = write() = 원자 저장 20 개뿐 — syscall 0 · 할당 0 · 락 0 · 쪽 fault 0 (tests/test_masked_status.cpp 가 센다).
-//    open·ftruncate·mmap 은 State_Mimic::enter()(FSM 스레드, 정책 스레드가 뜨기 전)에서 «한 번» 하고 그때 쪽을 미리 만진다(첫 프레임
-//    쓰기). 그 뒤 enter() 는 같은 매핑을 다시 쓴다(멱등). 닫거나 unmap 하지 않는다 — 프로세스가 끝날 때 OS 가 거둔다(정적 소멸자가
-//    정책 스레드보다 먼저 돌아도 매핑이 살아 있게).
+//    open·ftruncate·posix_fallocate·mmap 은 State_Mimic::enter()(FSM 스레드, 정책 스레드가 뜨기 전)에서 «한 번» 하고 그때 쪽을 미리
+//    만진다(첫 프레임 쓰기). 자리를 못 잡으면(/dev/shm 꽉 참) 쓰지 않고 돈다 — SIGBUS 대신. 그 뒤 enter() 는 같은 매핑을 다시
+//    쓴다(멱등). 닫거나 unmap 하지 않는다 — 프로세스가 끝날 때 OS 가 거둔다(정적 소멸자가 정책 스레드보다 먼저 돌아도 매핑이
+//    살아 있게).
 //
 // 켜는 조건: 기본 켬(파일 1 개 80 B). 환경변수 G1_STATUS_SHM:
 //   없음 · "1"  → /dev/shm/g1_masked_status
@@ -216,6 +217,13 @@ public:
             return fail_("flock", path);
         }
         if (::ftruncate(fd, static_cast<off_t>(sizeof(MaskedStatus))) != 0) { const int e = errno; ::close(fd); errno = e; return fail_("ftruncate", path); }
+        // 🔴 자리를 «지금» 잡는다. ftruncate 는 크기만 바꾼다(tmpfs 쪽은 첫 쓰기 때 할당) — /dev/shm 이 꽉 차 있으면 ftruncate 는
+        //    성공하고 아래 첫 쓰기(또는 정책 스레드의 쓰기)가 SIGBUS 로 g1_ctrl 을 죽인다. posix_fallocate 가 80 B 의 쪽을 지금
+        //    할당하고, 못 하면(ENOSPC 등) 이 프로세스는 상태 칸 없이 돈다(write() no-op · 기동은 막지 않는다).
+        //    반환값이 오류 번호다(errno 를 쓰지 않는다).
+        if (const int e = ::posix_fallocate(fd, 0, static_cast<off_t>(sizeof(MaskedStatus))); e != 0) {
+            ::close(fd); errno = e; return fail_("posix_fallocate(자리 잡기 — /dev/shm 이 꽉 찼나?)", path);
+        }
         void* p = ::mmap(nullptr, sizeof(MaskedStatus), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         if (p == MAP_FAILED) { const int e = errno; ::close(fd); errno = e; return fail_("mmap", path); }
         fd_ = fd;                                         // 닫지 않는다 — flock 을 프로세스 끝까지 쥔다(쓰는 쪽 하나 보증)

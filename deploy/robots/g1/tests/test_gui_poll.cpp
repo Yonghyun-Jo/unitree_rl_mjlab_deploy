@@ -1,4 +1,4 @@
-// GuiPoll.h 판정 시험. 실행: g++ -std=gnu++17 -O2 -Wall -Wextra -I../include test_gui_poll.cpp && ./a.out
+// GuiPoll.h 판정 시험. 실행: g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include test_gui_poll.cpp && ./a.out
 #include "GuiPoll.h"
 #include <cstdio>
 #include <cstring>
@@ -88,7 +88,8 @@ static void v2_frames_behave_as_before() {
 static void relay_frames_apply_only_mode_preset_velocity() {
     GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 1);
     poll_gui_frame(&g, st);                                                      // 기준선
-    g = mk(MAGIC_GUI_RELAY, 2, 0.6f, -0.1f, 0.4f);
+    g.seq = 2; poll_gui_frame(&g, st);                                           // 속도 0 — 속도 문 열림
+    g = mk(MAGIC_GUI_RELAY, 3, 0.6f, -0.1f, 0.4f);
     g.mode_req = 2; g.m5_preset = 3; g.m5_press_seq = 5;
     g.period_steps = 99; g.height_scale = 2.0f; g.turn_k = 0.9f; g.clip_req = 4;
     GuiApply r = poll_gui_frame(&g, st);
@@ -96,7 +97,7 @@ static void relay_frames_apply_only_mode_preset_velocity() {
     CHECK(r.mode_req == 2); CHECK(r.m5_press && r.m5_preset == 3);
     CHECK(r.set_vel && r.vx == 0.6f && r.vy == -0.1f && r.wz == 0.4f);
     // NaN 프레임은 0x6704 와 똑같이 버린다
-    GuiCtrl n = mk(MAGIC_GUI_RELAY, 3, std::numeric_limits<float>::infinity());
+    GuiCtrl n = mk(MAGIC_GUI_RELAY, 4, std::numeric_limits<float>::infinity());
     r = poll_gui_frame(&n, st); CHECK(!r.apply && r.rejected_nonfinite);
     // 첫 프레임 기준선은 0x6705 에도 적용
     GuiPollState s2; g = mk(MAGIC_GUI_RELAY, 50, 1, 1, 1); g.mode_req = 5;
@@ -106,19 +107,20 @@ static void relay_frames_apply_only_mode_preset_velocity() {
 static void relay_frames_stale_zero_velocity() {
     GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 10, 0.5f);
     poll_gui_frame(&g, st);                                                      // 기준선
-    g.seq = 11; GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel);
+    GuiCtrl z0 = mk(MAGIC_GUI_RELAY, 11); poll_gui_frame(&z0, st);              // 속도 0 — 속도 문 열림
+    g.seq = 12; GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel && r.vx == 0.5f);
     for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); CHECK(!gui_relay_stale(st)); }   // 같은 seq 14 틱
     r = poll_gui_frame(&g, st); CHECK(r.zero_vel); CHECK(gui_relay_stale(st));   // 15 틱째 — 끊김 에피소드 시작
     for (int i = 0; i < 50; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); CHECK(gui_relay_stale(st)); }    // 1 회뿐 · 에피소드는 이어진다
-    g.seq = 12; r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel);       // 되살아남 → 정상
+    g.seq = 13; r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel);       // 되살아남 → 정상
     CHECK(!gui_relay_stale(st));                                                 // 에피소드 끝
-    CHECK(r.log_line);                                                           // 속도가 0 → 0.5 로 바뀜
+    CHECK(r.log_line && r.vx == 0.5f);                                           // 속도가 0 → 0.5 로 바뀜(문은 체류 동안 열린 채)
     // 파일이 사라져도 같다
     for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(nullptr, st); CHECK(!r.zero_vel); }
     r = poll_gui_frame(nullptr, st); CHECK(r.zero_vel);
     r = poll_gui_frame(nullptr, st); CHECK(!r.zero_vel);
     // 되살아난 뒤 다시 멈추면 다시 한 번
-    g.seq = 13; r = poll_gui_frame(&g, st); CHECK(r.apply);
+    g.seq = 14; r = poll_gui_frame(&g, st); CHECK(r.apply);
     for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); }
     r = poll_gui_frame(&g, st); CHECK(r.zero_vel);
     // 중계를 본 적 없으면 파일 없음은 감시 대상이 아니다
@@ -184,43 +186,155 @@ static void relay_nonfinite_reported_once_per_run() {
     for (uint32_t s = 201; s < 206; ++s) { GuiCtrl m = mk(GUI_CTRL_MAGIC, s, nan); r = poll_gui_frame(&m, v); CHECK(r.rejected_nonfinite); }
 }
 
-// 중계 로그 판정의 기준 속도(last_v*)는 «지금 GUI 속도» 를 따라간다 — 0x6704 가 바꾼 뒤·체류 시작 뒤에 낡은 값이 남으면
+// 중계 로그 판정의 기준 속도(last_v*) = «마지막으로 줄에 찍힌» GUI 속도 — 0x6704 가 찍은 줄·체류 시작 뒤에 낡은 값이 남으면
 // 중계가 그 낡은 값과 같은 속도로 돌아올 때 로그가 빠진다(속도는 바뀌었는데 기록이 없다).
 static void relay_log_baseline_follows_v2_and_stay() {
-    GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&g, st);
-    g = mk(MAGIC_GUI_RELAY, 2, 0.5f); GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);
-    GuiCtrl v2 = mk(GUI_CTRL_MAGIC, 3, 0.8f); r = poll_gui_frame(&v2, st); CHECK(r.apply);   // GUI 가 0.8 로
-    g.seq = 4; r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);         // 중계가 0.5 로 되돌림 → 로그
+    GuiPollState st; uint32_t s = 1;
+    GuiCtrl g = mk(MAGIC_GUI_RELAY, s++); poll_gui_frame(&g, st);               // 기준선
+    g.seq = s++; poll_gui_frame(&g, st);                                         // 속도 0 — 속도 문 열림
+    g = mk(MAGIC_GUI_RELAY, s++, 0.5f); GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);
+    GuiCtrl v2 = mk(GUI_CTRL_MAGIC, s++, 0.8f); r = poll_gui_frame(&v2, st); CHECK(r.apply && r.log_line);   // GUI 가 0.8 로(찍힘)
+    CHECK(st.last_vx == 0.8f);
+    for (int i = 0; i < GUI_RELAY_LOG_MIN_TICKS; ++i) poll_gui_frame(&v2, st);  // 같은 seq — 시간만 흐른다
+    g.seq = s++; r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);       // 중계가 0.5 로 되돌림 → 로그(기준 = 찍힌 0.8)
     CHECK(st.last_vx == 0.5f);
-    // 체류 시작(파일 없음 → 기준선 없이 첫 쓰기가 먹는다): 전역 속도는 0 이 됐다 → 중계 0.5 는 바뀜이다
+    // 체류 시작(파일 없음 → 기준선 없이 첫 쓰기가 먹는다): 전역 속도는 0 이 됐다 → 기준도 0 · 로그 시계 다 참 · 속도 문 닫힘
     gui_poll_begin_stay(st);
     CHECK(st.rebase && !st.relay_seen && st.stale_ticks == 0);
     CHECK(st.last_vx == 0.f && st.last_vy == 0.f && st.last_wz == 0.f);
+    CHECK(st.log_age == GUI_RELAY_LOG_MIN_TICKS && !st.relay_vel_ok && !st.relay_announced);
     r = poll_gui_frame(nullptr, st); CHECK(!st.rebase && !r.apply);
-    g.seq = 5; r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);
+    GuiCtrl z = mk(MAGIC_GUI_RELAY, s++); r = poll_gui_frame(&z, st); CHECK(r.apply && r.vel_gate_opened && !r.log_line);
+    g.seq = s++; r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line && r.vx == 0.5f);   // 새 체류의 첫 변화는 바로 찍는다
 }
 
-static void relay_log_only_on_change() {
-    GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 1);
-    poll_gui_frame(&g, st);
-    g = mk(MAGIC_GUI_RELAY, 2, 0.4f, 0, 0);
-    GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);           // 속도 변화
-    for (uint32_t s = 3; s < 20; ++s) { g.seq = s; r = poll_gui_frame(&g, st); CHECK(r.apply && !r.log_line); }   // 하트비트
-    g.seq = 20; g.wz = 0.1f; r = poll_gui_frame(&g, st); CHECK(r.log_line);       // wz 변화
-    g.seq = 21; g.mode_req = 3; r = poll_gui_frame(&g, st); CHECK(r.log_line);    // 모드
-    g.seq = 22; g.mode_req = 0; r = poll_gui_frame(&g, st); CHECK(!r.log_line);
-    g.seq = 23; g.m5_preset = 2; g.m5_press_seq = 1; r = poll_gui_frame(&g, st); CHECK(r.log_line && r.m5_press);   // 자세 누름
-    g.seq = 24; r = poll_gui_frame(&g, st); CHECK(!r.log_line);                  // 같은 누름 seq
-    g.seq = 25; g.vy = 0.2f; r = poll_gui_frame(&g, st); CHECK(r.log_line);       // vy 변화
+// M1 — 0x6705 로그: mode_req·자세 누름은 바로. 속도만 바뀐 것은 GUI_RELAY_LOG_MIN_TICKS(25) 틱에 한 번까지, 마지막으로 찍은 값에서
+// 한 축이라도 0.05 이상 바뀌었을 때만, 찍을 땐 그 틱의 최신 값. 적용은 매 틱(로그만 줄인다). 0x6704 는 종전 그대로(적용마다).
+static void relay_velocity_log_rate_limited() {
+    GuiPollState st; uint32_t s = 1;
+    GuiCtrl g = mk(MAGIC_GUI_RELAY, s++); poll_gui_frame(&g, st);               // 기준선
+    g.seq = s++; GuiApply r = poll_gui_frame(&g, st);
+    CHECK(r.apply && r.vel_gate_opened && !r.log_line);                          // 속도 0 — 문 열림 · 찍힌 0 과 같아 줄 없음
+    // 아날로그 패드: 매 틱 0.02 씩 100 틱(0 → 2.0). 첫 줄 = 0.05 를 처음 넘는 틱(0.06, k=3), 그 뒤 25 틱마다(28·53·78).
+    std::vector<int> line_ticks;
+    for (int k = 1; k <= 100; ++k) {
+        g.seq = s++; g.vx = 0.02f * float(k);
+        r = poll_gui_frame(&g, st);
+        CHECK(r.apply && r.set_vel && r.vx == g.vx);                             // 적용은 매 틱
+        if (r.log_line) { line_ticks.push_back(k); CHECK(st.last_vx == g.vx); } // 찍는 값 = 그 틱의 최신 값
+    }
+    CHECK((line_ticks == std::vector<int>{3, 28, 53, 78}));                      // 100 틱(2 s)에 4 줄 — 종전엔 100 줄
+    // 멈춘 뒤: 마지막 줄(1.56) 뒤 25 틱이 되는 k=103 에 최신 값(2.0)을 한 번 찍고, 그 뒤엔 조용
+    int lines = 0, at = -1;
+    for (int k = 101; k <= 160; ++k) {
+        g.seq = s++; r = poll_gui_frame(&g, st);
+        if (r.log_line) { ++lines; at = k; CHECK(st.last_vx == g.vx); }
+    }
+    CHECK(lines == 1 && at == 103);
+    // 0.05 미만의 바뀜은 아무리 기다려도 안 찍는다(0.04 — 문턱과 거리를 둔 값)
+    g.vx += 0.04f;
+    for (int i = 0; i < 60; ++i) { g.seq = s++; r = poll_gui_frame(&g, st); CHECK(r.apply && !r.log_line && r.vx == g.vx); }
+    // 한 축만 바뀌어도(vy · wz) 찍는다 — 간격이 찼으면 바로
+    g.seq = s++; g.vy = 0.1f; r = poll_gui_frame(&g, st); CHECK(r.log_line);
+    for (int i = 0; i < GUI_RELAY_LOG_MIN_TICKS - 1; ++i) { g.seq = s++; poll_gui_frame(&g, st); }
+    g.seq = s++; g.wz = -0.1f; r = poll_gui_frame(&g, st); CHECK(r.log_line);   // 정확히 25 틱 뒤
+    // 모드 요청·자세 누름은 간격과 상관없이 바로(직전 줄 바로 다음 틱이어도)
+    g.seq = s++; g.mode_req = 3; r = poll_gui_frame(&g, st); CHECK(r.log_line);
+    g.seq = s++; g.mode_req = 0; g.m5_preset = 2; g.m5_press_seq = 1; r = poll_gui_frame(&g, st); CHECK(r.log_line && r.m5_press);
+    g.seq = s++; r = poll_gui_frame(&g, st); CHECK(!r.log_line);                 // 같은 누름 seq — 줄 없음
+    // 모드 줄도 시계를 다시 건다(그 줄에 지금 속도가 찍혔다) — 바로 뒤의 큰 속도 바뀜은 25 틱을 기다린다
+    g.m5_preset = 0; g.vx = 0.f;
+    int wait = 0;
+    for (;;) { g.seq = s++; r = poll_gui_frame(&g, st); ++wait; if (r.log_line || wait > 100) break; }
+    CHECK(wait == GUI_RELAY_LOG_MIN_TICKS - 1 && st.last_vx == 0.f);            // 누름 줄(틱 0) 뒤 25 번째 틱
+    // 0x6704: 종전 그대로 — 매 틱 0.01 씩 바뀌어도 적용 프레임마다 줄
+    GuiPollState v; GuiCtrl a = mk(GUI_CTRL_MAGIC, 500); poll_gui_frame(&a, v);
+    for (int k = 1; k <= 30; ++k) { a.seq = 500u + uint32_t(k); a.vx = 0.01f * float(k); r = poll_gui_frame(&a, v); CHECK(r.apply && r.log_line); }
+}
+
+// M2 — 체류마다 «속도 문»: 그 체류에서 속도 0 인 0x6705 를 적용하기 전엔 0x6705 속도를 0 으로 친다(W 를 누른 채 m 해도 바로 안 걷는다).
+// mode_req·자세는 문과 상관없이 먹는다. 기준선 프레임은 세지 않는다. 0x6704 는 문과 상관없다.
+static void relay_velocity_gate_per_stay() {
+    GuiPollState st; gui_poll_begin_stay(st); uint32_t s = 100;
+    GuiCtrl w = mk(MAGIC_GUI_RELAY, s++, 0.4f, 0.1f, -0.2f);                    // 브라우저가 W·A·E 를 누른 채 Mimic 진입
+    GuiApply r = poll_gui_frame(&w, st); CHECK(r.rebased && !r.apply);          // 기준선(적용 없음)
+    for (int i = 0; i < 30; ++i) {
+        w.seq = s++; r = poll_gui_frame(&w, st);
+        CHECK(r.apply && r.set_vel && r.vx == 0.f && r.vy == 0.f && r.wz == 0.f);   // 문 닫힘 → 0 을 적용(키보드 속도도 덮는다)
+        CHECK(!r.vel_gate_opened && !r.log_line);
+    }
+    // 문이 닫혀 있어도 모드 요청·자세는 먹는다(줄은 바로 · 찍히는 속도 = 0)
+    w.seq = s++; w.mode_req = 2; w.m5_preset = 3; w.m5_press_seq = 9;
+    r = poll_gui_frame(&w, st);
+    CHECK(r.apply && r.mode_req == 2 && r.m5_press && r.m5_preset == 3 && r.log_line);
+    CHECK(r.vx == 0.f && r.vy == 0.f && r.wz == 0.f && !r.vel_gate_opened);
+    w.mode_req = 0; w.m5_preset = 0;
+    // 0 프레임 하나 → 문 열림(그 프레임도 0) → 다음부터 따라간다
+    GuiCtrl z = mk(MAGIC_GUI_RELAY, s++); r = poll_gui_frame(&z, st);
+    CHECK(r.apply && r.vel_gate_opened && r.vx == 0.f && r.vy == 0.f && r.wz == 0.f);
+    w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.vx == 0.4f && r.vy == 0.1f && r.wz == -0.2f && !r.vel_gate_opened);
+    z.seq = s++; r = poll_gui_frame(&z, st); CHECK(r.vx == 0.f && !r.vel_gate_opened);   // 다시 0 이어도 «열림» 은 한 번
+    w.seq = s++; w.vx = 0.7f; r = poll_gui_frame(&w, st); CHECK(r.vx == 0.7f);           // 열린 채
+    // 끊김(zero_vel) 뒤 되살아나도 같은 체류면 문은 열린 채(문은 체류 시작에만 닫힌다)
+    for (int i = 0; i < GUI_RELAY_STALE_TICKS; ++i) poll_gui_frame(nullptr, st);
+    CHECK(gui_relay_stale(st));
+    w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.vx == 0.7f);
+    // 다음 체류: 기준선이 0 이어도 문은 닫힌 채 — 진입 «뒤» 새 seq 의 0 을 봐야 연다
+    gui_poll_begin_stay(st);
+    z.seq = s++; r = poll_gui_frame(&z, st); CHECK(r.rebased);
+    w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.apply && r.vx == 0.f && r.vy == 0.f && r.wz == 0.f);
+    z.seq = s++; r = poll_gui_frame(&z, st); CHECK(r.vel_gate_opened);
+    w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.vx == 0.7f);
+    // 체류 시작에 파일이 없었으면(기준선 없음) 첫 중계 프레임부터 문이 걸린다
+    gui_poll_begin_stay(st);
+    r = poll_gui_frame(nullptr, st); CHECK(!r.apply);
+    w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.apply && r.vx == 0.f);
+    // 비유한 프레임·같은 seq 프레임은 문을 열지 않는다
+    GuiCtrl n = mk(MAGIC_GUI_RELAY, s++, 0.f, std::numeric_limits<float>::quiet_NaN(), 0.f);
+    r = poll_gui_frame(&n, st); CHECK(!r.apply && !r.vel_gate_opened && !st.relay_vel_ok);
+    w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.apply && r.vx == 0.f);
+    z.seq = s++; r = poll_gui_frame(&z, st); CHECK(r.vel_gate_opened);
+    // 0x6704 는 문과 상관없다: 새 체류에서 바로 그 값을 적용한다
+    GuiPollState v; gui_poll_begin_stay(v);
+    poll_gui_frame(nullptr, v);
+    GuiCtrl a = mk(GUI_CTRL_MAGIC, 7, 0.3f, 0.2f, 0.1f); r = poll_gui_frame(&a, v);
+    CHECK(r.apply && r.vx == 0.3f && r.vy == 0.2f && r.wz == 0.1f && !r.vel_gate_opened && !r.relay_first);
+}
+
+// M3 — 체류마다 첫 0x6705 적용에서 한 번 «중계가 키보드 속도를 덮는다». 기준선·새 seq 없는(남은) 파일은 «적용» 이 아니다.
+static void relay_active_announced_once_per_stay() {
+    GuiPollState st; gui_poll_begin_stay(st);
+    GuiCtrl g = mk(MAGIC_GUI_RELAY, 1); GuiApply r = poll_gui_frame(&g, st); CHECK(r.rebased && !r.relay_first);
+    g.seq = 2; r = poll_gui_frame(&g, st); CHECK(r.apply && r.relay_first);
+    int n = 0;
+    for (uint32_t s = 3; s < 60; ++s) { g.seq = s; r = poll_gui_frame(&g, st); n += r.relay_first ? 1 : 0; }
+    for (int i = 0; i < 20; ++i) poll_gui_frame(nullptr, st);                   // 끊김
+    g.seq = 60; r = poll_gui_frame(&g, st); n += r.relay_first ? 1 : 0;         // 되살아남(같은 체류)
+    CHECK(n == 0);
+    // 다음 체류: 다시 한 번(파일이 없다가 생겨도)
+    gui_poll_begin_stay(st);
+    poll_gui_frame(nullptr, st);
+    g.seq = 61; r = poll_gui_frame(&g, st); CHECK(r.apply && r.relay_first);
+    // 지난 중계가 남긴 파일(새 seq 없음)만 있는 체류 — 알리지 않는다(끊김 한 줄만)
+    gui_poll_begin_stay(st);
+    bool any = false, zeroed = false;
+    for (int i = 0; i < 40; ++i) { r = poll_gui_frame(&g, st); any |= r.relay_first; zeroed |= r.zero_vel; }
+    CHECK(!any && zeroed);
+    // 0x6704 는 알리지 않는다
+    GuiPollState v; gui_poll_begin_stay(v);
+    GuiCtrl a = mk(GUI_CTRL_MAGIC, 1); poll_gui_frame(&a, v);
+    a.seq = 2; r = poll_gui_frame(&a, v); CHECK(r.apply && !r.relay_first);
 }
 
 int main() {
     v2_frames_behave_as_before();
     relay_frames_apply_only_mode_preset_velocity();
     relay_frames_stale_zero_velocity();
-    relay_log_only_on_change();
+    relay_velocity_log_rate_limited();
     relay_nonfinite_reported_once_per_run();
     relay_log_baseline_follows_v2_and_stay();
+    relay_velocity_gate_per_stay();
+    relay_active_announced_once_per_stay();
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("test_gui_poll ok\n");
     return 0;

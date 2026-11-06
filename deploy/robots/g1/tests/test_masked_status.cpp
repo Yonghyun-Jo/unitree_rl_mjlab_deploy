@@ -10,6 +10,8 @@
 //      거부 문자열 전부 ↔ 표(양쪽) · 채널 관문 5 · 자세 6
 //   ⑤ meter_moves — 쓸 때마다 읽은 tick·seq 가 움직인다. 다른 경로에 쓴 것은 안 보인다(멈춘 계측기를 이 검사가 가려낸다)
 //   ⑥ env·멱등·쓰는 쪽 하나·요청 기록 규칙
+//   ⑦ open_without_space_runs_disabled — /dev/shm 이 꽉 찬 경우(seccomp 자식에서 fallocate → ENOSPC): open 이 false · write() no-op ·
+//      SIGBUS 없음 · 자물쇠(flock)를 놓아 다음 쓰는 쪽이 열 수 있다. posix_fallocate 를 빼면 open 이 성공해 FAIL(자리 잡기를 실제로 한다)
 //
 //   g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include -pthread test_masked_status.cpp -o /tmp/t && /tmp/t
 //   (ModeRuntime.h 를 소스로 읽는다 — tests/ 에서 실행하거나 G1_MODE_RUNTIME_H 로 경로를 준다)
@@ -563,6 +565,64 @@ static void env_open_and_record_rules() {
         "⑥ 안전 등급");
 }
 
+// ── ⑦ ───────────────────────────────────────────────────────────────────────────────────────────────────
+// 자식에서 fallocate syscall 만 ENOSPC 로 돌려주는 필터를 걸고 open → 결과를 종료 코드로. 반환: 종료 코드 · −1 = seccomp 못 씀 ·
+// 100+신호 = 신호로 죽음(SIGBUS 면 107).
+//   0 = open 이 false · on() 거짓 · write() 가 죽지 않음(기대) · 1 = open 이 성공(자리 잡기를 안 했다) · 2 = on() 이 참
+static int fallocate_enospc_child(const std::string& path) {
+#ifdef TEST_AUDIT_ARCH
+    std::fflush(stdout); std::fflush(stderr);
+    const pid_t pid = ::fork();
+    if (pid < 0) return -2;
+    if (pid == 0) {
+        sock_filter f[] = {
+            BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, arch)),
+            BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, TEST_AUDIT_ARCH, 1, 0),
+            BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL),
+            BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(seccomp_data, nr)),
+            BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_fallocate, 0, 1),
+            BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | (ENOSPC & SECCOMP_RET_DATA)),
+            BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+        };
+        sock_fprog prog{static_cast<unsigned short>(sizeof(f) / sizeof(f[0])), f};
+        if (::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) ::_exit(3);
+        if (::prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog) != 0) ::_exit(4);
+        MaskedStatusWriter w;
+        if (w.open(path.c_str())) ::_exit(1);
+        if (w.on()) ::_exit(2);
+        MaskedStatus s{}; s.tick = 1;
+        w.write(s);                                   // no-op 이어야 한다(매핑 없음)
+        ::_exit(0);
+    }
+    int st = 0;
+    ::waitpid(pid, &st, 0);
+    if (WIFSIGNALED(st)) return 100 + WTERMSIG(st);
+    if (!WIFEXITED(st)) return -2;
+    if (WEXITSTATUS(st) == 3 || WEXITSTATUS(st) == 4) return -1;
+    return WEXITSTATUS(st);
+#else
+    (void)path;
+    return -1;
+#endif
+}
+
+static void open_without_space_runs_disabled() {
+    const std::string p = tmp_path("nospace");
+    const int rc = fallocate_enospc_child(p);
+    if (rc == -1) { std::printf("FAIL ⑦ seccomp 를 쓸 수 없다 — 자리 없음 판정을 못 잰다\n"); ++fail; return; }
+    chk(rc != 1, "⑦ fallocate 가 ENOSPC 인데 open 이 성공했다 — 자리 잡기(posix_fallocate)를 안 한다(꽉 찬 /dev/shm 에서 SIGBUS)");
+    chk(rc != 2, "⑦ open 실패 뒤 on() 이 참");
+    chk(rc != 100 + SIGBUS, "⑦ SIGBUS 로 죽었다");
+    chk(rc == 0, "⑦ 자리 없음 → open false · write() no-op · 정상 종료");
+    // 실패한 open 은 자물쇠를 놓았다(자식이 끝났으니 어차피 풀리지만, 같은 파일을 정상 환경에서 다시 열 수 있어야 한다)
+    MaskedStatusWriter w;
+    chk(w.open(p.c_str()), "⑦ 자리가 있으면 같은 파일이 열린다");
+    MaskedStatus s{};
+    chk(read_file(p, s) && s.magic == MASKED_STATUS_MAGIC, "⑦ 다시 연 뒤 첫 줄이 보인다");
+    w.close_for_test();
+    std::printf("  ⑦ fallocate → ENOSPC: 자식 종료 코드 %d (0 = open false · write no-op · SIGBUS 없음)\n", rc);
+}
+
 int main() {
     // 실제 칸과 같은 tmpfs(/dev/shm)에서 잰다(쪽 fault 의 모양이 파일시스템마다 다르다). 없으면 /tmp.
     char dir_shm[] = "/dev/shm/test_masked_status.XXXXXX";
@@ -577,8 +637,9 @@ int main() {
     refusal_strings_map_to_codes();
     meter_moves();
     env_open_and_record_rules();
+    open_without_space_runs_disabled();    // fork — 스레드를 띄운 ③ 뒤지만 자식은 fork 직후 단일 스레드 코드만 돈다
     if (fail) { std::printf("%d failure(s) — 임시 파일은 %s 에 남긴다\n", fail, dir); return 1; }
-    const char* names[] = {"layout", "meter", "rt", "torn", "meter_a", "meter_b", "env", "idem1"};
+    const char* names[] = {"layout", "meter", "rt", "torn", "meter_a", "meter_b", "env", "idem1", "nospace"};
     for (const char* n : names) ::unlink(tmp_path(n).c_str());
     ::rmdir(dir);
     std::printf("test_masked_status ok\n");

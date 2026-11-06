@@ -72,7 +72,7 @@ C++ 제어기 **`g1_ctrl`가 "뇌"**이고, PICO VR 입력은 그 뇌에 **`/dev
 | `/dev/shm/g1_vr_ref` | 0x6702 | base_vel, root_quat, dof_pos[29], dof_vel[29] | `teleop/vr_shm.py`(vr_teleop_bridge / vr_replay) | `g_poll_vr()` |
 
 - 계약 정의: `deploy/robots/g1/tools/gui_shm.py`, `deploy/robots/g1/teleop/vr_shm.py`
-- **GUI 채널 v2 (2026-09-22)** — 바이트 배치는 `tools/gui_shm.py` `FMT` ↔ `State_Mimic.cpp` `struct GuiCtrl` 을 `tests/test_gui_shm_layout.py` 가 대조한다(실행기에 포함).
+- **GUI 채널 v2 (2026-09-22)** — 바이트 배치는 `tools/gui_shm.py` `FMT` ↔ `include/GuiPoll.h` `struct GuiCtrl`(프레임 판정 `poll_gui_frame` 도 여기 — `State_Mimic.cpp` `g_poll_gui` 는 파일 읽기·적용만) 을 `tests/test_gui_shm_layout.py` 가 대조한다(실행기에 포함).
   - `mode_req` = **1회성** 모드 요청(0 = 요청 없음). 쓰는 쪽이 한 번 보내고 0 으로 되돌린다 → 속도 슬라이더·자세 버튼만 움직여서는 모드가 다시 요청되지 않는다(v1 은 매 쓰기마다 `cmd_mode` 를 다시 보내, 키보드로 바꾼 모드가 GUI 쪽 모드로 되돌아갔다). 같은 모드 재요청은 제어기가 조용히 수락한다 — 못 받았으면 다시 누르면 된다.
   - **Mimic 진입마다 기준선**: `enter()` 뒤 첫 `g_poll_gui` 는 파일이 유효한 v2 면 `seq`(와 자세가 실린 프레임이면 `m5_press_seq`)를 기준으로만 잡고 **아무것도 적용하지 않는다** — 모드·자세·클립 요청도, 속도·foot-gen 도(한 줄 `[gui] 진입 기준선 …`). 비유한 값이 든 프레임이어도 같다(기준으로 삼키고 적용하지 않는다). 그래서 Passive·FixStand·지난 세션에서 누른 것이 `m` 직후 발동하지 않고, 키보드로 멈춘 뒤 `p→f→m` 해도 GUI 에 남은 옛 속도로 걷지 않는다. 파일이 없거나 v2 가 아니면(옛 0x6701 파일 등) 기준선 없이 **첫 v2 쓰기가 그대로 먹는다**(옛 GUI 가 남긴 파일 때문에 새 PICO 브리지의 첫 누름이 삼켜지지 않게). `m` 뒤에 GUI 로 누른 것부터 먹는다.
   - 🔴 **모든 Mimic 체류는 속도 명령 0 에서 시작한다**(키보드·GUI·PICO·replay 로 준 속도, 컨트롤러의 전환 램프·저역통과까지) — **재진입(`p→f→m`) 뒤엔 속도를 다시 줄 것.** 계약 v1 슬롯도 같다(전엔 지난 체류의 속도가 이어졌다: 넘어져 Passive 인 동안 스틱을 놓아도 그 «정지» 프레임은 기준선에 삼켜져, 스틱이 가운데인데 옛 속도로 걸었다).
