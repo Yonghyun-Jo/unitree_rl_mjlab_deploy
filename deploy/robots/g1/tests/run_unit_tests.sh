@@ -54,6 +54,25 @@ for t in test_gui_shm_layout test_status_shm_layout test_vr_shm_layout test_poli
   [ -f $t.py ] && { python3 $t.py >"$OUT/$t.out" 2>&1 && echo "ok   $t" || { echo "FAIL $t"; tail -5 "$OUT/$t.out"; fail=1; }; }
 done
 
+# 아케이드 호스트(include/ArcadeHost.h · src/ArcadeHost.cpp — g1_arcade core + ORT 꾸러미 4 개). g1_arcade 폴더가 있을 때만:
+#   G1_ARCADE_DIR(기본 ../third_party/g1_arcade, com1 = /home/piene/g1_arcade_2b) — 이 폴더의 CMake(아케이드 켬 · Release)로
+#   시험 타깃 test_arcade_host 하나만 빌드한다(g1_ctrl 본체 · State_Mimic 은 빌드하지 않는다).
+#   G1_ARCADE_BUNDLE(없으면 <G1_ARCADE_DIR>/build/bundle_bt5 가 있을 때 그것) — 묶음이 없으면 시험이 «skip …» 한 줄을 찍고 통과.
+ARCADE_DIR="${G1_ARCADE_DIR:-$(cd .. && pwd)/third_party/g1_arcade}"
+if [ -f "$ARCADE_DIR/core/CMakeLists.txt" ] && [ -f "$ARCADE_DIR/host/CMakeLists.txt" ]; then
+  ARCADE_BUNDLE="${G1_ARCADE_BUNDLE:-}"
+  [ -z "$ARCADE_BUNDLE" ] && [ -f "$ARCADE_DIR/build/bundle_bt5/manifest.json" ] && ARCADE_BUNDLE="$ARCADE_DIR/build/bundle_bt5"
+  if cmake -S .. -B "$OUT/arcade" -DCMAKE_BUILD_TYPE=Release -DG1_ARCADE_DIR="$ARCADE_DIR" >"$OUT/arcade.log" 2>&1 \
+     && cmake --build "$OUT/arcade" --target test_arcade_host -j4 >>"$OUT/arcade.log" 2>&1; then
+    if G1_ARCADE_BUNDLE="$ARCADE_BUNDLE" "$OUT/arcade/test_arcade_host" >"$OUT/arcade.out" 2>&1; then
+      if grep -q '^skip test_arcade_host' "$OUT/arcade.out"; then grep -m1 '^skip test_arcade_host' "$OUT/arcade.out"
+      else echo "ok   test_arcade_host"; grep '^skip' "$OUT/arcade.out" | sed 's/^/     /'; fi
+    else echo "FAIL test_arcade_host"; grep '^FAIL' "$OUT/arcade.out" | head -8; tail -3 "$OUT/arcade.out"; fail=1; fi
+  else echo "FAIL test_arcade_host (빌드)"; tail -8 "$OUT/arcade.log"; fail=1; fi
+else
+  echo "skip test_arcade_host (g1_arcade 없음: $ARCADE_DIR — G1_ARCADE_DIR=… 로 준다)"
+fi
+
 # 생성된 ModeTable.h 가 원장(mode_spec.py + config/modes.yaml)과 같은가 — 손으로 고친 헤더·한쪽만
 # 고친 표를 잡는다. 🔴 원장의 «학습 쪽»(mode_spec.py)은 다른 repo 에 있어 로봇·깨끗한 clone 에는
 # 아예 없다. 거기서 실패로 치면 배포 전 점검이 통째로 빨개지므로, 없으면 skip 하고 통과시킨다
