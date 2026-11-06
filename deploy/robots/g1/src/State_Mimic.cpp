@@ -340,19 +340,20 @@ static void g_select_clip(int id, const char* src) {
 static void g_poll_gui()
 {
     // 파일 읽기는 그대로 — 판정(기준선·seq·NaN·끊김·0x6704/0x6705 구분)은 GuiPoll.h poll_gui_frame 이 한다.
-    FILE* f = std::fopen("/dev/shm/g1_masked_gui", "rb");
+    // 🔴 fclose 뒤에는 f 를 다시 보지 않는다(닫힌 포인터 값을 조건으로 쓰지 않게) — 읽은 바이트 수 n 만 본다.
+    //    파일이 없으면 n == 0 이라 아래 두 조건이 저절로 거짓이다.
     GuiCtrl g{};
     size_t n = 0;
-    if (f) { n = std::fread(&g, 1, sizeof(g), f); std::fclose(f); }
+    if (FILE* f = std::fopen("/dev/shm/g1_masked_gui", "rb")) { n = std::fread(&g, 1, sizeof(g), f); std::fclose(f); }
     // 쓰는 쪽(gui_shm.write)은 os.replace 로 파일을 통째로 바꾼다 — 찢긴 읽기가 없으니, 규격 모양이 아닌 파일은
     // «남의 파일(옛 GUI 등)» 이다. 그때 이 체류의 기준선은 «없음» 으로 끝낸다 → 이 체류의 첫 쓰기는 그대로 먹는다.
     // (기준선을 계속 미루면 옛 0x6701 파일이 남은 채 새 v2 PICO 브리지를 띄웠을 때 그 첫 누름이 기준선으로 삼켜졌다
     //  — 최종 검토 M-14.)
-    if (f && n >= sizeof(int32_t) && g.magic == GUI_CTRL_MAGIC_V1) {
+    if (n >= sizeof(int32_t) && g.magic == GUI_CTRL_MAGIC_V1) {
         static bool warned = false;
         if (!warned) { warned = true; spdlog::warn("[gui] 옛 형식(0x6701) — 무시한다. tools/gui_shm.py 를 이 브랜치 것으로 (GUI·PICO 브리지 재시작)"); }
     }
-    const GuiApply a = poll_gui_frame((f && n == sizeof(g)) ? &g : nullptr, g_gui_poll);
+    const GuiApply a = poll_gui_frame(n == sizeof(g) ? &g : nullptr, g_gui_poll);
     if (a.zero_vel) {
         // 중계(0x6705) 하트비트가 0.3 s 끊김 — GUI 속도 전역만 0. 모드 요청·다른 상태는 건드리지 않는다
         // (G1 리모컨 조이스틱은 지금처럼 그 위에 더해진다).
@@ -1578,8 +1579,9 @@ void State_Mimic::enter()
     g1::StateDump::shared().open_from_env("G1_STATE_CSV", GaitAux::header());
     std::remove("/dev/shm/g1_vr_ref");   // clear any stale VR ref so it can't hijack on entry
                                          // (a live bridge re-creates it next frame; g_poll_vr picks up new seq)
-    g_gui_poll.rebase = true; g_gui_poll.stale_ticks = 0; g_gui_poll.relay_seen = false;   // GUI 파일은 지우지 않는다(GUI 가 다시 안 쓸 수 있다) — 이 체류의 첫 poll 이
-                                         // 기준선만 잡는다(g_poll_gui). 정책 스레드가 뜨기 전이라 경합 없음.
+    gui_poll_begin_stay(g_gui_poll);     // GUI 파일은 지우지 않는다(GUI 가 다시 안 쓸 수 있다) — 이 체류의 첫 poll 이
+                                         // 기준선만 잡는다(g_poll_gui). 아래에서 g_kb_* 를 0 으로 하므로 중계 로그 기준
+                                         // 속도도 0 으로(GuiPoll.h). 정책 스레드가 뜨기 전이라 경합 없음.
     // 🔴 모든 체류는 «멈춤» 으로 시작한다 — 속도 명령은 사람이 다시 준다. g_kb_* 는 체류를 넘어 남는데,
     //    Mimic 밖에서 쓴 «속도를 낮추는» 프레임(넘어져 Passive 인 동안 스틱을 놓음 vx=0 · FixStand 에서 GUI 정지)은
     //    위 기준선에 삼켜지므로, 안 지우면 p→f→m 뒤 스틱이 가운데인데도 옛 속도(최대 2.5 m/s)로 걷는다.

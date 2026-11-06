@@ -1,9 +1,9 @@
 """Shared control-channel contract for the masked-loco deploy.
 
 Both the viser GUI (masked_gui.py) and the PICO bridge (pico_control_bridge.py) write this
-packed struct to /dev/shm/g1_masked_gui; the C++ controller reads it (State_Mimic.cpp
-`struct GuiCtrl`, #pragma pack(1), g_poll_gui). ⚠ KEEP THIS LAYOUT IN SYNC WITH THAT C++
-STRUCT — this file is the single Python source of the contract
+packed struct to /dev/shm/g1_masked_gui; the C++ controller reads it (include/GuiPoll.h
+`struct GuiCtrl`, #pragma pack(1); State_Mimic.cpp g_poll_gui). ⚠ KEEP THIS LAYOUT IN SYNC WITH
+THAT C++ STRUCT — this file is the single Python source of the contract
 (tests/test_gui_shm_layout.py 가 C++ 구조체와 바이트 배치를 대조한다).
 """
 from __future__ import annotations

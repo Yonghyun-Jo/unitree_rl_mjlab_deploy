@@ -37,8 +37,22 @@ struct GuiPollState {
     bool     rebase = true;      // 체류(Mimic 진입)마다 enter() 가 세운다. 첫 poll 이 내린다
     int      stale_ticks = 0;    // 중계를 본 뒤 seq 가 안 바뀐(또는 파일이 없는) 연속 poll 수
     bool     relay_seen = false; // 마지막으로 읽은 유효 프레임이 0x6705 인가
-    float    last_vx = 0.f, last_vy = 0.f, last_wz = 0.f;   // 중계로 마지막에 적용한 속도(로그 판정용)
+    // 마지막에 적용한 GUI 속도 — 0x6704·0x6705 어느 쪽이 적용했든(중계 «값이 바뀔 때만 로그» 의 기준). 체류 시작·
+    // 끊김(zero_vel)에서는 0 — 그때 State_Mimic 이 GUI 속도 전역을 0 으로 하므로 기준도 같이.
+    float    last_vx = 0.f, last_vy = 0.f, last_wz = 0.f;
+    bool     nonfinite_run = false;   // 0x6705 비유한 프레임이 이어지는 중(첫 번만 알린다). 유한 프레임·기준선이 내린다
 };
+
+// 체류(Mimic 진입)마다 State_Mimic::enter() 가 부른다 — 정책 스레드가 뜨기 전이라 경합 없음.
+// 첫 poll 이 기준선만 잡게 하고(rebase), 끊김 감시는 0x6705 를 다시 볼 때까지 끈다. last_seq 는 남긴다(종전 그대로).
+inline void gui_poll_begin_stay(GuiPollState& st) {
+    st.rebase = true;
+    st.stale_ticks = 0;
+    st.relay_seen = false;
+    st.last_vx = st.last_vy = st.last_wz = 0.f;   // enter() 가 GUI 속도 전역(g_kb_*)을 0 으로 한다 — 파일이 없으면
+                                                  // 기준선이 이 칸을 안 지우므로 여기서(안 지우면 중계 로그 일부가 빠진다)
+    st.nonfinite_run = false;
+}
 
 struct GuiApply {
     bool apply = false;          // true 면 아래 mode_req·m5·속도를 적용한다
@@ -55,7 +69,9 @@ struct GuiApply {
     bool zero_vel = false;       // 끊김 15 틱째 1회 — 호출부가 GUI 속도 전역만 0 으로
     bool log_line = false;
     bool rebased = false;        // 기준선만 잡았다(적용 없음) — 호출부가 안내 한 줄
-    bool rejected_nonfinite = false;  // 비유한 값 프레임(seq 가 바뀐 첫 번만 true) — 호출부가 알림 한 줄
+    // 비유한 값 프레임 — 호출부가 알림 한 줄. 0x6704 = seq 가 바뀐 나쁜 프레임마다 · 0x6705 = 이어지는 비유한 프레임의
+    // 첫 번만(50 Hz 하트비트라 seq 가 매 틱 바뀐다 — 정책 스레드에서 printf·fflush 50 회/s 를 막는다)
+    bool rejected_nonfinite = false;
 };
 
 namespace guipoll_detail {
@@ -93,6 +109,7 @@ inline GuiApply poll_gui_frame(const GuiCtrl* f, GuiPollState& st)
         if (f->m5_preset != 0) st.last_m5_seq = f->m5_press_seq;
         st.stale_ticks = 0;
         st.last_vx = st.last_vy = st.last_wz = 0.f;
+        st.nonfinite_run = false;
         r.rebased = true;
         return r;
     }
@@ -101,12 +118,18 @@ inline GuiApply poll_gui_frame(const GuiCtrl* f, GuiPollState& st)
         if (f->seq != st.last_seq) {
             st.last_seq = f->seq;
             st.stale_ticks = 0;
-            r.rejected_nonfinite = true;
+            if (relay) {                                  // 이어지는 비유한 하트비트는 첫 번만 알린다
+                r.rejected_nonfinite = !st.nonfinite_run;
+                st.nonfinite_run = true;
+            } else {
+                r.rejected_nonfinite = true;              // 0x6704: 종전 그대로(나쁜 프레임마다)
+            }
         } else if (relay) {
             guipoll_detail::stale_tick(st, r);
         }
         return r;
     }
+    st.nonfinite_run = false;                             // 유한 프레임 — 다음 비유한 프레임은 다시 알린다
     if (f->seq == st.last_seq) {
         if (relay) guipoll_detail::stale_tick(st, r);
         return r;
@@ -132,7 +155,8 @@ inline GuiApply poll_gui_frame(const GuiCtrl* f, GuiPollState& st)
     } else {
         r.log_line = (f->mode_req != 0) || r.m5_press ||
                      f->vx != st.last_vx || f->vy != st.last_vy || f->wz != st.last_wz;
-        st.last_vx = f->vx; st.last_vy = f->vy; st.last_wz = f->wz;
     }
+    // 어느 쪽이 적용했든 «지금 GUI 속도» 로 — 0x6704 가 바꾼 뒤 중계가 옛 값으로 돌아와도 로그가 빠지지 않게
+    st.last_vx = f->vx; st.last_vy = f->vy; st.last_wz = f->wz;
     return r;
 }

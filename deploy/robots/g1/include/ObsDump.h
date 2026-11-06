@@ -83,7 +83,7 @@ struct ObsDumpRow {
     int32_t m5_hold = -1;   // g_m5.holding()
     int32_t qd_warn = -1;   // js_qd_warn_latched_ (qd 가드가 모드를 덮었나)
     int32_t vr = -1;        // motion->vr_override
-    int32_t gui_seq = -1;   // g_gui_last_seq — 체류 중 바뀌면 GUI 가 끼어든 것
+    int32_t gui_seq = -1;   // g_gui_poll.last_seq (GuiPoll.h) — 체류 중 바뀌면 GUI 가 끼어든 것
     float kb[3];            // g_kb_vx·vy·wz (g_poll_inputs 뒤)
     float bv[3];            // g_joystick_base_vel() — 키보드+조이스틱 합을 모드 봉투로 자른 명령
     float bvf[3];           // slew 뒤(bv_f.x) = g_loco.update 입력

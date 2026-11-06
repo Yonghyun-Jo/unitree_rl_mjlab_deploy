@@ -133,6 +133,65 @@ static void relay_frames_stale_zero_velocity() {
         for (int i = 0; i < 13; ++i) { r = poll_gui_frame(&h, s4); CHECK(!r.zero_vel); }
         ++h.seq; r = poll_gui_frame(&h, s4); CHECK(!r.zero_vel);
     }
+    // 중계를 본 뒤: seq 가 그대로인 비유한 프레임도 «안 바뀜» 으로 센다(죽은 중계가 NaN 을 남긴 채 멈춘 경우)
+    GuiPollState s5; GuiCtrl q = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&q, s5);
+    q.seq = 2; q.vx = 0.4f; r = poll_gui_frame(&q, s5); CHECK(r.apply);
+    q.vx = std::numeric_limits<float>::quiet_NaN();                             // 같은 seq 2, NaN
+    for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&q, s5); CHECK(!r.zero_vel && !r.apply); }
+    r = poll_gui_frame(&q, s5); CHECK(r.zero_vel);
+    // 모르는 magic(남의 파일)도 «안 바뀜» 으로 센다
+    GuiPollState s6; GuiCtrl w = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&w, s6);
+    w.seq = 2; r = poll_gui_frame(&w, s6); CHECK(r.apply);
+    GuiCtrl other = mk(0x1234, 3, 9, 9, 9);
+    for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&other, s6); CHECK(!r.zero_vel && !r.apply); }
+    r = poll_gui_frame(&other, s6); CHECK(r.zero_vel);
+    // 크기가 다른 파일 = State_Mimic 이 nullptr 로 넘긴다(n != sizeof(GuiCtrl)) — 모르는 magic 과 섞여도 이어서 센다
+    GuiPollState s7; GuiCtrl z = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&z, s7);
+    z.seq = 2; r = poll_gui_frame(&z, s7); CHECK(r.apply);
+    for (int i = 1; i <= 14; ++i) { r = poll_gui_frame((i % 2) ? nullptr : &other, s7); CHECK(!r.zero_vel); }
+    r = poll_gui_frame(nullptr, s7); CHECK(r.zero_vel);
+}
+
+// 0x6705 의 비유한 프레임이 하트비트로 이어지면(seq 가 매 틱 바뀐다) 알림은 그 연속의 첫 번만 — 정책 스레드 printf 50 회/s 방지.
+// 0x6704 는 종전 그대로 나쁜 프레임마다. 하트비트로는 계속 센다(끊김 아님).
+static void relay_nonfinite_reported_once_per_run() {
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&g, st);   // 기준선
+    int reported = 0;
+    for (uint32_t s = 2; s < 52; ++s) {                                          // 50 틱 NaN 하트비트
+        GuiCtrl n = mk(MAGIC_GUI_RELAY, s, nan);
+        GuiApply r = poll_gui_frame(&n, st);
+        CHECK(!r.apply && !r.zero_vel);
+        reported += r.rejected_nonfinite ? 1 : 0;
+        if (s == 2) CHECK(r.rejected_nonfinite);                                // 첫 번은 알린다
+    }
+    CHECK(reported == 1);
+    g = mk(MAGIC_GUI_RELAY, 52, 0.2f); GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply);   // 정상 프레임 → 다시 무장
+    GuiCtrl n2 = mk(MAGIC_GUI_RELAY, 53, 0, nan); r = poll_gui_frame(&n2, st); CHECK(r.rejected_nonfinite);
+    n2.seq = 54; r = poll_gui_frame(&n2, st); CHECK(!r.rejected_nonfinite);
+    // 체류 시작도 다시 무장한다
+    gui_poll_begin_stay(st);
+    GuiCtrl b = mk(MAGIC_GUI_RELAY, 60); poll_gui_frame(&b, st);                // 기준선
+    n2.seq = 61; r = poll_gui_frame(&n2, st); CHECK(r.rejected_nonfinite);
+    // 0x6704: 바뀐 seq 의 NaN 프레임마다 알린다(종전)
+    GuiPollState v; GuiCtrl a = mk(GUI_CTRL_MAGIC, 200); poll_gui_frame(&a, v);
+    for (uint32_t s = 201; s < 206; ++s) { GuiCtrl m = mk(GUI_CTRL_MAGIC, s, nan); r = poll_gui_frame(&m, v); CHECK(r.rejected_nonfinite); }
+}
+
+// 중계 로그 판정의 기준 속도(last_v*)는 «지금 GUI 속도» 를 따라간다 — 0x6704 가 바꾼 뒤·체류 시작 뒤에 낡은 값이 남으면
+// 중계가 그 낡은 값과 같은 속도로 돌아올 때 로그가 빠진다(속도는 바뀌었는데 기록이 없다).
+static void relay_log_baseline_follows_v2_and_stay() {
+    GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&g, st);
+    g = mk(MAGIC_GUI_RELAY, 2, 0.5f); GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);
+    GuiCtrl v2 = mk(GUI_CTRL_MAGIC, 3, 0.8f); r = poll_gui_frame(&v2, st); CHECK(r.apply);   // GUI 가 0.8 로
+    g.seq = 4; r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);         // 중계가 0.5 로 되돌림 → 로그
+    CHECK(st.last_vx == 0.5f);
+    // 체류 시작(파일 없음 → 기준선 없이 첫 쓰기가 먹는다): 전역 속도는 0 이 됐다 → 중계 0.5 는 바뀜이다
+    gui_poll_begin_stay(st);
+    CHECK(st.rebase && !st.relay_seen && st.stale_ticks == 0);
+    CHECK(st.last_vx == 0.f && st.last_vy == 0.f && st.last_wz == 0.f);
+    r = poll_gui_frame(nullptr, st); CHECK(!st.rebase && !r.apply);
+    g.seq = 5; r = poll_gui_frame(&g, st); CHECK(r.apply && r.log_line);
 }
 
 static void relay_log_only_on_change() {
@@ -154,6 +213,8 @@ int main() {
     relay_frames_apply_only_mode_preset_velocity();
     relay_frames_stale_zero_velocity();
     relay_log_only_on_change();
+    relay_nonfinite_reported_once_per_run();
+    relay_log_baseline_follows_v2_and_stay();
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("test_gui_poll ok\n");
     return 0;

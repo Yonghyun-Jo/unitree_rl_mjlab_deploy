@@ -15,7 +15,7 @@ THE SAME MACHINE (shared /dev/shm) — sim2sim OR real robot (tethered control P
 
 If the GUI is not running, keyboard (terminal) + joystick still drive the robot.
 
-⚠ Struct layout MUST match State_Mimic.cpp `struct GuiCtrl` (#pragma pack(1)).
+⚠ Struct layout MUST match include/GuiPoll.h `struct GuiCtrl` (#pragma pack(1)).
 ⚠ Deploy velocity caps (vx +2.5/-1.5, vy 0.8, wz 2.0) still clamp base_vel in C++.
 """
 from __future__ import annotations
