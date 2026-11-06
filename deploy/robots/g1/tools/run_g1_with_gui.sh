@@ -70,7 +70,7 @@ while [[ $# -gt 0 ]]; do
     --dump) DUMP=1; shift ;;
     --no-gui) NOGUI=1; shift ;;
     --list) list_slots; exit 0 ;;
-    -h|--help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,27p' "$0"; exit 0 ;;
     *) NET="$1"; shift ;;
   esac
 done

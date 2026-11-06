@@ -20,7 +20,6 @@ import math
 import signal
 import sys
 import time
-from typing import Optional
 
 import msgpack
 import websockets
@@ -29,12 +28,15 @@ import gui_shm
 import status_shm
 
 log = logging.getLogger("arcade_relay")
+# websockets 13 은 serve/connect 를 처음 쓸 때 지연 import 한다 — 50 Hz 루프가 돌기 시작한 뒤 이벤트 루프가 멈추지 않게 미리 불러 둔다.
+_PRELOAD = (websockets.serve, websockets.connect, websockets.exceptions.ConnectionClosed)
 
 RELAY_NAME = "arcade_relay v1"
-CMD_STALE_S = 0.3          # 브라우저 cmd 끊김 → 0 프레임
 CONTROLLER_SILENCE_S = 1.0  # 이만큼 cmd 가 없으면 새 연결이 controller 승계
 LOGGER_STALE_S = 0.5
 PERIOD_S = 0.02
+CMD_STALE_S = 0.3 - PERIOD_S  # 브라우저 cmd 끊김 → 0 프레임(쓰기 주기까지 더해 최악 0.3 s 안)
+HOLD_MAX_S = 0.1            # 1회성 프레임 소비 확인 대기 상한
 WRITE_BUF_LIMIT = 64 * 1024
 INT32_MAX = 2 ** 31 - 1
 
@@ -146,6 +148,7 @@ class Client:
         self.send_task = None
         self.tx = collections.deque()
         self.viewer_cmd_logged = False
+        self.hello_task = None
 
     def name(self):
         return "#%d %s" % (self.cid, getattr(self.ws, "remote_address", None))
@@ -173,6 +176,8 @@ class Relay:
         self.logger_ok = False
         self.was_fresh = False
         self.in_loss = False
+        self.hold_seq = None
+        self.hold_until = 0.0
         self._cid = 0
         self._rl = RateLimitedLog()
         self._server = None
@@ -192,15 +197,19 @@ class Relay:
         if self._stopped:
             return
         self._stopped = True
-        for t in self._tasks:
-            t.cancel()
-        for t in self._tasks:
-            try:
-                await t
-            except BaseException:
-                pass
+        tick_task, logger_task = self._tasks
+        tick_task.cancel()                       # 0 프레임을 가장 먼저(logger 정리를 기다리지 않는다)
+        try:
+            await tick_task
+        except BaseException:
+            pass
         self._write_frame({"vx": 0.0, "vy": 0.0, "wz": 0.0, "mode_req": 0, "m5_preset": 0,
                            "m5_press_seq": self.intent.press_seq})
+        logger_task.cancel()
+        try:
+            await logger_task
+        except BaseException:
+            pass
         log.info("종료: 0 프레임 기록")
         if self._server is not None:
             self._server.close()
@@ -240,7 +249,7 @@ class Relay:
                 old.role = "viewer"
                 log.info("role change %s controller→viewer (cmd 침묵 %.1fs), 새 controller %s",
                          old.name(), now - old.last_cmd_t, c.name())
-                asyncio.ensure_future(self._send_quiet(old, self._hello("viewer")))
+                old.hello_task = asyncio.ensure_future(self._send_quiet(old, self._hello("viewer")))
             self.controller = c
             c.role = "controller"
             c.last_cmd_t = now
@@ -258,6 +267,14 @@ class Relay:
 
     # ── 받기 ────────────────────────────────────────────────────────────
     async def _on_message(self, c, msg):
+        try:
+            await self._on_message_inner(c, msg)
+        except websockets.exceptions.ConnectionClosed:
+            raise
+        except Exception as e:      # RecursionError(깊은 중첩)·OverflowError(큰 정수) 등 — 그 프레임만 버린다
+            self._rl.warn("bad", "bad frame (%s) from %s" % (type(e).__name__, c.name()))
+
+    async def _on_message_inner(self, c, msg):
         if not isinstance(msg, str):
             self._rl.warn("bad", "bad frame (binary) from %s" % c.name())
             return
@@ -369,16 +386,28 @@ class Relay:
             self.in_loss = False
             log.info("browser loss 끝: cmd 재개")
         self.was_fresh = fresh
-        self._write_frame(self.intent.take(now))
+        st = status_shm.read(self.status_path)
+        if self.hold_seq is not None:
+            if st is not None and st["gui_seq_applied"] == self.hold_seq:
+                self.hold_seq = None
+            elif now >= self.hold_until:
+                self._rl.warn("hold", "1회성 프레임 seq=%d 이 %.0f ms 안에 소비 안 됨 — 붙잡기 풀고 하트비트 계속"
+                              % (self.hold_seq, HOLD_MAX_S * 1000))
+                self.hold_seq = None
+        if self.hold_seq is None:
+            f = self.intent.take(now)
+            self._write_frame(f)
+            if f["mode_req"] != 0 or f["m5_preset"] != 0:
+                self.hold_seq = self.seq
+                self.hold_until = now + HOLD_MAX_S
         if self.clients:
-            self._broadcast(now)
+            self._broadcast(now, st)
 
-    def _broadcast(self, now):
+    def _broadcast(self, now, st):
         lg = self.logger_t is not None and now - self.logger_t <= LOGGER_STALE_S and self.logger_data is not None
         if lg != self.logger_ok:
             self.logger_ok = lg
             log.info("logger %s", "up(데이터 수신)" if lg else "down(0.5 s 넘게 프레임 없음)")
-        st = status_shm.read(self.status_path)
         quat, gyro, q, dq = self.logger_data if lg else (None, None, None, None)
         base = {"v": 1, "type": "state", "t": round(now - self.t0, 3), "quat": quat, "gyro": gyro, "q": q,
                 "dq": dq, "status": None if st is None else dict((k, _clean(v)) for k, v in st.items())}

@@ -124,7 +124,7 @@ def test_browser_loss_writes_zero_within_300ms(tmp_path):
             await asyncio.sleep(0.6)
             after = [(t, f) for t, f in frames if t > last]
             first_zero = next(t for t, f in after if f["vx"] == 0 and f["vy"] == 0 and f["wz"] == 0)
-            assert first_zero - last <= 0.35, first_zero - last
+            assert first_zero - last <= 0.30, first_zero - last
             late = [f for t, f in after if t >= first_zero]
             assert len(late) >= 15                                   # 하트비트는 계속
             assert all(f["vx"] == 0 and f["mode_req"] == 0 and f["m5_preset"] == 0 for f in late)
@@ -240,8 +240,8 @@ def test_latch_survives_several_cmds_in_one_write_period():
 def test_intent_zeroes_when_stale_and_drops_latch():
     it = arcade_relay.Intent()
     it.apply(dict(seq=1, mode_req=3, m5_preset=0, m5_press_seq=4, vx=1.0, vy=0.0, wz=0.0), 10.0)
-    assert it.take(10.29)["vx"] == 1.0
-    f = it.take(10.31)
+    assert it.take(10.27)["vx"] == 1.0
+    f = it.take(10.29)
     assert f["vx"] == 0 and f["mode_req"] == 0 and f["m5_preset"] == 0 and f["m5_press_seq"] == 4
 
 
@@ -317,8 +317,11 @@ def test_logger_data_forwarded_then_nulled_after_500ms(tmp_path):
             await server.wait_closed()
             await asyncio.sleep(0.8)
             st = await next_state(ws)
-            while st["link"]["logger"]:
+            for _ in range(100):
+                if not st["link"]["logger"]:
+                    break
                 st = await next_state(ws)
+            assert st["link"]["logger"] is False
             assert st["quat"] is None and st["gyro"] is None and st["q"] is None and st["dq"] is None
     run(go())
 
@@ -402,3 +405,114 @@ def test_run_script_has_no_gui_flag():
 def test_requirements_pin():
     req = (TOOLS / "arcade_relay_requirements.txt").read_text(encoding="utf-8").split()
     assert "websockets>=12,<14" in req and "msgpack>=1.0" in req
+
+
+# ── 1회성 프레임 붙잡기(소비 확인) · 파싱 오류 · 연결 끊김 승계 ───────────────────────
+def _write_status(path, applied, n=[0]):
+    n[0] += 2
+    vals = dict.fromkeys(status_shm.FIELDS, 0)
+    vals.update(magic=status_shm.MAGIC, seq=n[0], gui_seq_applied=applied, z_fk=0.75)
+    tmp = str(path) + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(struct.pack(status_shm.FMT, *[vals[k] for k in status_shm.FIELDS]))
+    os.replace(tmp, str(path))
+
+
+def test_hold_one_shot_with_slow_reader_sees_every_request_once(tmp_path):
+    """g1_ctrl 흉내: 25 Hz 로 읽고(중계의 절반) 읽은 seq 를 gui_seq_applied 로 돌려준다."""
+    sp = tmp_path / "status"
+
+    async def go():
+        seen = []
+        async with started_relay(tmp_path, status_path=str(sp)) as (relay, frames):
+            stop = False
+
+            async def reader():
+                last = None
+                while not stop:
+                    try:
+                        f = parse_gui((tmp_path / "gui").read_bytes())
+                    except (OSError, struct.error):
+                        f = None
+                    if f is not None and f["seq"] != last:
+                        last = f["seq"]
+                        if f["mode_req"] or f["m5_preset"]:
+                            seen.append((f["mode_req"], f["m5_preset"]))
+                        _write_status(sp, f["seq"])
+                    await asyncio.sleep(0.04)
+            rt = asyncio.ensure_future(reader())
+            ws, _ = await connect(relay)
+            for i in range(1, 11):
+                await ws.send(cmd(i, mode_req=i % 6 + 1, m5_preset=(i % 3) + 1 if i % 2 else 0, m5_press_seq=i))
+                await asyncio.sleep(0.15)
+            stop = True
+            await rt
+            return seen, frames
+    seen, frames = run(go())
+    want = [(i % 6 + 1, (i % 3) + 1 if i % 2 else 0) for i in range(1, 11)]
+    assert seen == want, seen
+    sent = [f for _, f in frames if f["mode_req"] or f["m5_preset"]]
+    assert len(sent) == 10                                   # 중계도 정확히 한 번씩만 실었다
+
+
+def test_hold_released_after_100ms_without_consumption(tmp_path):
+    async def go():
+        async with started_relay(tmp_path) as (relay, frames):   # 상태 칸 없음 = 소비 확인 불가
+            ws, _ = await connect(relay)
+            await asyncio.sleep(0.1)
+            await ws.send(cmd(1, mode_req=3))
+            await stream(ws, 0.5, vx=0.4)
+            return frames
+    frames = run(go())
+    i = next(k for k, (_, f) in enumerate(frames) if f["mode_req"] == 3)
+    gap = frames[i + 1][0] - frames[i][0]
+    assert 0.08 <= gap <= 0.16, gap                          # 약 100 ms 뒤 풀림
+    after = frames[i + 1:]
+    assert after[0][1]["mode_req"] == 0 and abs(after[0][1]["vx"] - 0.4) < 1e-6   # 붙잡는 동안 온 속도도 반영
+    gaps = [b[0] - a[0] for a, b in zip(after[:-1], after[1:-1])]   # 마지막 = 종료 0 프레임
+    assert gaps and max(gaps) < 0.1                          # 하트비트 재개(20 ms 주기, 지터 여유)
+    allg = [b[0] - a[0] for (a, b) in zip(frames, frames[1:])]
+    assert max(allg) < 15 * 0.02, max(allg)                  # 붙잡는 동안 간격도 g1_ctrl 감시(15 틱) 안
+
+
+def test_non_dict_and_pathological_json_dropped_connection_kept(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="arcade_relay")
+
+    async def go():
+        async with started_relay(tmp_path) as (relay, frames):
+            ws, _ = await connect(relay)
+            deep = "[" * 20000 + "]" * 20000
+            huge = ('{"v":1,"type":"cmd","seq":1,"mode_req":0,"m5_preset":0,"m5_press_seq":0,"vx":1%s,"vy":0,"wz":0}'
+                    % ("0" * 400))
+            for m in ("[1]", '"s"', "7", "null", deep, huge):
+                await ws.send(m)
+                await asyncio.sleep(0.02)
+            await ws.send(json.dumps({"v": 1, "type": "ping", "id": 1, "t": 2.0}))
+            while json.loads(await asyncio.wait_for(ws.recv(), 2))["type"] != "pong":
+                pass
+            await stream(ws, 0.2, vx=0.3)                    # 연결·조종권 모두 살아 있다
+            assert abs(frames[-1][1]["vx"] - 0.3) < 1e-6
+    run(go())
+    assert any("bad frame" in r.getMessage() for r in caplog.records)
+
+
+def test_new_connection_becomes_controller_after_controller_disconnect(tmp_path):
+    async def go():
+        async with started_relay(tmp_path) as (relay, frames):
+            a, ha = await connect(relay)
+            b, hb = await connect(relay)
+            assert (ha["role"], hb["role"]) == ("controller", "viewer")
+            await a.close()
+            await asyncio.sleep(0.1)
+            c, hc = await connect(relay)                    # 1 s 기다리지 않아도 승계
+            assert hc["role"] == "controller"
+            t0 = time.monotonic()
+            await stream(b, 0.2, vx=1.0)                    # 기존 viewer 는 승격하지 않았다
+            assert all(f["vx"] == 0 for t, f in frames if t >= t0)
+    run(go())
+
+
+def test_help_prints_no_gui_lines():
+    out = subprocess.run(["bash", str(G1 / "tools" / "run_g1_with_gui.sh"), "--help"],
+                         stdout=subprocess.PIPE, universal_newlines=True).stdout
+    assert "--no-gui" in out and "arcade_relay" in out
