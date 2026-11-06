@@ -107,10 +107,11 @@ static void relay_frames_stale_zero_velocity() {
     GuiPollState st; GuiCtrl g = mk(MAGIC_GUI_RELAY, 10, 0.5f);
     poll_gui_frame(&g, st);                                                      // 기준선
     g.seq = 11; GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel);
-    for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); }   // 같은 seq 14 틱
-    r = poll_gui_frame(&g, st); CHECK(r.zero_vel);                               // 15 틱째
-    for (int i = 0; i < 50; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); }    // 1 회뿐
+    for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); CHECK(!gui_relay_stale(st)); }   // 같은 seq 14 틱
+    r = poll_gui_frame(&g, st); CHECK(r.zero_vel); CHECK(gui_relay_stale(st));   // 15 틱째 — 끊김 에피소드 시작
+    for (int i = 0; i < 50; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); CHECK(gui_relay_stale(st)); }    // 1 회뿐 · 에피소드는 이어진다
     g.seq = 12; r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel);       // 되살아남 → 정상
+    CHECK(!gui_relay_stale(st));                                                 // 에피소드 끝
     CHECK(r.log_line);                                                           // 속도가 0 → 0.5 로 바뀜
     // 파일이 사라져도 같다
     for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(nullptr, st); CHECK(!r.zero_vel); }
@@ -126,7 +127,12 @@ static void relay_frames_stale_zero_velocity() {
     GuiPollState s3; GuiCtrl rl = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&rl, s3);
     for (int i = 0; i < 5; ++i) poll_gui_frame(&rl, s3);
     GuiCtrl v2 = mk(GUI_CTRL_MAGIC, 2, 0.2f); r = poll_gui_frame(&v2, s3); CHECK(r.apply && !s3.relay_seen);
-    for (int i = 0; i < 100; ++i) { r = poll_gui_frame(&v2, s3); CHECK(!r.zero_vel); }
+    for (int i = 0; i < 100; ++i) { r = poll_gui_frame(&v2, s3); CHECK(!r.zero_vel); CHECK(!gui_relay_stale(s3)); }
+    // 끊김 에피소드 중 체류가 다시 시작되면 에피소드도 끝난다(새 체류는 0x6705 를 다시 볼 때까지 감시 안 함)
+    GuiPollState s8; GuiCtrl e = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&e, s8);
+    for (int i = 0; i < 20; ++i) poll_gui_frame(nullptr, s8);
+    CHECK(gui_relay_stale(s8));
+    gui_poll_begin_stay(s8); CHECK(!gui_relay_stale(s8));
     // 틱 14 직전에 하트비트가 오면 카운트가 리셋된다
     GuiPollState s4; GuiCtrl h = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&h, s4);
     for (int round = 0; round < 5; ++round) {

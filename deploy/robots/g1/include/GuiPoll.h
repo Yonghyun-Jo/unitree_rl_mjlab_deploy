@@ -54,6 +54,12 @@ inline void gui_poll_begin_stay(GuiPollState& st) {
     st.nonfinite_run = false;
 }
 
+// 중계 끊김 «에피소드» 중인가 — 0x6705 를 본 뒤 seq 가 GUI_RELAY_STALE_TICKS 틱 안 바뀌어 zero_vel 이 났고, 아직 새 하트비트가
+// 없다(새 seq 의 0x6705 · 0x6704 이어받기 · 체류 시작이 끝낸다). 상태 칸 relay_stale 의 원천(MaskedStatus.h) — 판정은 여기 하나.
+inline bool gui_relay_stale(const GuiPollState& st) {
+    return st.relay_seen && st.stale_ticks >= GUI_RELAY_STALE_TICKS;
+}
+
 struct GuiApply {
     bool apply = false;          // true 면 아래 mode_req·m5·속도를 적용한다
     int  mode_req = 0;

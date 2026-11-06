@@ -18,7 +18,9 @@ done
 # Mimic 재진입(stay 를 여러 번 도는 것)에서 close() 없이 다시 열면 std::terminate 가 나던
 # 회귀(2026-09-22)를 여기서 잡는다.
 # ObsDump(G1_OBS_CSV — g1_arcade P1 대조 계측)도 같은 RT-안전 쓰기 구조 + 칸 대조·변이 시험·시퀀스 잠금.
-for t in test_state_dump_writer test_obs_dump_writer; do
+# 상태 칸(MaskedStatus.h, /dev/shm/g1_masked_status)도 — 쓰기 syscall·할당·쪽 fault 0(seccomp 자식 포함) · seqlock 찢김 0 ·
+# ModeRuntime.h 거부 문자열 ↔ 번호 표. 시험이 ModeRuntime.h 를 «소스로» 읽는다(이 폴더에서 실행 = ../include).
+for t in test_state_dump_writer test_obs_dump_writer test_masked_status; do
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -I../include -pthread $t.cpp
 done
 # SafetyLog 도 같은 프로세스-공유 싱글턴 계약(멱등 open, 닫기는 소멸자에서만)을 잠근다 — 2026-09-22
@@ -40,7 +42,7 @@ for t in test_height_estimator test_motion_preview test_safety_policy; do   # Ei
 done
 [ -f test_no_mode_ordinals.sh ] && { bash test_no_mode_ordinals.sh && echo "ok   no_mode_ordinals" || { echo "FAIL no_mode_ordinals"; fail=1; }; }
 # shm 바이트 배치(C++ 구조체 ↔ python FMT) + policy_slot push 게이트 + 헤드리스 도구의 t=0 판정 — 표준 라이브러리만 쓴다(uv 불필요)
-for t in test_gui_shm_layout test_vr_shm_layout test_policy_slot_gate test_headless_pre_t0 test_masked_gui_posture_rows test_gui_clip_order; do
+for t in test_gui_shm_layout test_status_shm_layout test_vr_shm_layout test_policy_slot_gate test_headless_pre_t0 test_masked_gui_posture_rows test_gui_clip_order; do
   [ -f $t.py ] && { python3 $t.py >"$OUT/$t.out" 2>&1 && echo "ok   $t" || { echo "FAIL $t"; tail -5 "$OUT/$t.out"; fail=1; }; }
 done
 

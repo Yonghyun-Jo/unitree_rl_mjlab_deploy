@@ -26,6 +26,7 @@ public:
         if (policy_thread.joinable()) {
             policy_thread.join();
         }
+        status_exit_frame_();   // 상태 칸 마지막 줄(active_mode 0) — join 뒤라 쓰는 쪽은 여전히 하나. 원자 저장만(syscall 0)
         mon_log_summary();   // join 이후라 policy_thread 가 쓴 mon_* 가 전부 보인다(경합 없음)
     }
 
@@ -97,6 +98,7 @@ private:
     //   exit() 는 join() 뒤에 읽으므로 경합 없음.
     void mon_log_summary();
     void mon_reset();
+    void status_exit_frame_();   // 상태 칸(MaskedStatus.h)의 «정책이 떠났다» 한 줄 — exit() 가 join 뒤에 부른다
     uint32_t mon_clamp_ticks_ = 0, mon_rate_ticks_ = 0;
     uint32_t mon_nan_hold_ticks_ = 0;   // 출력 NaN/Inf 를 직전값으로 홀드한 틱 수 (js_hold_nonfinite)
     float mon_clamp_max_ = 0.f;  int mon_clamp_joint_ = -1;

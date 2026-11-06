@@ -11,6 +11,7 @@
 #include "SafetyPolicy.h"           // 넘어짐·qd_warn 을 표의 안전 등급 + 명령·자세로 가른다
 #include "CmdSlew.h"
 #include "GuiPoll.h"               // GuiCtrl 구조체 + 프레임 판정(0x6704 v2 · 0x6705 중계)
+#include "MaskedStatus.h"          // 상태 칸 /dev/shm/g1_masked_status (g1_ctrl → 중계, 정책 틱마다)
 #include "LimbLut.h"                // mode6 사지 높이 명령 (학습 limb_lut 1:1, gen_limb_lut_header.py)                // base_vel 명령 필터 = 선형 slew 1.5 (유일한 필터)
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
@@ -283,8 +284,20 @@ static GuiPollState g_gui_poll;
 //    0 을 센티넬로 쓰면 그 쓰레기 값의 거부가 영영 안 찍힌다(있는데 안 보이는 고장).
 static constexpr int G1_REJECT_NONE = -1;
 static int g_reject_last = G1_REJECT_NONE;
+// 상태 칸(MaskedStatus.h)의 «지난 요청» 넷 — 요청이 들어오는 문(아래 두 함수 · 자세 버튼)이 결과를 «그 자리에서» 적고, 정책 틱 끝
+// g_status_frame() 이 그대로 옮긴다(재계산 없음). 거부를 로그에서 거르는 것(g_reject_last)과 별개로 칸은 요청마다 적는다.
+// 정책 스레드 전용(g_poll_inputs · g_poll_vr 가 부른다). 체류를 넘어 남는다(프로세스 전체의 «지난 요청»).
+static g1::masked_status::RequestRecord g_status_req;
+// 자세 버튼이 있는 모드(표의 mode5_cmd_live 행) — 자세 거부의 refused_mode. 번호를 박지 않고 표에서 찾는다.
+static constexpr int g1_posture_mode_id() {
+    for (const mode_table::Row& r : mode_table::ROWS) if (r.mode5_cmd_live) return r.id;
+    return 0;
+}
+static constexpr int G1_POSTURE_MODE = g1_posture_mode_id();
 static void g_request_mode(int m, const char* src) {
     const g1::ModeResult r = g_mode.request(m, g_exit_ctx());
+    // 거부 사유 = ModeRuntime 이 낸 문자열을 번호로(ModeRuntime.h 는 고치지 않는다 — MaskedStatus.h refusal_code_of).
+    g_status_req.mode(m, r.accepted, r.accepted ? g1::masked_status::REFUSE_NONE : g1::masked_status::refusal_code_of(r.reason));
     if (r.accepted) { g_reject_last = G1_REJECT_NONE; return; }
     if (m == g_reject_last) return;
     g_reject_last = m;
@@ -308,6 +321,8 @@ static inline bool g_channel_may_request(int m, Channel ch) {
 // 채널에서 들어온 요청. 자격 없는 값은 옛 코드처럼 «아무 일도 안 일어난다»(한 줄만 남긴다).
 static void g_request_mode_from_channel(int m, Channel ch, const char* src) {
     if (g_channel_may_request(m, ch)) { g_request_mode(m, src); return; }
+    // 상태 칸: 채널 관문에서 막힘 — 표에 없는 모드면 1, 있는데 이 채널이 못 부르면 5 (로그 중복 억제 «전» 에, 요청마다).
+    g_status_req.mode(m, false, g1::masked_status::channel_refusal_code(mode_table::valid(m)));
     if (m == g_reject_last) return;                      // 50 Hz — 같은 값은 한 번만
     g_reject_last = m;
     printf("\r\n[cmd_mode] %s -> %d 무시: %s\r\n", src, m,
@@ -382,7 +397,8 @@ static void g_poll_gui()
         return;
     }
     if (!a.apply) return;
-    if (a.mode_req != 0) {
+    const bool mode_req_here = (a.mode_req != 0);
+    if (mode_req_here) {
         g_reject_last = G1_REJECT_NONE;   // v2 의 mode_req 는 사람이 누른 1회성 입력 → 거부도 매번 한 줄 (키보드와 같다)
         g_request_mode_from_channel(a.mode_req, Channel::Gui, "gui");
     }
@@ -391,6 +407,7 @@ static void g_poll_gui()
     if (a.m5_press) {
         // 범위는 뺄셈 «전» 에 본다 — m5_preset 은 남의 프로그램이 쓴 바이트라 INT_MIN 이면 −1 이 부호 넘침(UB)이다.
         const int p = (a.m5_preset >= 1 && a.m5_preset <= m5::N_PRESETS) ? a.m5_preset - 1 : -1;
+        bool refused = true;
         if (p < 0) {
             printf("\r\n[m5] gui: 없는 자세 %d\r\n", a.m5_preset);
         } else if (m5::PRESETS[p].key == '\0') {
@@ -401,8 +418,12 @@ static void g_poll_gui()
             printf("\r\n[m5] gui «%s» — mode5 에서만 (지금 mode%d %s)\r\n", m5::PRESETS[p].name, g_mode.row().id, g_mode.row().name);
         } else {
             g_m5.press(p);
+            refused = false;
             printf("\r\n[m5] gui → «%s»\r\n", m5::PRESETS[p].name);
         }
+        // 상태 칸: 자세 거부(6). 같은 프레임에 모드 요청이 있었으면 그 결과를 남긴다 — 그 모드가 거부돼 자세도 거부된
+        // 것이면 원인(1..5)을 6 으로 덮지 않게(모드 요청 넷은 한 줄에 같이 실린다).
+        if (refused && !mode_req_here) g_status_req.posture_refused(G1_POSTURE_MODE);
         fflush(stdout);
     }
     if (a.clip_req >= 0) g_select_clip(a.clip_req, "gui");
@@ -521,6 +542,7 @@ static void g_poll_inputs(isaaclab::ManagerBasedRLEnv* env)
         if (!g_mode.row().mode5_cmd_live) {
             printf("\r\n[m5] «%s» — mode5 에서만 (지금 mode%d %s)\r\n", m5::PRESETS[p].name,
                    g_mode.row().id, g_mode.row().name);
+            g_status_req.posture_refused(G1_POSTURE_MODE);   // 상태 칸: 자세 거부(6)
         } else {
             g_m5.press(p);
             printf("\r\n[m5] → «%s» (목표 높이 %.2f m)\r\n", m5::PRESETS[p].name, m5::PRESETS[p].z);
@@ -1433,6 +1455,36 @@ static void od_cmd_now(g1::ObsDumpRow& r)
     r.vr = (State_Mimic::motion && State_Mimic::motion->vr_override) ? 1 : 0;
 }
 
+// ── 상태 칸 /dev/shm/g1_masked_status (MaskedStatus.h, 기본 켬) — 정책 틱마다 한 줄 ─────────────────────────────────────────
+// 칸마다 «원본이 이 틱에 쓰거나 본 값» 을 그대로 옮긴다(재계산 없음) — 칸과 원본의 대응은 여기 한 곳. 정책 스레드 전용
+// (exit() 의 마지막 줄은 정책 스레드 join 뒤 FSM 스레드 — join 이 순서를 맺는다).
+static uint32_t g_status_tick = 0;            // 쓴 줄 수(프로세스 전체) — 정책 틱마다 +1 (받는 쪽의 «살아 있나» 계측기)
+static uint32_t g_status_m5_arrive_seq = 0;   // mode5 도착 선언(holding 이 켜지는 에지) 수 — 정책 루프의 «[m5] 도착» 로그와 같은 에지
+static MaskedStatus g_status_frame(int active_mode, int fsm_state, int32_t safety)
+{
+    MaskedStatus s{};
+    s.tick            = g_status_tick;
+    s.active_mode     = active_mode;
+    s.last_req_mode   = g_status_req.last_req_mode;      // 요청이 들어온 문(g_request_mode · 채널 관문 · 자세 버튼)이 적은 것
+    s.last_req_result = g_status_req.last_req_result;
+    s.refusal_code    = g_status_req.refusal_code;
+    s.refused_mode    = g_status_req.refused_mode;
+    s.m5_preset       = g_m5.preset() + 1;               // 드라이버의 지금 자세(−1 = 없음) → 0 없음 · 1..N(GuiCtrl 번호). 누가 눌렀든
+                                                         // (GUI·키 · mode5 진입의 자동 «직립» · qd_warn 강제) 드라이버 상태 그대로
+    s.m5_arrived      = g_m5.holding() ? 1 : 0;          // 드라이버의 도착 선언 — 이탈 조건·qd_warn 해제가 보는 hold 와 같은 상태
+    s.m5_arrive_seq   = g_status_m5_arrive_seq;
+    s.safety          = safety;
+    s.fsm_state       = fsm_state;
+    s.gui_seq_applied = g_gui_poll.last_seq;
+    s.relay_stale     = gui_relay_stale(g_gui_poll) ? 1 : 0;
+    s.z_fk            = g_z_fk;                          // 이 틱 첫머리 값 — 이 틱의 모드 이탈·진입 판정(g_exit_ctx)이 본 그 값
+    s.tilt_deg        = g_tilt.value();
+    s.vx_cmd          = g_loco.base_vel[0];              // base_vel_command 관측의 원천(봉투 → slew → 모드 마스크 뒤)
+    s.vy_cmd          = g_loco.base_vel[1];
+    s.wz_cmd          = g_loco.base_vel[2];
+    return s;
+}
+
 // G1_OBS_CSV 가 있을 때만(기본 꺼짐) — 덤프를 열고(멱등), 이 인스턴스의 env->alg 를 기록 감싸개로 한 번 감싸고,
 // 체류 시작을 표시한다. 반환 = 이 체류가 기록하나. FSM 스레드(enter) — 정책 스레드가 없을 때다.
 bool State_Mimic::obs_dump_enter_()
@@ -1476,6 +1528,16 @@ bool State_Mimic::obs_dump_enter_()
     }
     g1::ObsDump::shared().mark_enter(t_enter_abs);
     return true;
+}
+
+// State_Mimic::exit() 가 정책 스레드를 join 한 «뒤» 부른다(FSM 스레드 — 쓰는 쪽은 여전히 하나). 받는 쪽이 정책이 떠난 것을
+// 바로 알게 active_mode 0 으로 한 줄(나머지 칸 = 떠나기 직전 값 — 예: 떠난 이유가 qd_crit 면 safety 2 가 남는다). 이 줄이 없으면
+// tick 이 멈출 뿐이라 받는 쪽은 0.5 s 뒤에야 안다. syscall 없음 — 매핑은 enter() 가 이미 열었다(꺼져 있으면 no-op).
+void State_Mimic::status_exit_frame_()
+{
+    ++g_status_tick;
+    g1::masked_status::MaskedStatusWriter::shared().write(g_status_frame(
+        0, getState(), g1::masked_status::safety_level(js_qd_crit_latched_.load(), js_qd_warn_latched_)));
 }
 
 void State_Mimic::enter()
@@ -1566,6 +1628,14 @@ void State_Mimic::enter()
             art->imu_cal = imu_cal_;
         else
             spdlog::error("[imu_cal] 🔴 G1Articulation 이 아니다 — 보정이 걸리지 않는다");
+    }
+    // 상태 칸(/dev/shm/g1_masked_status — 기본 켬, G1_STATUS_SHM=0 이면 끔). 첫 enter() 에서 열고 쪽을 미리 만진다. 멱등 —
+    // 재진입·다른 Mimic 상태는 같은 매핑을 쓴다. 정책 스레드는 원자 저장만 한다(MaskedStatus.h).
+    {
+        g1::masked_status::MaskedStatusWriter& sw = g1::masked_status::MaskedStatusWriter::shared();
+        const bool was_on = sw.on();
+        if (sw.open_from_env_or_default() && !was_on)
+            spdlog::info("[status] 상태 칸 {} (magic 0x6706, 80 B) — 정책 틱마다 모드·요청 결과·자세 도착·안전·명령 속도", sw.path());
     }
     // G1_SAFETY_CSV 가 있을 때만 켜진다(기본 꺼짐). 프로세스 공유 인스턴스 — 멱등이라
     // Mimic_Masked/Mimic_Dance1_subject2 전환·재진입마다 다시 불러도 두 번째부터는 no-op.
@@ -1963,9 +2033,11 @@ void State_Mimic::enter()
                 if (g_mode.row().mode5_cmd_live && g_m5.active()) {
                     const auto& gb = env->robot->data.projected_gravity_b;
                     g_m5_cmd = g_m5.tick(g_z_fk, {gb[0], gb[1], gb[2]});
-                    if (g_m5.holding() && !m5_hold_prev)
+                    if (g_m5.holding() && !m5_hold_prev) {
+                        ++g_status_m5_arrive_seq;   // 상태 칸: 드라이버의 도착 선언마다 +1 (이 로그와 같은 에지)
                         spdlog::info("[m5] 도착 «{}»  z_fk={:.2f}  기울기={:.0f}°",
                                      m5::PRESETS[g_m5.preset()].name, g_z_fk, g_tilt.value());
+                    }
                 } else {
                     g_m5_cmd.fill(0.f);
                 }
@@ -2000,6 +2072,12 @@ void State_Mimic::enter()
                 d.stage().episode = env->episode_length;
                 d.publish_step();   // 이제부터 run() 의 기록에 이 줄 번호가 붙는다
             }
+            // 상태 칸(기본 켬): 이 틱에 정한 모드·요청 결과·자세 도착·안전·정책에 들어간 명령을 한 줄. 원자 저장 20 개 — syscall·
+            // 할당·락 없음(MaskedStatus.h · tests/test_masked_status.cpp 가 센다). 꺼져 있으면 no-op.
+            ++g_status_tick;
+            g1::masked_status::MaskedStatusWriter::shared().write(g_status_frame(
+                g_mode.mode(), getState(),
+                g1::masked_status::safety_level(js_qd_crit_latched_.load(), js_qd_warn_latched_)));
             const auto d_t1 = clock::now();
 
             // ── 계측 (틱당 ~1 ns. 구간 셋은 env->step() 이 채워 둔 값을 읽기만 한다)
