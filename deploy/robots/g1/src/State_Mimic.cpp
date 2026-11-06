@@ -374,6 +374,8 @@ static void g_poll_gui()
         // (G1 리모컨 조이스틱은 지금처럼 그 위에 더해진다).
         g_kb_vx = 0.0f; g_kb_vy = 0.0f; g_kb_wz = 0.0f;
         printf("\r\n[gui relay stale] velocity zeroed\r\n");
+        // 속도 문도 다시 닫혔다(열려 있었을 때만 알린다) — 다시 뜬 중계는 속도 0 프레임을 한 번 보내야 속도가 먹는다(GuiPoll.h).
+        if (a.vel_gate_closed) printf("\r\n[gui relay] velocity gate closed until a zero frame\r\n");
         fflush(stdout);
         return;
     }

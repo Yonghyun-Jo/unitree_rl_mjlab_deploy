@@ -111,18 +111,21 @@ static void relay_frames_stale_zero_velocity() {
     g.seq = 12; GuiApply r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel && r.vx == 0.5f);
     for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); CHECK(!gui_relay_stale(st)); }   // 같은 seq 14 틱
     r = poll_gui_frame(&g, st); CHECK(r.zero_vel); CHECK(gui_relay_stale(st));   // 15 틱째 — 끊김 에피소드 시작
-    for (int i = 0; i < 50; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); CHECK(gui_relay_stale(st)); }    // 1 회뿐 · 에피소드는 이어진다
-    g.seq = 13; r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel);       // 되살아남 → 정상
+    CHECK(r.vel_gate_closed);                                                    // 열려 있던 속도 문도 같은 틱에 닫힌다
+    for (int i = 0; i < 50; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel && !r.vel_gate_closed); CHECK(gui_relay_stale(st)); }    // 1 회뿐 · 에피소드는 이어진다
+    g.seq = 13; r = poll_gui_frame(&g, st); CHECK(r.apply && !r.zero_vel);       // 되살아남 → 정상(하트비트)
     CHECK(!gui_relay_stale(st));                                                 // 에피소드 끝
-    CHECK(r.log_line && r.vx == 0.5f);                                           // 속도가 0 → 0.5 로 바뀜(문은 체류 동안 열린 채)
+    CHECK(r.vx == 0.f && !r.log_line);                                           // 단 문이 닫혀 속도 0(찍힌 0 과 같아 줄 없음)
+    z0.seq = 14; r = poll_gui_frame(&z0, st); CHECK(r.vel_gate_opened);          // 0 프레임 → 다시 열림
+    g.seq = 15; r = poll_gui_frame(&g, st); CHECK(r.log_line && r.vx == 0.5f);   // 속도가 0 → 0.5 로 바뀜
     // 파일이 사라져도 같다
     for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(nullptr, st); CHECK(!r.zero_vel); }
-    r = poll_gui_frame(nullptr, st); CHECK(r.zero_vel);
-    r = poll_gui_frame(nullptr, st); CHECK(!r.zero_vel);
-    // 되살아난 뒤 다시 멈추면 다시 한 번
-    g.seq = 14; r = poll_gui_frame(&g, st); CHECK(r.apply);
+    r = poll_gui_frame(nullptr, st); CHECK(r.zero_vel && r.vel_gate_closed);
+    r = poll_gui_frame(nullptr, st); CHECK(!r.zero_vel && !r.vel_gate_closed);
+    // 되살아난 뒤 다시 멈추면 다시 한 번(문이 이미 닫혀 있으면 «닫힘» 알림은 없다)
+    g.seq = 16; r = poll_gui_frame(&g, st); CHECK(r.apply && r.vx == 0.f);
     for (int i = 1; i <= 14; ++i) { r = poll_gui_frame(&g, st); CHECK(!r.zero_vel); }
-    r = poll_gui_frame(&g, st); CHECK(r.zero_vel);
+    r = poll_gui_frame(&g, st); CHECK(r.zero_vel && !r.vel_gate_closed);
     // 중계를 본 적 없으면 파일 없음은 감시 대상이 아니다
     GuiPollState s2; for (int i = 0; i < 100; ++i) { r = poll_gui_frame(nullptr, s2); CHECK(!r.zero_vel); }
     // v2 가 이어받으면 감시 끝
@@ -275,9 +278,11 @@ static void relay_velocity_gate_per_stay() {
     w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.vx == 0.4f && r.vy == 0.1f && r.wz == -0.2f && !r.vel_gate_opened);
     z.seq = s++; r = poll_gui_frame(&z, st); CHECK(r.vx == 0.f && !r.vel_gate_opened);   // 다시 0 이어도 «열림» 은 한 번
     w.seq = s++; w.vx = 0.7f; r = poll_gui_frame(&w, st); CHECK(r.vx == 0.7f);           // 열린 채
-    // 끊김(zero_vel) 뒤 되살아나도 같은 체류면 문은 열린 채(문은 체류 시작에만 닫힌다)
+    // 끊김(zero_vel)은 문을 다시 닫는다(R-F2) — 아래 relay_stale_recloses_velocity_gate 가 자세히
     for (int i = 0; i < GUI_RELAY_STALE_TICKS; ++i) poll_gui_frame(nullptr, st);
-    CHECK(gui_relay_stale(st));
+    CHECK(gui_relay_stale(st) && !st.relay_vel_ok);
+    w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.vx == 0.f);
+    z.seq = s++; r = poll_gui_frame(&z, st); CHECK(r.vel_gate_opened);
     w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.vx == 0.7f);
     // 다음 체류: 기준선이 0 이어도 문은 닫힌 채 — 진입 «뒤» 새 seq 의 0 을 봐야 연다
     gui_poll_begin_stay(st);
@@ -299,6 +304,51 @@ static void relay_velocity_gate_per_stay() {
     poll_gui_frame(nullptr, v);
     GuiCtrl a = mk(GUI_CTRL_MAGIC, 7, 0.3f, 0.2f, 0.1f); r = poll_gui_frame(&a, v);
     CHECK(r.apply && r.vx == 0.3f && r.vy == 0.2f && r.wz == 0.1f && !r.vel_gate_opened && !r.relay_first);
+}
+
+// R-F2 — 끊김 에피소드(zero_vel)가 속도 문을 다시 닫는다(같은 틱, 열려 있었을 때만 알림). 같은 체류 안에서 중계가 다시 떠
+// 브라우저가 키를 누른 채여도, 새 seq 의 속도 0 프레임을 한 번 볼 때까지 속도는 0. mode_req·자세는 그동안에도 먹는다.
+static void relay_stale_recloses_velocity_gate() {
+    GuiPollState st; gui_poll_begin_stay(st); uint32_t s = 1;
+    GuiCtrl z = mk(MAGIC_GUI_RELAY, s++); poll_gui_frame(&z, st);               // 기준선
+    z.seq = s++; GuiApply r = poll_gui_frame(&z, st); CHECK(r.vel_gate_opened); // 체류 → 문 열림
+    GuiCtrl w = mk(MAGIC_GUI_RELAY, s++, 0.4f, -0.2f, 0.3f);
+    r = poll_gui_frame(&w, st); CHECK(r.vx == 0.4f && r.vy == -0.2f && r.wz == 0.3f);   // 따라간다
+    // 중계 죽음(SIGKILL — 마지막 프레임이 W 인 채 멈춤): 15 틱째 zero_vel 과 같은 틱에 문 닫힘
+    for (int i = 1; i < GUI_RELAY_STALE_TICKS; ++i) { r = poll_gui_frame(&w, st); CHECK(!r.zero_vel && !r.vel_gate_closed && st.relay_vel_ok); }
+    r = poll_gui_frame(&w, st); CHECK(r.zero_vel && r.vel_gate_closed && !st.relay_vel_ok);
+    for (int i = 0; i < 30; ++i) { r = poll_gui_frame(&w, st); CHECK(!r.zero_vel && !r.vel_gate_closed); }   // 알림은 한 번
+    // 중계가 다시 뜸 — 브라우저는 W 를 누른 채: 새 seq 하트비트는 적용되지만 속도는 0
+    for (int i = 0; i < 20; ++i) {
+        w.seq = s++; r = poll_gui_frame(&w, st);
+        CHECK(r.apply && r.set_vel && r.vx == 0.f && r.vy == 0.f && r.wz == 0.f && !r.vel_gate_opened && !r.zero_vel);
+    }
+    CHECK(!gui_relay_stale(st));                                                 // 끊김 에피소드는 끝났다(하트비트는 살아 있다)
+    // 문이 닫혀 있어도 모드 요청·자세는 먹는다
+    w.seq = s++; w.mode_req = 1; w.m5_preset = 2; w.m5_press_seq = 4;
+    r = poll_gui_frame(&w, st); CHECK(r.apply && r.mode_req == 1 && r.m5_press && r.m5_preset == 2 && r.vx == 0.f);
+    w.mode_req = 0; w.m5_preset = 0;
+    // 0 프레임 하나 → 다시 열림 → 다음부터 따라간다
+    z.seq = s++; r = poll_gui_frame(&z, st); CHECK(r.apply && r.vel_gate_opened && r.vx == 0.f);
+    w.seq = s++; r = poll_gui_frame(&w, st); CHECK(r.vx == 0.4f && r.vy == -0.2f && r.wz == 0.3f);
+    // 문이 이미 닫힌 채 끊기면(열린 적 없는 체류) zero_vel 만 — «닫힘» 알림은 없다
+    GuiPollState c; gui_poll_begin_stay(c);
+    GuiCtrl k = mk(MAGIC_GUI_RELAY, 1, 0.4f); poll_gui_frame(&k, c);
+    k.seq = 2; r = poll_gui_frame(&k, c); CHECK(r.apply && r.vx == 0.f);
+    bool zeroed = false, closed = false;
+    for (int i = 0; i < GUI_RELAY_STALE_TICKS + 5; ++i) { r = poll_gui_frame(&k, c); zeroed |= r.zero_vel; closed |= r.vel_gate_closed; }
+    CHECK(zeroed && !closed);
+    // 파일이 사라지는 끊김도 같다(열린 문을 닫는다)
+    GuiPollState d; gui_poll_begin_stay(d);
+    GuiCtrl q = mk(MAGIC_GUI_RELAY, 1); poll_gui_frame(&q, d);
+    q.seq = 2; r = poll_gui_frame(&q, d); CHECK(r.vel_gate_opened);
+    for (int i = 1; i < GUI_RELAY_STALE_TICKS; ++i) poll_gui_frame(nullptr, d);
+    r = poll_gui_frame(nullptr, d); CHECK(r.zero_vel && r.vel_gate_closed);
+    // 0x6704 는 끊김 감시도 문도 없다 — 영향 없음
+    GuiPollState v; gui_poll_begin_stay(v);
+    GuiCtrl a = mk(GUI_CTRL_MAGIC, 1); poll_gui_frame(&a, v);
+    for (int i = 0; i < 100; ++i) { r = poll_gui_frame(nullptr, v); CHECK(!r.zero_vel && !r.vel_gate_closed); }
+    a.seq = 2; a.vx = 0.3f; r = poll_gui_frame(&a, v); CHECK(r.apply && r.vx == 0.3f);
 }
 
 // M3 — 체류마다 첫 0x6705 적용에서 한 번 «중계가 키보드 속도를 덮는다». 기준선·새 seq 없는(남은) 파일은 «적용» 이 아니다.
@@ -334,6 +384,7 @@ int main() {
     relay_nonfinite_reported_once_per_run();
     relay_log_baseline_follows_v2_and_stay();
     relay_velocity_gate_per_stay();
+    relay_stale_recloses_velocity_gate();
     relay_active_announced_once_per_stay();
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("test_gui_poll ok\n");

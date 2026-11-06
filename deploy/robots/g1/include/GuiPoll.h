@@ -7,7 +7,8 @@
 //                  STALE_TICKS 정책 틱 안 바뀌거나 파일이 사라지면 속도를 0 으로 한다(zero_vel, 에피소드당 1회).
 //                  보행 파라미터(period·height_scale·turn_k)와 clip_req 는 무시한다.
 //                  체류마다 «속도 문»: 그 체류에서 속도 0 인 0x6705 프레임을 한 번 적용할 때까지 0x6705 속도는 0 으로 친다
-//                  (W 를 누른 채 Mimic 에 들어가면 바로 걷지 않게). mode_req·자세는 문과 상관없이 먹는다.
+//                  (W 를 누른 채 Mimic 에 들어가면 바로 걷지 않게). 끊김(zero_vel)도 문을 다시 닫는다 — 같은 체류 안에서
+//                  다시 뜬 중계도 속도 0 프레임을 한 번 보내야 속도가 먹는다. mode_req·자세는 문과 상관없이 먹는다.
 //                  로그: mode_req·자세 누름은 바로. 속도만 바뀐 것은 GUI_RELAY_LOG_MIN_TICKS 틱에 한 번까지, 그리고 마지막으로
 //                  찍은 값에서 한 축이라도 GUI_RELAY_LOG_MIN_DV 이상 바뀌었을 때만(아날로그 패드는 속도가 매 틱 바뀐다 —
 //                  정책 스레드에서 printf·fflush 50 회/s 를 막는다). 찍을 때는 그 틱의 최신 값.
@@ -50,7 +51,8 @@ struct GuiPollState {
     bool     nonfinite_run = false;   // 0x6705 비유한 프레임이 이어지는 중(첫 번만 알린다). 유한 프레임·기준선이 내린다
     int      log_age = GUI_RELAY_LOG_MIN_TICKS;   // 마지막 GUI 로그 줄 뒤의 poll 수(이 값에서 멈춘다). 처음·체류 시작 = 다 참
                                                   // → 그 체류의 첫 속도 변화는 바로 찍는다
-    bool     relay_vel_ok = false;     // 이 체류에서 속도 0 인 0x6705 프레임을 적용했나(«속도 문» 열림). 열리기 전엔 0x6705 속도 = 0
+    bool     relay_vel_ok = false;     // 속도 0 인 0x6705 프레임을 적용했나(«속도 문» 열림) — 체류 시작·끊김(zero_vel)이 닫는다.
+                                       // 열리기 전엔 0x6705 속도 = 0
     bool     relay_announced = false;  // 이 체류에서 0x6705 를 적용한 적 있나(«중계가 키보드 속도를 덮는다» 한 줄은 체류마다 한 번)
 };
 
@@ -91,6 +93,7 @@ struct GuiApply {
     bool rebased = false;        // 기준선만 잡았다(적용 없음) — 호출부가 안내 한 줄
     bool relay_first = false;    // 이 체류의 첫 0x6705 적용 — 호출부가 «중계가 키보드 속도를 덮는다» 한 줄
     bool vel_gate_opened = false; // 이 체류의 속도 문이 이 프레임(속도 0 인 0x6705)에서 열렸다 — 호출부가 한 줄
+    bool vel_gate_closed = false; // 끊김(zero_vel)이 열려 있던 속도 문을 다시 닫았다 — 호출부가 한 줄(zero_vel 과 같은 틱)
     // 비유한 값 프레임 — 호출부가 알림 한 줄. 0x6704 = seq 가 바뀐 나쁜 프레임마다 · 0x6705 = 이어지는 비유한 프레임의
     // 첫 번만(50 Hz 하트비트라 seq 가 매 틱 바뀐다 — 정책 스레드에서 printf·fflush 50 회/s 를 막는다)
     bool rejected_nonfinite = false;
@@ -104,6 +107,9 @@ inline void stale_tick(GuiPollState& st, GuiApply& r) {
         if (++st.stale_ticks == GUI_RELAY_STALE_TICKS) {
             r.zero_vel = true;
             st.last_vx = st.last_vy = st.last_wz = 0.f;
+            // 속도 문도 다시 닫는다 — 같은 체류 안에서 중계가 다시 떠도(브라우저가 키를 누른 채) 새 seq 의 속도 0 프레임을
+            // 한 번 볼 때까지 그 속도를 안 받는다. 열려 있던 문을 닫을 때만 알린다(이미 닫혀 있으면 조용히).
+            if (st.relay_vel_ok) { st.relay_vel_ok = false; r.vel_gate_closed = true; }
         }
     }
 }
