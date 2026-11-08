@@ -56,7 +56,7 @@
     "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
     "onnx_md5": "1069d71bf014a9ecb836c6ab67a1540c",
     "sim2sim_walk": "★★★★☆ 11-05 재확인 — 별칭 v3(ACTIVE day 261103 에 다시 붙임), 바이너리 = com1 build 11-03 02:16(소스 9204025, -O3 -DNDEBUG). 헤드리스 램프(ramp_cmd.csv 59 s, 10-31 과 같은 대본), 밴드 풀림 확인(정지 발목 |tau| 8.66 Nm). 기동 줄: 슬롯 별칭 · gait mode1 min_swing 0.080 · pos_clamp ON/rate_limit OFF/qd_guard ON · requires 6 전부 지원. 낙상 0 · pos_clamp 0 tick · |qd| 최대 10.98 rad/s @R_ank_pitch(crit 19 의 58 %) · 기울기 최대 8.8°. 멈춤 5 번(0.5/1.0/1.5/2.0/0.6 m/s): 멈출 때 골반 최저 −0.6/−2.5/−3.6/−6.5/−1.8° · 젖힘 적분 합 1.38 °·s · 3~6 s 뒤 골반 +2.4~+2.8 · 허리 pitch +23.7~+24.0. 10-31(바이너리 6fe9fed) 같은 대본: 낙상 0 · |qd| 11.10 · 기울기 8.8° · 골반 최저 −0.3/−2.3/−3.4/−5.7/−1.7 · 젖힘 합 1.19 °·s — 같은 동작. 패리티 11-05 재판정 KNOWN(PASS 40 · KNOWN 2 = K1·K2 mode2 · FAIL 0). (2026-11-05)",
-    "real_robot": "미실행"
+    "real_robot": "★★☆☆☆ 멈춘뒤 뒤쏠림이 오히려 심해짐. (수동 기록 · 회수 데이터 없음, 2026-11-06)"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-10-31_01-49-37_s4_mode1_comfloor5_pelvisfloor0_arate0p15_resume30k_to35k/keep_cand_32000.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261031_v1_pelvisfloor0_arate0p15_32k/policy.onnx",
   "deployed": {
@@ -72,5 +72,11 @@
     "memo": "11-05 재확인 — 별칭 v3(ACTIVE day 261103 에 다시 붙임), 바이너리 = com1 build 11-03 02:16(소스 9204025, -O3 -DNDEBUG). 헤드리스 램프(ramp_cmd.csv 59 s, 10-31 과 같은 대본), 밴드 풀림 확인(정지 발목 |tau| 8.66 Nm). 기동 줄: 슬롯 별칭 · gait mode1 min_swing 0.080 · pos_clamp ON/rate_limit OFF/qd_guard ON · requires 6 전부 지원. 낙상 0 · pos_clamp 0 tick · |qd| 최대 10.98 rad/s @R_ank_pitch(crit 19 의 58 %) · 기울기 최대 8.8°. 멈춤 5 번(0.5/1.0/1.5/2.0/0.6 m/s): 멈출 때 골반 최저 −0.6/−2.5/−3.6/−6.5/−1.8° · 젖힘 적분 합 1.38 °·s · 3~6 s 뒤 골반 +2.4~+2.8 · 허리 pitch +23.7~+24.0. 10-31(바이너리 6fe9fed) 같은 대본: 낙상 0 · |qd| 11.10 · 기울기 8.8° · 골반 최저 −0.3/−2.3/−3.4/−5.7/−1.7 · 젖힘 합 1.19 °·s — 같은 동작. 패리티 11-05 재판정 KNOWN(PASS 40 · KNOWN 2 = K1·K2 mode2 · FAIL 0).",
     "at": "2026-11-05T12:45",
     "summary": "넘어짐 0 · 10-31 판정 그대로(지금 바이너리 9204025 로 재확인)"
+  },
+  "real_robot_manual": {
+    "stars": 2,
+    "memo": "",
+    "at": "2026-11-06T18:43",
+    "summary": "멈춘뒤 뒤쏠림이 오히려 심해짐."
   }
 }

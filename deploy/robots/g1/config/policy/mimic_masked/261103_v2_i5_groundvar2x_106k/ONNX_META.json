@@ -52,7 +52,7 @@
     ],
     "onnx_md5": "59a5b7929af1fc119851ab7f69264bc6",
     "sim2sim_walk": "★★★★☆ com1 헤드리스(sim2sim_headless.py, 밴드 해제 확인 발목 |tau| 4.97 Nm), 슬롯 261103_v2_i5_groundvar2x_106k, 바이너리 9204025(slot_fallback, 이후 C++ 변경 없음). 대조군 v1 을 같은 조건으로 바로 이어 재실행(2026-11-04). 자세 고리(키→첫 도착, v2 / v1): 네발 x +1.38 / +0.97 s(z 0.50 / 0.46) · 직립 z +1.33 / +1.35 · 앉기 b +1.25 / +1.28 · 직립 z +3.24 / +2.54 · 눕기 n +1.21 / +1.29 · 직립 z +3.08 / +3.20 s. 키 1 = «이 슬롯(ONNX)이 모르는 모드» 거부. 안전 이벤트 0(Passive·bad_orientation·qd_warn·qd_crit) 둘 다. 체류 요약: pos_clamp 1 tick 둘 다(waist_pitch 0.80 / 0.92 rad 삭감, 드러누움 유지 중 — 계보 공통) · rate_limit OFF · nan_hold 0. |qd| 는 관절별 crit(deploy.yaml qd_crit, 무릎 19) 대비로 본다: 밴드 해제 뒤 최대 = v2 L_wri_pitch 15.9/21(75 %) · 무릎 10.8/19(57 %), v1 R_knee 12.3/19(65 %). 🔴 밴드에 매달린 채 정책이 직립으로 들어가는 처음 1~8 s(판정 구간 밖)에 v2 L_knee 21.3/19(112 %, 표본 1개) · v1 R_knee 17.8/19(94 %) — 둘 다 연속 틱이 아니라 qd_crit 래치 안 됨, 각 1회 측정이라 v2 가 더 나쁘다고 단정 못 함. 실기에서 발이 뜬 채로 m 에 들어가면 같은 무릎 튐이 날 수 있다. 체류 요약 «|qd| 최대 20.83 @ R_ank_pitch (crit 19.0)» 의 19 는 관절 최소값이라 오독 주의(R_ank_pitch crit 36). 정책 overrun 경고 창 1/114(v1 2/113). sim 평가(mjlab, 결정론 strict)는 실험 노트 261103_skill5_ground_x2_curriculum §7. (2026-11-04)",
-    "real_robot": "미실행"
+    "real_robot": "★☆☆☆☆ 아예 안일어나짐 왜이럴까? (수동 기록 · 회수 데이터 없음, 2026-11-06)"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_final && /home/piene/.local/bin/uv run --no-sync --with onnxruntime==1.22.0 python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-10-17_09-29-32_indep_s2_m5only_c2_cap1024_steps6/keep_119999.pt --manifest motions/g1_flow_specialists_c2.yaml --head 5=logs/rsl_rl/g1_student/2026-11-03_02-18-52_indep_s4_m5_groundvar2x_from90k/keep_106000.pt --sampling-steps 6 --out exported/261103_v2_i5_groundvar2x_106k/policy.onnx",
   "deployed": {
@@ -76,5 +76,11 @@
     "memo": "com1 헤드리스(sim2sim_headless.py, 밴드 해제 확인 발목 |tau| 4.97 Nm), 슬롯 261103_v2_i5_groundvar2x_106k, 바이너리 9204025(slot_fallback, 이후 C++ 변경 없음). 대조군 v1 을 같은 조건으로 바로 이어 재실행(2026-11-04). 자세 고리(키→첫 도착, v2 / v1): 네발 x +1.38 / +0.97 s(z 0.50 / 0.46) · 직립 z +1.33 / +1.35 · 앉기 b +1.25 / +1.28 · 직립 z +3.24 / +2.54 · 눕기 n +1.21 / +1.29 · 직립 z +3.08 / +3.20 s. 키 1 = «이 슬롯(ONNX)이 모르는 모드» 거부. 안전 이벤트 0(Passive·bad_orientation·qd_warn·qd_crit) 둘 다. 체류 요약: pos_clamp 1 tick 둘 다(waist_pitch 0.80 / 0.92 rad 삭감, 드러누움 유지 중 — 계보 공통) · rate_limit OFF · nan_hold 0. |qd| 는 관절별 crit(deploy.yaml qd_crit, 무릎 19) 대비로 본다: 밴드 해제 뒤 최대 = v2 L_wri_pitch 15.9/21(75 %) · 무릎 10.8/19(57 %), v1 R_knee 12.3/19(65 %). 🔴 밴드에 매달린 채 정책이 직립으로 들어가는 처음 1~8 s(판정 구간 밖)에 v2 L_knee 21.3/19(112 %, 표본 1개) · v1 R_knee 17.8/19(94 %) — 둘 다 연속 틱이 아니라 qd_crit 래치 안 됨, 각 1회 측정이라 v2 가 더 나쁘다고 단정 못 함. 실기에서 발이 뜬 채로 m 에 들어가면 같은 무릎 튐이 날 수 있다. 체류 요약 «|qd| 최대 20.83 @ R_ank_pitch (crit 19.0)» 의 19 는 관절 최소값이라 오독 주의(R_ank_pitch crit 36). 정책 overrun 경고 창 1/114(v1 2/113). sim 평가(mjlab, 결정론 strict)는 실험 노트 261103_skill5_ground_x2_curriculum §7.",
     "at": "2026-11-04T12:49",
     "summary": "넘어짐 0 · 자세 6개 전부 도착(눕→직립 3.1 s) · 키 1 거부 — v1 과 같은 동작"
+  },
+  "real_robot_manual": {
+    "stars": 1,
+    "memo": "",
+    "at": "2026-11-06T18:43",
+    "summary": "아예 안일어나짐 왜이럴까?"
   }
 }
