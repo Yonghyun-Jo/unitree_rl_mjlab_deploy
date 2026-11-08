@@ -46,7 +46,7 @@
 | `261031_v1_pelvisfloor0_arate0p15_32k` | — | 보관 | 2026-10-31_01-49-37_s4_mode1_comfloor5_pelvisfloor0_arate0p15_resume30k_to35k/keep_cand_32000.pt | ★★★★☆ 11-05 재확인 — 별칭 v3(ACTIVE day 261103 에 다시 붙임), 바이너리 = c | ★★☆☆☆ 멈춘뒤 뒤쏠림이 오히려 심해짐. (수동 기록 · 회수 데이터  |
 | `261103_v1_i5_groundvar_90k` | — | 보관 | none | ★★★★☆ com1 헤드리스(sim2sim_headless.py, 밴드 해제 확인 발목 |tau| 4.68  | ★★★★★ 누운상태에서 잘 일어나짐. 지금까지 퀄리티는 제일 좋은듯. ( |
 | `261103_v2_i5_groundvar2x_106k` | — | 보관 | none | ★★★★☆ com1 헤드리스(sim2sim_headless.py, 밴드 해제 확인 발목 |tau| 4.97  | ★☆☆☆☆ 아예 안일어나짐 왜이럴까? (수동 기록 · 회수 데이터 없음, |
-| `261109_v1_groundvar_32k5` | v1 | 활성 | 2026-11-06_20-45-59_s4_mode1_v1rew_groundvar_resume27k5_to35k/keep_32500.pt | 미실행 — 사용자가 확인 | 미실행 |
+| `261109_v1_groundvar_32k5` | v1 | 활성 | 2026-11-06_20-45-59_s4_mode1_v1rew_groundvar_resume27k5_to35k/keep_32500.pt | ★★★★☆ 11-09 com1 헤드리스(sim2sim_headless.py, 밴드 해제 확인 발목 |tau| | 미실행 |
 | `gmt_multihead_cop_slip` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc` | — | 보관 | (불명) | — | — |
 | `gmt_multihead_cwc_scratch` | — | 보관 | 2026-07-13_17-31-46_mode1_fh2p0_mirror0p5_v5/model_20000.pt | onnxruntime vs torch max|Δ| = 4.351e-06 (tol 1e-4). mask sli | — |

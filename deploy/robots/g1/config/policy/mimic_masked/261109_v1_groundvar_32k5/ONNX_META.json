@@ -56,7 +56,7 @@
     "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
     "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
     "onnx_md5": "9a2420e196efb51dc58b1d05d0bcef1c",
-    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "sim2sim_walk": "★★★★☆ 11-09 com1 헤드리스(sim2sim_headless.py, 밴드 해제 확인 발목 |tau| 4.38·4.13 Nm), 바이너리 = com1 build 11-06 15:50(Release -O3 -DNDEBUG, C++ 마지막 변경 28da6bf). 대본 ramp_cmd.csv 59 s(10-31·11-05 와 같음), 2 회. 기동 줄: 슬롯 261109_v1_groundvar_32k5 · gait mode1 min_swing 0.080 · pos_clamp ON/rate_limit OFF/qd_guard ON · requires 6 전부 지원. 낙상 0 · pos_clamp 0 tick · |qd| 최대 11.26 rad/s @R_ank_pitch(crit 19 의 59 %) · 기울기 최대 13.6/9.8°. 멈춤 5 번(0.5/1.0/1.5/2.0/0.6 m/s): 멈출 때 골반 최저 −4.5/−6.5/−6.4/−9.3/−4.8°(2 회차 −4.3/−6.1/−6.3/−9.4/−4.7) · 젖힘 적분 합 14.2/15.1 °·s · 3~6 s 뒤 골반 +1.0~+1.3 · 허리 pitch +22. 같은 바이너리 대조군 261009_v1(실기 ★4, 보관소에서 잠시 복원): 낙상 0 · |qd| 17.55 @L_knee(crit 의 92 %) · 기울기 15.8° · 골반 최저 −6.1/−8.2/−10.0/−10.7/−6.2 · 젖힘 합 22.2 · 3~6 s 뒤 골반 +1.6~+2.3 · 허리 +21~+26. 참고 11-05 P 32k(실기 ★2): 젖힘 합 1.38 · 골반 최저 −0.6~−6.5 — sim2sim 골반 꺼짐은 실기 뒤쏠림을 예측 못 했다(P 32k 가 sim 최선·실기 최악). (2026-11-09)",
     "real_robot": "미실행"
   },
   "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-11-06_20-45-59_s4_mode1_v1rew_groundvar_resume27k5_to35k/keep_32500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261109_v1_groundvar_32k5/policy.onnx",
@@ -67,5 +67,11 @@
     "head": "57a767cd612856a5a755a5867c14a786966d80bc",
     "dirty": [],
     "at": "2026-11-09T02:10:45"
+  },
+  "sim2sim": {
+    "stars": 4,
+    "memo": "11-09 com1 헤드리스(sim2sim_headless.py, 밴드 해제 확인 발목 |tau| 4.38·4.13 Nm), 바이너리 = com1 build 11-06 15:50(Release -O3 -DNDEBUG, C++ 마지막 변경 28da6bf). 대본 ramp_cmd.csv 59 s(10-31·11-05 와 같음), 2 회. 기동 줄: 슬롯 261109_v1_groundvar_32k5 · gait mode1 min_swing 0.080 · pos_clamp ON/rate_limit OFF/qd_guard ON · requires 6 전부 지원. 낙상 0 · pos_clamp 0 tick · |qd| 최대 11.26 rad/s @R_ank_pitch(crit 19 의 59 %) · 기울기 최대 13.6/9.8°. 멈춤 5 번(0.5/1.0/1.5/2.0/0.6 m/s): 멈출 때 골반 최저 −4.5/−6.5/−6.4/−9.3/−4.8°(2 회차 −4.3/−6.1/−6.3/−9.4/−4.7) · 젖힘 적분 합 14.2/15.1 °·s · 3~6 s 뒤 골반 +1.0~+1.3 · 허리 pitch +22. 같은 바이너리 대조군 261009_v1(실기 ★4, 보관소에서 잠시 복원): 낙상 0 · |qd| 17.55 @L_knee(crit 의 92 %) · 기울기 15.8° · 골반 최저 −6.1/−8.2/−10.0/−10.7/−6.2 · 젖힘 합 22.2 · 3~6 s 뒤 골반 +1.6~+2.3 · 허리 +21~+26. 참고 11-05 P 32k(실기 ★2): 젖힘 합 1.38 · 골반 최저 −0.6~−6.5 — sim2sim 골반 꺼짐은 실기 뒤쏠림을 예측 못 했다(P 32k 가 sim 최선·실기 최악).",
+    "at": "2026-11-09T02:17",
+    "summary": "넘어짐 0 · 안전층 개입 0 · 멈출 때 골반 꺼짐이 261009_v1 보다 작음"
   }
 }
