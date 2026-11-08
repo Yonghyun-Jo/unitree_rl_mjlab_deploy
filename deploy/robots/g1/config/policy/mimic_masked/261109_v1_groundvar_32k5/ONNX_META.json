@@ -1,0 +1,71 @@
+{
+  "exported_at": "2026-11-09",
+  "slot": "261109_v1_groundvar_32k5",
+  "trial": "v1",
+  "trial_day": "2026-11-09",
+  "summary": "261009_v1 + 학습 바닥 다양화(자갈·요철·굴곡) 5k — 멈춘 뒤 뒤쏠림이 줄었나 (32.5k)",
+  "watch": [
+    "걷다 멈출 때·서 있을 때 뒤로 기우뚱이 261009_v1 보다 줄었나",
+    "1.0 m/s 걸음이 느려지거나 발이 낮아 보이지 않나",
+    "걷기·뛰기가 261009_v1 만큼 부드러운가"
+  ],
+  "note": "계보: 261009_v1(14차 27.5k, launch a68f735, 10-28 실기 ★4) 에서 바로 이어 학습 → 이 run(s4_mode1_v1rew_groundvar_resume27k5_to35k, 도지 GPU4, mode_transition 87abbe8 — 원격 run 이라 training_meta 없음, 시작 직전 커밋으로 추정) 의 32.5k. 바뀐 것 = 학습 바닥뿐: --mode1-ground-variety = skill5 5-3 ×1 묶음(평지 30 · 자갈 0~1 cm 30 · 요철 ~2 cm 20 · 굴곡 0~3 cm 20 %, 높이맵 두께 50 배, 로봇 접촉 무름 DR timeconst 0.02~0.05, 리셋 0~1.5 cm) + --v1-reward(10-30 이후 얹은 정지 항 넷을 뺀 a68f735 항 집합). base·manifest·steps·obs·FOOT_GEN(min_swing 0.08)·보상 = 261009_v1 과 동일. 11-06 실기 P 32k(★2)가 sim 뒤쏠림 지표를 보상으로 고쳤다가 실기에서 나빠져서, 보상 대신 바닥을 넓힌 판. sim 실측(com1 CPU, 평지 play env 결정적, 괄호 = 261009_v1 · 같은 iteration 평지 대조 15차 32.5k): 멈춤 손(골반 대비) 27.4 cm/s(26.5 · 28.0) · 서기 몸통 +23.7°(+26.7 · +22.9) · 서기 무릎 35.1° / 골반 76.0 cm(34.0/76.3 · 33.7/76.1) · 서기 골반 +1.3°(+2.2 · +0.5) · 멈출 때 골반 최저 −6.9°(−8.7) · 걸음/s @1.0 2.49 · @1.5 3.78(2.82·3.61 · 2.81·3.41) · 발높이 @1.0 12.7 cm(13.0 · 13.0) · 비행 @1.5 3.8 %(3.8 · 4.2) · Δa² @1.0 0.564 · @1.5 0.621(0.558·0.595 · 0.574·0.607) · 넘어짐 0. 학습 중 지형별 넘어짐 몫은 처음부터 네 지형 같음(7~9 %). 🔴 약점·불확실: ① 1.0 m/s 걸음이 느림(2.49 — 실기에서 못했던 v2~v6 의 2.36~2.46 쪽) ② sim 측정은 평지라 바닥 학습이 실기 자세에 주는 효과는 sim 이 못 가른다(11-06 P 32k 역전과 같은 한계) ③ 학습 중 env 하나 NaN 폭주 7 회(정책엔 영향 없음, 탐침 넘어짐 0). 같은 run 의 35k 는 무릎 42° · Δa² 0.66 으로 v1 에서 더 멀어서 32.5k 를 골랐다. 이 run 은 35k → 65k 로 도지 GPU4 에서 이어 학습 중(11-09~). 상세 = AI_workspace experiments 261029_indep1_v1reward_start «11-07 12:30» · «11-08 19:00».",
+  "staged_by": "deploy/scripts/stage_candidates.py",
+  "requires": [
+    "obs_contract",
+    "gait_mode_table",
+    "ref_foot_height_ref",
+    "gait_settle",
+    "gait_min_swing",
+    "safety_per_joint"
+  ],
+  "sampling_steps": "6",
+  "actor_hidden_dims": "[1024, 1024, 1024, 512]",
+  "obs_dim": "1640",
+  "obs_contract_version": "1",
+  "obs_contract": "base_ang_vel:3:10,projected_gravity:3:10,command:58:10,motion_root_ori_b:6:10,joint_pos:29:10,joint_vel:29:10,actions:29:10,base_vel:3:10,mask:2:10,foot_z:2:10",
+  "flow_base_checkpoint": "logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt",
+  "mode1_ckpt": "logs/rsl_rl/g1_student/2026-11-06_20-45-59_s4_mode1_v1rew_groundvar_resume27k5_to35k/keep_32500.pt",
+  "mode1_run": "2026-11-06_20-45-59_s4_mode1_v1rew_groundvar_resume27k5_to35k",
+  "mode1_launch_commit": "87abbe8bbe606520a6ba309920d455a87ec740e0",
+  "mode1_launch_commit_inferred": true,
+  "mode2_ckpt": "logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt",
+  "mode3_ckpt": "logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt",
+  "manifest": "motions/g1_flow_specialists_v2.yaml",
+  "deploy_min_swing": 0.08,
+  "gait_parity": {
+    "근거": "체크포인트 run 의 training_meta.json commit 에서 stage4_mode1_env_cfg.FOOT_GEN 을 읽어 대조",
+    "train_FOOT_GEN": {
+      "cadence_scale": 1.15,
+      "settle_eff": 0.15,
+      "settle_phase": 0.07,
+      "turn_k": 0.3,
+      "stance_z": 0.066,
+      "settle_steps": {
+        "1": 100.0
+      },
+      "min_swing": {
+        "1": 0.08
+      }
+    },
+    "min_swing": "학습 FOOT_GEN.min_swing[1] = 0.08 -> 동일 (train ≡ deploy)"
+  },
+  "verify": {
+    "onnx_vs_torch": "max|Δ| = 2.623e-06 (tol 0.0001) OK",
+    "graph": "그래프 검증 OK — GEMM 61 = enc 4 + actor 5×6 + heads 27",
+    "obs_contract_sum": "obs 계약 10항 합=1640 == obs 1640  OK",
+    "mask_slice": "mask slice (-22, -20) == env.command_mask()  OK",
+    "onnx_md5": "9a2420e196efb51dc58b1d05d0bcef1c",
+    "sim2sim_walk": "미실행 — 사용자가 확인",
+    "real_robot": "미실행"
+  },
+  "export_cmd": "cd /home/piene/mjlab1.4/mjlab_g1_motion && /home/piene/.local/bin/uv run --no-sync python -m mjlab_g1_motion.scripts.tools.export_multihead_onnx --flow-base-checkpoint logs/rsl_rl/g1_student/2026-08-11_01-09-08_v3_deploy_cap1024_4L_steps6_resume60k_to120k/model_119997.pt --manifest motions/g1_flow_specialists_v2.yaml --mode1-ckpt logs/rsl_rl/g1_student/2026-11-06_20-45-59_s4_mode1_v1rew_groundvar_resume27k5_to35k/keep_32500.pt --mode2-ckpt logs/rsl_rl/g1_student/2026-08-20_18-11-18_s4_mode2_v3base_port5_m2lgen_steps6_30k/model_29999.pt --mode3-ckpt logs/rsl_rl/g1_student/2026-08-14_11-36-10_s4_mode3_v3base_cwcmu_w3p5_steps6_60to90k/model_89997.pt --sampling-steps 6 --out exported/261109_v1_groundvar_32k5/policy.onnx",
+  "deployed": {
+    "status": "pending — stage_candidates --robot 또는 policy_slot push"
+  },
+  "export_commit": {
+    "head": "57a767cd612856a5a755a5867c14a786966d80bc",
+    "dirty": [],
+    "at": "2026-11-09T02:10:45"
+  }
+}
