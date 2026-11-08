@@ -138,13 +138,49 @@ def run_dir_of(ckpt_rel):
 
 
 def training_commit(ckpt_rel):
-    p = os.path.join(run_dir_of(ckpt_rel), "training_meta.json")
+    rd = run_dir_of(ckpt_rel)
+    p = os.path.join(rd, "training_meta.json")
     if os.path.exists(p):
         try:
             return json.load(open(p, encoding="utf-8")).get("commit") or ""
         except Exception:
             pass
-    return ""
+        return ""
+    return remote_run_commit(rd)
+
+
+_REMOTE_WARNED = set()
+
+
+def remote_run_commit(run_dir):
+    """원격(공유 서버 sync)에서 학습해 com1 로 수확한 run — training_meta.json 이 없고 server_pull_meta.json
+    (수확 때 적은 branch)만 있다. check_slot_parity._infer_remote_meta 와 같은 추정: 그 branch 에서
+    «run 시작 시각(폴더 이름) 직전 커밋». 미커밋 변경은 모른다 — 추정임을 한 번 알린다. 못 정하면 ""."""
+    sp = os.path.join(run_dir, "server_pull_meta.json")
+    m = re.match(r"^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})_", os.path.basename(run_dir.rstrip("/")))
+    if not os.path.exists(sp) or not m:
+        return ""
+    try:
+        spm = json.load(open(sp, encoding="utf-8"))
+    except Exception:
+        return ""
+    branch = (spm.get("branch") or "").strip()
+    if not branch:
+        return ""
+    r = subprocess.run(["git", "rev-list", "-1", "--before=%s %s:%s:%s" % m.groups(), branch],
+                       cwd=MJLAB, text=True, capture_output=True)
+    c = r.stdout.strip() if r.returncode == 0 else ""
+    if c and run_dir not in _REMOTE_WARNED:
+        _REMOTE_WARNED.add(run_dir)
+        log("   ⚠ 원격(%s) 학습 run — training_meta.json 없음. launch 직전 %s 커밋 %s 로 추정(미커밋 변경은 모름)"
+            % (spm.get("host") or "?", branch, c[:7]))
+    return c
+
+
+def training_commit_inferred(ckpt_rel):
+    """training_commit 이 training_meta.json 이 아니라 원격 추정에서 왔나 (META 에 남긴다)."""
+    return not os.path.exists(os.path.join(run_dir_of(ckpt_rel), "training_meta.json")) \
+        and bool(remote_run_commit(run_dir_of(ckpt_rel)))
 
 
 def foot_gen_at(commit):
@@ -636,6 +672,7 @@ def write_meta(slot_root, slot, cand, cfg, day, export_cmd, verify, onnx_meta, f
         "mode1_ckpt": ck,
         "mode1_run": run,
         "mode1_launch_commit": commit,
+        "mode1_launch_commit_inferred": (not no_m1) and training_commit_inferred(ck),
         "mode2_ckpt": cfg["mode2_ckpt"],
         "mode3_ckpt": cfg["mode3_ckpt"],
         "manifest": cfg["manifest"],
