@@ -13,13 +13,16 @@
 // poll_intent(frame, state) = 파일을 읽지 않는 순수 함수(무할당·무시스템콜). 파일 읽기는 read_intent_file 이 따로 한다
 // (GuiPoll 의 fopen/fread 와 같은 방식). 둘 다 정책 스레드에서 50 Hz.
 //
-// 판정 규칙 (2A 안전 점검 A#2 · B HIGH-1 · B HIGH-2 · 2B V2-3):
+// 판정 규칙 (2A 안전 점검 A#2 · B HIGH-1 · B HIGH-2 · 2B V2-3 · V2-5):
 //   · 끊김(stale): seq 가 INTENT_STALE_TICKS(15) 정책 틱 안 바뀌거나 파일이 없으면(frame == nullptr · magic 다름) 이동 0 · run 0 ·
 //     이벤트 버림. stale 중에 바뀐 event_seq 도 «먹은 것으로 치고» 버린다(이동 0 과 같은 원칙 — 되살아난 뒤 늦게 발동하지 않게).
-//   · stale 이 풀리는 틱(끊김 뒤 새 seq 가 처음 온 틱 — 15 틱 무변화 · 파일 없음 · magic 다름 뒤 모두)도 체류 시작 첫 프레임처럼
-//     «기준선만»: seq · event_seq 를 기록하고 바뀐 event_seq 는 소비만 한다(적용 안 함). 이동 축은 아래 재무장 규칙 그대로. 그 다음
-//     틱부터의 새 event_seq 는 평소대로. 까닭(V2 경우 3): 멈췄다 풀린 중계 · 끊겼다 이어진 WiFi 는 그동안 쌓인 브라우저 프레임을 한꺼번에
-//     쓰고, 그 이벤트 나이에는 묶여 있던 시간이 안 들어가 젊어 보인다(500 ms 나이 규칙으로 못 거른다).
+//   · 조용한 구간(quiet): stale 이 풀리는 틱(끊김 뒤 새 seq 가 처음 온 틱 — 15 틱 무변화 · 파일 없음 · magic 다름 뒤 모두)을 첫 틱으로
+//     INTENT_RECOVERY_QUIET_TICKS(5) 정책 틱(0.1 s) 동안은 체류 시작 첫 프레임처럼 «기준선만»: seq · event_seq 를 기록하고 바뀐
+//     event_seq 는 소비만 한다(적용 안 함). 이동 축은 아래 재무장 규칙 그대로. 여섯째 틱부터의 새 event_seq 는 평소대로. stale 이 아니었던
+//     공백(14 틱 이하)에는 조용한 구간이 없다. 까닭(V2 경우 3 · Ruling V2-3 · V2-5): 멈췄다 풀린 중계 · 끊겼다 이어진 WiFi 는 그동안 쌓인
+//     브라우저 프레임을 한꺼번에 쓰고, 그 이벤트 나이에는 묶여 있던 시간이 안 들어가 젊어 보인다(500 ms 나이 규칙으로 못 거른다). 밀린
+//     쓰기가 poll 경계에 걸치면 풀리는 틱은 이벤트 전 프레임을, 그다음 틱이 이벤트 프레임을 읽으므로 한 틱만으로는 모자라다.
+//     남는 것: stale 에 못 미친 멈춤(< 15 틱)의 밀린 이벤트, 밀린 쓰기가 0.1 s 넘게 이어져 여섯째 틱 뒤에 처음 보인 이벤트 — 늦게 적용될 수 있다.
 //   · 이벤트: event_seq 가 바뀐 틱에 한 번만. 그 틱의 event_age_ms > INTENT_EVENT_MAX_AGE_MS(500) 이면 버린다(바뀐 event_seq 는 소비).
 //     체류 시작 뒤 첫 프레임은 «기준선만» — seq·event_seq 를 기록하고 하트비트로 치지 않는다(stale 카운터를 되돌리지 않는다:
 //     새 seq 가 와야 이동이 먹는다 · 첫 프레임의 event_seq 는 적용 안 함. GuiPoll.h gui_poll_begin_stay 와 같은 원칙).
@@ -49,6 +52,7 @@ static_assert(sizeof(ArcadeIntentFrame) == 9 * 4, "ArcadeIntentFrame = arcade_in
 
 static constexpr int32_t ARCADE_INTENT_MAGIC = 0x6707;   // 0x6701 gui v1 · 0x6702 vr · 0x6703 estop · 0x6704 gui v2 · 0x6705 relay · 0x6706 상태 칸 · 0x6708 아케이드 상태 와 다르게
 static constexpr int      INTENT_STALE_TICKS = 15;       // 0.3 s @ 50 Hz
+static constexpr int      INTENT_RECOVERY_QUIET_TICKS = 5;  // stale 이 풀린 뒤 이벤트를 소비만 하는 정책 틱 수(풀리는 틱 포함, 0.1 s) — Ruling V2-5
 static constexpr uint32_t INTENT_EVENT_MAX_AGE_MS = 500;
 static constexpr float    INTENT_NEUTRAL_EPS = 0.05f;
 static constexpr const char* ARCADE_INTENT_PATH = "/dev/shm/g1_arcade_intent";
@@ -65,6 +69,7 @@ struct IntentPollState {
     int      stale_ticks = 0;       // 마지막으로 seq 가 바뀐 뒤의 poll 수(15 에서 멈춘다)
     uint32_t last_event_seq = 0;
     bool     armed = false;         // 재무장 완료(축이 중립을 한 번 봤다). 체류 시작 = false
+    int      quiet_ticks = 0;       // 조용한 구간의 남은 poll 수(stale 이 풀리는 틱에 INTENT_RECOVERY_QUIET_TICKS 로 두고 poll 마다 하나씩 줄인다)
 };
 
 // 체류 시작(State_Mimic::enter() — 정책 스레드가 뜨기 전)에 호출부가 부른다. «체류 시작» 을 알리는 방법이 이것 하나다.
@@ -99,15 +104,17 @@ inline IntentApply poll_intent(const ArcadeIntentFrame* f, IntentPollState& st) 
     }
     r.stale = st.stale_ticks >= INTENT_STALE_TICKS;
     if (r.stale) st.armed = false;                      // 끊김 = 재무장 필요(되살아나도 중립을 한 번 봐야 한다)
+    if (was_stale && !r.stale) st.quiet_ticks = INTENT_RECOVERY_QUIET_TICKS;   // stale 이 풀리는 틱(새 seq) = 조용한 구간의 첫 틱
+    const bool quiet = st.quiet_ticks > 0;              // 이 틱은 바뀐 event_seq 를 소비만
+    if (quiet) --st.quiet_ticks;                        // 프레임이 없는 틱도 정책 틱 하나로 센다
 
     if (valid) {
         const bool first = !st.have_frame;
         if (first) st.last_seq = f->seq;                // 기준선 — 하트비트로 세지 않는다(위에서 stale_ticks 만 올랐다)
-        const bool recovered = was_stale && !r.stale;   // stale 이 풀리는 틱(새 seq) — 첫 프레임처럼 기준선만
         const bool ev_changed = !first && f->event_seq != st.last_event_seq;
         st.have_frame = true;
         st.last_event_seq = f->event_seq;               // 적용·버림 모두 소비
-        if (ev_changed && !r.stale && !recovered && f->event_age_ms <= INTENT_EVENT_MAX_AGE_MS)
+        if (ev_changed && !r.stale && !quiet && f->event_age_ms <= INTENT_EVENT_MAX_AGE_MS)
         {
             r.events = f->events & INTENT_EV_REAL;
             r.dropped_events = f->events & ~INTENT_EV_REAL;

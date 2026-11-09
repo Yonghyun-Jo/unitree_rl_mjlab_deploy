@@ -2,6 +2,7 @@
 //   intent_stale_zero_after_15_ticks · event_applied_once_per_event_seq · old_event_dropped ·
 //   rearm_requires_neutral_after_stale_and_stay_start · nonfinite_axis_is_zero · stale_drops_event_seq(stale 중 바뀐 event_seq) ·
 //   intent_event_not_applied_on_stale_recovery_tick(stale 이 풀리는 틱의 새 event_seq 는 소비만 — V2 경우 3) ·
+//   intent_events_quiet_for_five_ticks_after_recovery(풀린 뒤 5 정책 틱 동안 바뀐 event_seq 는 소비만 — V2-5) ·
 //   event_bits_match_core(G1_HAVE_ARCADE 일 때만) · read_intent_file(임시 경로 — 없음 · 36 B · 짧음 · 긺 37 B · 남의 magic) · status_open_failure_reasons(U4) · status_seqlock_never_torn(1e5) · status_write_allocates_nothing
 //   시험 경로는 임시 폴더다 — 실제 /dev/shm/g1_arcade_* 를 건드리지 않는다.
 //   g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include -pthread test_arcade_shm.cpp -o /tmp/t && /tmp/t
@@ -140,6 +141,7 @@ static void stale_drops_event_seq() {
     f.seq = ++seq;                                                  // 하트비트가 돌아온 틱 — 그 event_seq 는 이미 소비됨
     r = poll_intent(&f, st);
     chk(!r.stale && r.events == 0, "되살아난 틱에 낡은 이벤트가 터지지 않는다");
+    for (int i = 1; i < INTENT_RECOVERY_QUIET_TICKS; ++i) { f.seq = ++seq; poll_intent(&f, st); }   // 조용한 구간(풀리는 틱 포함 5 틱)
     f = mk(++seq, 0, 0, 0, 0, INTENT_EV_CRAWL, 3, 0);
     r = poll_intent(&f, st);
     chk(r.events == INTENT_EV_CRAWL, "그 뒤 새 이벤트는 먹는다");
@@ -147,7 +149,7 @@ static void stale_drops_event_seq() {
 
 // V2 경우 3: 멈췄다 풀린 중계는 소켓에 쌓였던 브라우저 프레임을 한꺼번에 쓰고, 그 이벤트 나이는 «받은 뒤» 만 세서 젊다.
 // stale 이 풀리는 틱(끊김 뒤 새 seq 가 처음 온 틱)은 체류 시작 첫 프레임처럼 기준선만 — 바뀐 event_seq 는 소비만 한다.
-// 끊김의 세 갈래(15 틱 무변화 · 파일 없음 · 남의 magic) 모두. 14 틱 공백(stale 아님)은 그대로 적용.
+// 끊김의 세 갈래(15 틱 무변화 · 파일 없음 · 남의 magic) 모두. 14 틱 공백(stale 아님)은 그대로 적용. 조용한 구간 전체는 아래 시험.
 static void intent_event_not_applied_on_stale_recovery_tick() {
     for (int how = 0; how < 3; ++how) {                             // 0 = seq 무변화 · 1 = 파일 없음(nullptr) · 2 = 남의 magic
         IntentPollState st; uint32_t seq = arm(st, 200);
@@ -164,9 +166,9 @@ static void intent_event_not_applied_on_stale_recovery_tick() {
         f.seq = ++seq; f.event_age_ms = 20;                         // 같은 event_seq 가 끈적하게 다음 프레임에도 — 이미 소비됨
         r = poll_intent(&f, st);
         chk(r.events == 0, "풀린 틱에 소비한 event_seq 는 다음 틱에도 안 터진다");
-        f = mk(++seq, 0, 0, 0, 0, INTENT_EV_JUMP, 32, 0);            // 그 다음 새 event_seq 는 평소대로
+        f = mk(++seq, 0, 0, 0, 0, INTENT_EV_JUMP, 32, 0);            // 셋째 틱의 새 event_seq — 아직 조용한 구간(V2-5)
         r = poll_intent(&f, st);
-        chk(r.events == INTENT_EV_JUMP, "회복 뒤 새 event_seq 는 적용");
+        chk(r.events == 0, "풀린 뒤 셋째 틱의 새 event_seq 도 소비만(조용한 구간)");
     }
     // 14 틱 공백(stale 아님) 뒤 새 seq + 새 event_seq 는 그대로 적용 — 이 규칙은 stale 회복 틱에만
     IntentPollState st; uint32_t seq = arm(st, 300);
@@ -177,6 +179,61 @@ static void intent_event_not_applied_on_stale_recovery_tick() {
     f = mk(++seq, 0, 0, 0, 0, INTENT_EV_CRAWL, 51, 0);
     r = poll_intent(&f, st);
     chk(r.events == INTENT_EV_CRAWL, "stale 이 아니었으면 새 event_seq 는 그 틱에 적용");
+}
+
+// Ruling V2-5: 밀린 쓰기가 poll 경계에 걸치면 풀리는 틱은 이벤트 전 프레임을, 다음 틱이 이벤트 프레임을 본다. 그래서 풀리는 틱을 첫 틱으로
+// INTENT_RECOVERY_QUIET_TICKS(5) 정책 틱 동안 바뀐 event_seq 는 소비만 한다. 여섯째 틱의 새 event_seq 부터 적용. stale 이 아니었던 공백은 영향 없음.
+static void intent_events_quiet_for_five_ticks_after_recovery() {
+    chk(INTENT_RECOVERY_QUIET_TICKS == 5, "조용한 구간 = 5 정책 틱(0.1 s)");
+    for (int how = 0; how < 3; ++how) {                             // 0 = seq 무변화 · 1 = 파일 없음(nullptr) · 2 = 남의 magic
+        IntentPollState st; uint32_t seq = arm(st, 400);
+        uint32_t evs = 70;
+        ArcadeIntentFrame f = mk(++seq, 0, 0, 0, 0, 0, evs); poll_intent(&f, st);
+        ArcadeIntentFrame bad = mk(seq); bad.magic = 0x6705;
+        IntentApply r;
+        for (int i = 0; i < INTENT_STALE_TICKS; ++i)
+            r = poll_intent(how == 0 ? &f : how == 1 ? nullptr : &bad, st);
+        chk(r.stale, "조용한 구간 시험 준비: stale");
+        int applied = 0;
+        for (int k = 1; k <= INTENT_RECOVERY_QUIET_TICKS; ++k) {    // 풀리는 틱(k=1) + 2..5 — 틱마다 새 event_seq + 젊은 JUMP
+            f = mk(++seq, 0, 0, 0, 0, INTENT_EV_JUMP, ++evs, 0);
+            r = poll_intent(&f, st);
+            chk(!r.stale, "조용한 구간은 stale 아님");
+            applied += (r.events != 0 || r.dropped_events != 0) ? 1 : 0;
+        }
+        chk(applied == 0, "풀리는 틱 + 다음 4 틱의 새 event_seq 는 하나도 적용 안 됨");
+        f.seq = ++seq; f.event_age_ms = 100;                        // 여섯째 틱 — 다섯째 틱의 event_seq 가 끈적하게 남음 → 이미 소비
+        r = poll_intent(&f, st);
+        chk(r.events == 0, "조용한 구간에 소비한 event_seq 는 그 뒤에도 안 터진다");
+        f = mk(++seq, 0, 0, 0, 0, INTENT_EV_JUMP, ++evs, 0);         // 일곱째 틱 — 새 event_seq
+        r = poll_intent(&f, st);
+        chk(r.events == INTENT_EV_JUMP, "조용한 구간 뒤 새 event_seq 는 적용");
+    }
+    {   // 풀리는 틱을 첫 틱으로 센다 — 여섯째 틱의 새 event_seq 는 적용(경계)
+        IntentPollState st; uint32_t seq = arm(st, 500);
+        ArcadeIntentFrame f = mk(++seq, 0, 0, 0, 0, 0, 90); poll_intent(&f, st);
+        IntentApply r;
+        for (int i = 0; i < INTENT_STALE_TICKS; ++i) r = poll_intent(&f, st);
+        f.seq = ++seq; r = poll_intent(&f, st);                     // 풀리는 틱(1)
+        chk(!r.stale, "경계 시험: 풀림");
+        for (int k = 2; k <= INTENT_RECOVERY_QUIET_TICKS; ++k) { f.seq = ++seq; r = poll_intent(&f, st); }   // 2..5
+        f = mk(++seq, 0, 0, 0, 0, INTENT_EV_CRAWL, 91, 0);           // 6
+        r = poll_intent(&f, st);
+        chk(r.events == INTENT_EV_CRAWL, "풀리는 틱부터 여섯째 틱의 새 event_seq 는 적용");
+    }
+    {   // stale 이 아니었던 14 틱 공백 — 다음 틱의 새 event_seq 를 바로 적용(조용한 구간 없음)
+        IntentPollState st; uint32_t seq = arm(st, 600);
+        ArcadeIntentFrame f = mk(++seq, 0, 0, 0, 0, 0, 10); poll_intent(&f, st);
+        IntentApply r;
+        for (int i = 0; i < INTENT_STALE_TICKS - 1; ++i) r = poll_intent(&f, st);
+        chk(!r.stale, "14 poll 은 stale 아님");
+        f = mk(++seq, 0, 0, 0, 0, INTENT_EV_JUMP, 11, 0);
+        r = poll_intent(&f, st);
+        chk(r.events == INTENT_EV_JUMP, "stale 아니었으면 새 event_seq 를 바로 적용");
+        f = mk(++seq, 0, 0, 0, 0, INTENT_EV_CRAWL, 12, 0);
+        r = poll_intent(&f, st);
+        chk(r.events == INTENT_EV_CRAWL, "그다음 틱도 바로 적용");
+    }
 }
 
 static void rearm_requires_neutral_after_stale_and_stay_start() {
@@ -461,6 +518,7 @@ int main() {
     old_event_dropped();
     stale_drops_event_seq();
     intent_event_not_applied_on_stale_recovery_tick();
+    intent_events_quiet_for_five_ticks_after_recovery();
     rearm_requires_neutral_after_stale_and_stay_start();
     nonfinite_axis_is_zero();
     sticky_event_read_rules();
