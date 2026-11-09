@@ -1,6 +1,7 @@
 // test_arcade_shm.cpp — 아케이드 의도 칸(ArcadeIntent.h, 0x6707) 판정 + 아케이드 상태 칸(ArcadeStatus.h, 0x6708) seqlock.
 //   intent_stale_zero_after_15_ticks · event_applied_once_per_event_seq · old_event_dropped ·
 //   rearm_requires_neutral_after_stale_and_stay_start · nonfinite_axis_is_zero · stale_drops_event_seq(stale 중 바뀐 event_seq) ·
+//   intent_event_not_applied_on_stale_recovery_tick(stale 이 풀리는 틱의 새 event_seq 는 소비만 — V2 경우 3) ·
 //   event_bits_match_core(G1_HAVE_ARCADE 일 때만) · read_intent_file(임시 경로 — 없음 · 36 B · 짧음 · 긺 37 B · 남의 magic) · status_open_failure_reasons(U4) · status_seqlock_never_torn(1e5) · status_write_allocates_nothing
 //   시험 경로는 임시 폴더다 — 실제 /dev/shm/g1_arcade_* 를 건드리지 않는다.
 //   g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include -pthread test_arcade_shm.cpp -o /tmp/t && /tmp/t
@@ -142,6 +143,40 @@ static void stale_drops_event_seq() {
     f = mk(++seq, 0, 0, 0, 0, INTENT_EV_CRAWL, 3, 0);
     r = poll_intent(&f, st);
     chk(r.events == INTENT_EV_CRAWL, "그 뒤 새 이벤트는 먹는다");
+}
+
+// V2 경우 3: 멈췄다 풀린 중계는 소켓에 쌓였던 브라우저 프레임을 한꺼번에 쓰고, 그 이벤트 나이는 «받은 뒤» 만 세서 젊다.
+// stale 이 풀리는 틱(끊김 뒤 새 seq 가 처음 온 틱)은 체류 시작 첫 프레임처럼 기준선만 — 바뀐 event_seq 는 소비만 한다.
+// 끊김의 세 갈래(15 틱 무변화 · 파일 없음 · 남의 magic) 모두. 14 틱 공백(stale 아님)은 그대로 적용.
+static void intent_event_not_applied_on_stale_recovery_tick() {
+    for (int how = 0; how < 3; ++how) {                             // 0 = seq 무변화 · 1 = 파일 없음(nullptr) · 2 = 남의 magic
+        IntentPollState st; uint32_t seq = arm(st, 200);
+        ArcadeIntentFrame f = mk(++seq, 0, 0, 0, 0, 0, 30); poll_intent(&f, st);   // 기준선 event_seq 30
+        ArcadeIntentFrame bad = mk(seq); bad.magic = 0x6705;
+        IntentApply r;
+        for (int i = 0; i < INTENT_STALE_TICKS; ++i)
+            r = poll_intent(how == 0 ? &f : how == 1 ? nullptr : &bad, st);
+        chk(r.stale, "회복 시험 준비: 15 poll 뒤 stale");
+        f = mk(++seq, 0, 0, 0, 0, INTENT_EV_JUMP, 31, 0);            // 풀리는 틱 — 새 seq + 새 event_seq + 젊은 JUMP
+        r = poll_intent(&f, st);
+        chk(!r.stale, "새 seq 로 stale 이 풀린다");
+        chk(r.events == 0 && r.dropped_events == 0, "stale 이 풀리는 틱의 새 event_seq 는 적용하지 않는다");
+        f.seq = ++seq; f.event_age_ms = 20;                         // 같은 event_seq 가 끈적하게 다음 프레임에도 — 이미 소비됨
+        r = poll_intent(&f, st);
+        chk(r.events == 0, "풀린 틱에 소비한 event_seq 는 다음 틱에도 안 터진다");
+        f = mk(++seq, 0, 0, 0, 0, INTENT_EV_JUMP, 32, 0);            // 그 다음 새 event_seq 는 평소대로
+        r = poll_intent(&f, st);
+        chk(r.events == INTENT_EV_JUMP, "회복 뒤 새 event_seq 는 적용");
+    }
+    // 14 틱 공백(stale 아님) 뒤 새 seq + 새 event_seq 는 그대로 적용 — 이 규칙은 stale 회복 틱에만
+    IntentPollState st; uint32_t seq = arm(st, 300);
+    ArcadeIntentFrame f = mk(++seq, 0, 0, 0, 0, 0, 50); poll_intent(&f, st);
+    IntentApply r;
+    for (int i = 0; i < INTENT_STALE_TICKS - 1; ++i) r = poll_intent(&f, st);
+    chk(!r.stale, "14 poll 은 stale 아님");
+    f = mk(++seq, 0, 0, 0, 0, INTENT_EV_CRAWL, 51, 0);
+    r = poll_intent(&f, st);
+    chk(r.events == INTENT_EV_CRAWL, "stale 이 아니었으면 새 event_seq 는 그 틱에 적용");
 }
 
 static void rearm_requires_neutral_after_stale_and_stay_start() {
@@ -425,6 +460,7 @@ int main() {
     event_applied_once_per_event_seq();
     old_event_dropped();
     stale_drops_event_seq();
+    intent_event_not_applied_on_stale_recovery_tick();
     rearm_requires_neutral_after_stale_and_stay_start();
     nonfinite_axis_is_zero();
     sticky_event_read_rules();

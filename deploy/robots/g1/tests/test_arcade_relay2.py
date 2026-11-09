@@ -223,11 +223,14 @@ def test_second_browser_is_viewer(tmp_path):
     run(go())
 
 
-def test_relay_restart_does_not_replay_last_event(tmp_path):
-    def poll_applies(frame, last_ev_seq):
-        """g1_ctrl poll 규칙 흉내: events != 0 이고 event_seq 가 바뀌었고 나이 ≤ 500 ms 일 때만 적용."""
-        return frame["events"] != 0 and frame["event_seq"] != last_ev_seq and frame["event_age_ms"] <= 500
+def poll_applies(frame, last_ev_seq, recovering=False):
+    """g1_ctrl poll 규칙 흉내(ArcadeIntent.h poll_intent): events != 0 이고 event_seq 가 바뀌었고 나이 ≤ 500 ms 이고
+    stale 이 풀리는 틱이 아닐 때만 적용. recovering = 끊김(15 틱 무변화 · 파일 없음) 뒤 새 seq 가 처음 온 틱 — 기준선만(소비)."""
+    return (not recovering and frame["events"] != 0 and frame["event_seq"] != last_ev_seq
+            and frame["event_age_ms"] <= 500)
 
+
+def test_relay_restart_does_not_replay_last_event(tmp_path):
     async def go():
         async with started(tmp_path) as relay1:
             ws, _ = await connect(relay1)
@@ -244,6 +247,35 @@ def test_relay_restart_does_not_replay_last_event(tmp_path):
             f2 = rd(tmp_path)
             assert f2["events"] == 0
             assert not poll_applies(f2, f1["event_seq"])
+            await ws.close()
+    run(go())
+
+
+def test_frames_buffered_during_stall_are_young_but_not_applied_on_recovery(tmp_path):
+    """V2 경우 3: 중계가 멈춘 동안(> 0.3 s = g1_ctrl stale) 소켓에 쌓인 브라우저 프레임은 풀린 뒤 한꺼번에 쓰이고, 나이는 «받은 뒤» 만
+    더해져 젊다(≤ 500 ms — 나이 규칙만으로는 못 거른다). g1_ctrl 은 stale 이 풀리는 틱의 새 event_seq 를 소비만 한다."""
+    async def go():
+        async with started(tmp_path) as relay:
+            ws, _ = await connect(relay)
+            await ws.send(intent(1, fwd=1.0))
+            await settle()
+            f0 = rd(tmp_path)
+            await asyncio.sleep(0.35)                       # 브라우저 프레임 공백 > 15 틱 × 20 ms — g1_ctrl 은 stale
+            burst = [intent(2 + i, fwd=1.0) for i in range(5)]
+            burst += [intent(7, fwd=1.0, ev="jump", ev_seq=1, ev_age_ms=0)]
+            burst += [intent(8 + i, fwd=1.0, ev=None, ev_seq=1) for i in range(5)]
+            for m in burst:                                 # 풀린 뒤 한꺼번에(소켓 버퍼)
+                await ws.send(m)
+            await settle()
+            f1 = rd(tmp_path)
+            assert f1["seq"] != f0["seq"] and f1["events"] == 1 and f1["event_seq"] != f0["event_seq"]
+            assert f1["event_age_ms"] <= 500, f1             # 나이로는 걸러지지 않는다(멈춘 시간이 안 들어감)
+            assert poll_applies(f1, f0["event_seq"])         # stale 이 아니었다면 적용될 프레임
+            assert not poll_applies(f1, f0["event_seq"], recovering=True)   # 풀리는 틱 = 소비만
+            await ws.send(intent(13, fwd=1.0, ev="jump", ev_seq=2, ev_age_ms=0))   # 회복 뒤 새로 누른 것은 평소대로
+            await settle()
+            f2 = rd(tmp_path)
+            assert poll_applies(f2, f1["event_seq"])
             await ws.close()
     run(go())
 

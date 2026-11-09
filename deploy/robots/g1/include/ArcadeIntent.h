@@ -13,9 +13,13 @@
 // poll_intent(frame, state) = 파일을 읽지 않는 순수 함수(무할당·무시스템콜). 파일 읽기는 read_intent_file 이 따로 한다
 // (GuiPoll 의 fopen/fread 와 같은 방식). 둘 다 정책 스레드에서 50 Hz.
 //
-// 판정 규칙 (2A 안전 점검 A#2 · B HIGH-1 · B HIGH-2):
+// 판정 규칙 (2A 안전 점검 A#2 · B HIGH-1 · B HIGH-2 · 2B V2-3):
 //   · 끊김(stale): seq 가 INTENT_STALE_TICKS(15) 정책 틱 안 바뀌거나 파일이 없으면(frame == nullptr · magic 다름) 이동 0 · run 0 ·
 //     이벤트 버림. stale 중에 바뀐 event_seq 도 «먹은 것으로 치고» 버린다(이동 0 과 같은 원칙 — 되살아난 뒤 늦게 발동하지 않게).
+//   · stale 이 풀리는 틱(끊김 뒤 새 seq 가 처음 온 틱 — 15 틱 무변화 · 파일 없음 · magic 다름 뒤 모두)도 체류 시작 첫 프레임처럼
+//     «기준선만»: seq · event_seq 를 기록하고 바뀐 event_seq 는 소비만 한다(적용 안 함). 이동 축은 아래 재무장 규칙 그대로. 그 다음
+//     틱부터의 새 event_seq 는 평소대로. 까닭(V2 경우 3): 멈췄다 풀린 중계 · 끊겼다 이어진 WiFi 는 그동안 쌓인 브라우저 프레임을 한꺼번에
+//     쓰고, 그 이벤트 나이에는 묶여 있던 시간이 안 들어가 젊어 보인다(500 ms 나이 규칙으로 못 거른다).
 //   · 이벤트: event_seq 가 바뀐 틱에 한 번만. 그 틱의 event_age_ms > INTENT_EVENT_MAX_AGE_MS(500) 이면 버린다(바뀐 event_seq 는 소비).
 //     체류 시작 뒤 첫 프레임은 «기준선만» — seq·event_seq 를 기록하고 하트비트로 치지 않는다(stale 카운터를 되돌리지 않는다:
 //     새 seq 가 와야 이동이 먹는다 · 첫 프레임의 event_seq 는 적용 안 함. GuiPoll.h gui_poll_begin_stay 와 같은 원칙).
@@ -84,6 +88,7 @@ inline float intent_axis(float v) noexcept {
 inline IntentApply poll_intent(const ArcadeIntentFrame* f, IntentPollState& st) noexcept {
     IntentApply r;
     const bool valid = f != nullptr && f->magic == ARCADE_INTENT_MAGIC;
+    const bool was_stale = st.stale_ticks >= INTENT_STALE_TICKS;   // 이 틱 전까지 끊김이었나
     if (!valid) {
         if (st.stale_ticks < INTENT_STALE_TICKS) ++st.stale_ticks;
     } else if (st.have_frame && f->seq != st.last_seq) {
@@ -98,10 +103,11 @@ inline IntentApply poll_intent(const ArcadeIntentFrame* f, IntentPollState& st) 
     if (valid) {
         const bool first = !st.have_frame;
         if (first) st.last_seq = f->seq;                // 기준선 — 하트비트로 세지 않는다(위에서 stale_ticks 만 올랐다)
+        const bool recovered = was_stale && !r.stale;   // stale 이 풀리는 틱(새 seq) — 첫 프레임처럼 기준선만
         const bool ev_changed = !first && f->event_seq != st.last_event_seq;
         st.have_frame = true;
         st.last_event_seq = f->event_seq;               // 적용·버림 모두 소비
-        if (ev_changed && !r.stale && f->event_age_ms <= INTENT_EVENT_MAX_AGE_MS)
+        if (ev_changed && !r.stale && !recovered && f->event_age_ms <= INTENT_EVENT_MAX_AGE_MS)
         {
             r.events = f->events & INTENT_EV_REAL;
             r.dropped_events = f->events & ~INTENT_EV_REAL;
