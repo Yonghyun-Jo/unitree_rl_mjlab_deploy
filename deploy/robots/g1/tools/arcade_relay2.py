@@ -131,6 +131,7 @@ class Relay:
         self.clients = set()
         self.controller = None
         self.last_ev_seq = None
+        self.last_drop_seq = None
         self.dropped = 0
         self.names = arcade_status_shm.read_names(self.names_path)
         self.st_tick = None
@@ -164,14 +165,15 @@ class Relay:
                 await t
             except BaseException:
                 pass
-        self._write(0.0, 0.0, 0.0, 0, 0, 0)         # 종료: 축 0 프레임 한 번(이벤트 새로 싣지 않음)
-        log.info("종료: 0 프레임 기록")
         if self._server is not None:
             self._server.close()
             try:
                 await asyncio.wait_for(self._server.wait_closed(), 2.0)
             except Exception:
                 pass
+        # 종료: 서버를 닫은 뒤 축 0 프레임 한 번(이후 intent 는 _stopped 로 무시 — 이 프레임이 마지막 쓰기)
+        self._write(0.0, 0.0, 0.0, 0, 0, 0)
+        log.info("종료: 0 프레임 기록")
 
     # ── 접속 ────────────────────────────────────────────────────────────
     async def _handler(self, ws):
@@ -208,6 +210,7 @@ class Relay:
             c.role = "controller"
             c.last_intent_t = now
             self.last_ev_seq = None
+            self.last_drop_seq = None
 
     def _hello(self, role):
         return msgpack.packb({"t": "hello", "proto": PROTO, "role": role, "names": self.names})
@@ -228,6 +231,8 @@ class Relay:
             self._rl.warn("bad", "bad frame (%s) from %s" % (type(e).__name__, c.name()))
 
     async def _on_message_inner(self, c, msg, recv_t):
+        if self._stopped:                       # 종료 시작 뒤 intent 는 무시 — 0 프레임이 마지막 쓰기여야 한다
+            return
         if not isinstance(msg, bytes):
             self._rl.warn("bad", "bad frame (text) from %s" % c.name())
             return
@@ -260,8 +265,10 @@ class Relay:
         bits, age = 0, 0
         if it["ev"] is not None:
             if it["ev"] not in arcade_intent_shm.EVENT_BITS:
-                self.dropped += 1
-                self._rl.warn("drop", "ev %r 는 실기 이벤트가 아님 — 버림(누적 %d)" % (it["ev"], self.dropped))
+                if it["ev_seq"] != self.last_drop_seq:      # 같은 ev_seq 재전송은 한 번만 센다
+                    self.last_drop_seq = it["ev_seq"]
+                    self.dropped += 1
+                    self._rl.warn("drop", "ev %r 는 실기 이벤트가 아님 — 버림(누적 %d)" % (it["ev"], self.dropped))
             elif it["ev_seq"] != self.last_ev_seq:
                 self.last_ev_seq = it["ev_seq"]
                 bits = arcade_intent_shm.EVENT_BITS[it["ev"]]

@@ -155,6 +155,13 @@ def test_real_event_names_only(tmp_path):
             assert rd(tmp_path)["events"] == 0
             st = await next_state(ws)
             assert st["dropped"] == 2
+            for i in range(50):                             # 같은 알 수 없는 ev · 같은 ev_seq 재전송 = 한 번만
+                await ws.send(intent(10 + i, ev="interact", ev_seq=2))
+            await settle()
+            assert (await fresh_state(ws, 0.0))["dropped"] == 2
+            await ws.send(intent(70, ev="interact", ev_seq=3))
+            await settle()
+            assert (await fresh_state(ws, 0.0))["dropped"] == 3
             await ws.send(intent(3, ev="jump", ev_seq=3))
             await settle()
             assert rd(tmp_path)["events"] == ish.EVENT_BITS["jump"]
@@ -340,4 +347,54 @@ def test_no_logger_gives_null_q(tmp_path):
             st = await next_state(ws)
             assert st["q"] is None and st["quat"] is None
             await ws.close()
+    run(go())
+
+
+def test_shutdown_zero_frame_is_last_write(tmp_path):
+    async def go():
+        ish._reset()
+        write_names(tmp_path / "names.json")
+        relay = arcade_relay2.Relay(bind="127.0.0.1", port=0, intent_shm=str(tmp_path / "intent"),
+                                    status_shm=str(tmp_path / "status"), names_path=str(tmp_path / "names.json"),
+                                    logger_url=NO_LOGGER)
+        calls = []                                          # (fwd, 쓴 뒤 칸 seq) — 마지막 쓰기가 0 프레임인지 본다
+        orig = ish.write_intent
+
+        def rec(*a, **k):
+            orig(*a, **k)
+            calls.append((a[0], rd(tmp_path)["seq"]))
+        ish.write_intent = rec
+        await relay.start()
+        ws, _ = await connect(relay)
+        await ws.send(intent(0, fwd=1.0, side=1.0, turn=1.0))
+        await settle()
+        sender_stop = False
+
+        async def flood():
+            i = 1
+            try:
+                while not sender_stop:
+                    await ws.send(intent(i, fwd=1.0, side=1.0, turn=1.0, run=1))
+                    i += 1
+                    await asyncio.sleep(0.002)
+            except Exception:
+                pass
+        t = asyncio.ensure_future(flood())
+        await asyncio.sleep(0.2)
+        seq_before = rd(tmp_path)["seq"]
+        assert rd(tmp_path)["fwd"] == 1.0
+        await relay.stop()
+        f = rd(tmp_path)
+        assert (f["fwd"], f["side"], f["turn"], f["run"]) == (0.0, 0.0, 0.0, 0)
+        seq_end = f["seq"]
+        await asyncio.sleep(0.2)                            # 종료 뒤 더 쓰이지 않는다
+        assert rd(tmp_path)["seq"] == seq_end
+        sender_stop = True
+        t.cancel()
+        await asyncio.gather(t, return_exceptions=True)
+        assert (seq_end - seq_before) & 0xFFFFFFFF >= 1
+        ish.write_intent = orig
+        assert calls[-1][0] == 0.0 and calls[-2][0] == 1.0          # 0 프레임이 마지막 쓰기, 그 앞은 브라우저 프레임
+        assert (calls[-1][1] - calls[-2][1]) & 0xFFFFFFFF == 1      # 마지막 브라우저 프레임 뒤 seq 는 정확히 +1
+        assert sum(1 for c in calls if c[0] == 0.0) == 1
     run(go())
