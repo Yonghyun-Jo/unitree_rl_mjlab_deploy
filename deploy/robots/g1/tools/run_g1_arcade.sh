@@ -13,19 +13,26 @@
 #   --relay-bind <addr>  중계 bind 주소(기본: lo = 127.0.0.1 · 그 밖 = 192.168.3.2 — 노트북 브라우저가 닿는 로봇 주소)
 #   --state-csv <path>   G1_STATE_CSV 를 이 경로로(기본 = <로그 폴더>/arcade_state_<시각>.csv — 쓰는 동안 .part, g1_ctrl 이 끝나면
 #                        .csv 로 바꾼다: 로봇 로그 자동 회수는 *.csv 를 가져가며 지우므로 쓰는 중인 파일은 .csv 가 아니어야 한다)
-#   로그 폴더 = G1_LOG_DIR(기본 ~/dyros_ws/piene_ws/g1_logs): trial_<시각>.txt(어느 슬롯 · 묶음이었나 — run_g1_with_gui.sh 와 같은
-#   마커) · arcade_ctl_<시각>.log(창 ctrl 출력) · arcade_relay_<시각>.log(창 relay 출력).
+#   로그 폴더 = G1_LOG_DIR(기본 ~/dyros_ws/piene_ws/g1_logs): arcade_ctl_<시각>.log(창 ctrl 출력) · arcade_relay_<시각>.log(창 relay 출력)
+#   · trial_<시각>.txt(어느 슬롯 · 묶음이었나 — run_g1_with_gui.sh 와 같은 마커, 대시보드 · 회수가 실험 ↔ 슬롯을 이 파일로 잇는다).
+#   🔴 마커는 모든 관문(기동 전 검사 · 기동 로그 판정 · 중계)을 통과한 뒤에만 쓴다 — 거부된 기동은 마커를 남기지 않는다.
 #   창 ctrl 로 넘기는 환경 변수(있을 때만, 없으면 창에서 지움): G1_ARCADE_FAULT(시험 주입 — lo 에서만, 실기면 거부) ·
 #   G1_ARCADE_STATUS_SHM · G1_ARCADE_NAMES(중계에도 같은 경로를 준다) · G1_SAFETY_CSV.
 #   (tmux 창은 이 스크립트가 아니라 tmux 서버의 환경을 받는다 — 그래서 필요한 것만 이 스크립트가 직접 넘긴다.)
 #
 # 거부(아무것도 띄우지 않고 끝 코드 1): 묶음 파일 md5 ≠ manifest · --slot ≠ 묶음 처음 role(walk) 꾸러미의 슬롯 · 슬롯
 #   exported/policy.onnx 가 없거나 md5 ≠ 그 꾸러미 skill.json onnx_md5 · g1_ctrl 빌드 없음 · 아케이드 없이 빌드(G1_ARCADE_DIR 없음) ·
-#   g1_ctrl 이 이미 돎(pgrep -x g1_ctrl) · lo 인데 unitree_mujoco 가 정확히 1 개가 아님 · tmux 세션 g1_arcade 가 이미 있음 ·
-#   --relay 인데 인터프리터가 없거나(websockets · msgpack import 실패) 포트 8711 을 누가 쓰는 중.
-# 기동 뒤 사람이 볼 기동 로그 다섯 줄: [slot] · [arcade] 묶음(bundle=… manifest md5 …) · [safety] pos_clamp ON(+ qd_guard ON 확인) ·
-#   [g1_controller] CMAKE_BUILD_TYPE = Release(build/CMakeCache.txt) · [arcade] mlockall= 판정. 하나라도 없거나 틀리면 🔴 · 끝 코드 1 ·
-#   중계는 띄우지 않는다(g1_ctrl 은 그대로 떠 있다 — 사람이 보고 끈다).
+#   빌드가 낡음(CMakeCache.txt · 빌드 정보 헤더 · 컴파일되는 소스(g1 main.cpp · src · include · cmake · deploy/include · 아케이드
+#   core · host) 중 g1_ctrl 보다 새것이 있음) · g1_ctrl 이 이미 돎(pgrep -x g1_ctrl) · lo 인데 unitree_mujoco 가 정확히 1 개가 아님 ·
+#   tmux 세션 g1_arcade 가 이미 있음 · --relay 인데 인터프리터가 없거나(websockets · msgpack import 실패) 포트 8711 을 누가 쓰는 중.
+# 기동 로그 다섯 줄 — ①②③⑤ 는 g1_ctrl 실행 로그에서 본 줄, ④ 는 빌드 캐시에서 읽은 줄(실행 로그가 아니다):
+#   ① [slot] G1_POLICY_SLOT='<슬롯>' ② [arcade] bundle=<묶음> … manifest md5 <md5> ③ Mimic_Masked 의 [safety] pos_clamp ON · qd_guard ON
+#   (값이 ON 이어야 함) ④ [g1_controller] CMAKE_BUILD_TYPE = Release(build/CMakeCache.txt — 위 «낡음» 검사로 캐시 · 소스가 이 바이너리와
+#   맞는지 묶음, 바이너리 안의 빌드 커밋 문자열도 보인다) ⑤ [arcade] mlockall=ok — 실기(lo 가 아님)는 ok 가 아니면 🔴, lo 는 ⚠.
+#   + [rt] FSM 1kHz -> SCHED_FIFO 성공 줄 — 실기는 없거나 실패면 🔴(감시기의 «느린 틱 하나 ≈ 80 ms» 예산은 로봇 FIFO 전제), lo 는 ⚠ 참고.
+#   🔴 가 하나라도 있으면 끝 코드 1 · 중계 안 띄움 · 마커 안 씀(g1_ctrl 은 Passive 로 떠 있다 — 사람이 보고 끈다).
+# 중계는 «이 창에서 띄운 그 pid» 가 :8711 LISTEN 소켓을 쥐었을 때만 떴다고 본다(/proc/net/tcp 의 inode ↔ /proc/<pid>/fd).
+# 판정만 다시(시험용 · 아무것도 띄우지 않음): ./run_g1_arcade.sh __judge <net> <창 ctrl 로그> <슬롯> <묶음 폴더> <manifest md5>
 # 🔴 이 스크립트는 로봇을 움직이지 않는다(g1_ctrl 은 Passive 로 뜨고 f · m 은 사람이 친다). 남의 프로세스는 죽이지 않는다(거부만).
 set -u -o pipefail
 
@@ -35,17 +42,99 @@ G1DIR="$(cd "$HERE/.." && pwd)"
 SESSION=g1_arcade
 RELAY_PORT=8711
 PASS_VARS=(G1_ARCADE_FAULT G1_ARCADE_STATUS_SHM G1_ARCADE_NAMES G1_SAFETY_CSV)
+G1CTRL="$G1DIR/build/g1_ctrl"
+CACHE="$G1DIR/build/CMakeCache.txt"
+BINFO="$G1DIR/build/generated/g1_build_info.h"
 
 wait_flag() {  # wait_flag <파일> — 기동 신호(launcher 가 창 옵션 · pipe-pane 을 건 뒤 만든다)를 10 s 까지 기다린다
   local i
   for ((i = 0; i < 100; i++)); do [[ -e "$1" ]] && { rm -f "$1"; return 0; }; sleep 0.1; done
   return 1
 }
+clean_log() { sed -e 's/\x1b\[[0-9;?]*[A-Za-z]//g' -e 's/\r//g' "$1" 2>/dev/null; }
+msg_of() { sed -E 's/^\[[0-9: .-]+\] \[[a-z]+\] //'; }   # spdlog 머리(시각 · 등급)를 뗀다
+
+# 빌드 검사 — BUILD_TYPE · ARC_DIR · BUILD_STALE(낡음 이유, 없으면 빈 값) · BUILD_NOTE(빌드 커밋 · dirty — 보여 주기만)
+check_build() {
+  local newer c d head
+  BUILD_TYPE="$(sed -n 's/^CMAKE_BUILD_TYPE:[A-Z]*=//p' "$CACHE" 2>/dev/null | head -1)"
+  ARC_DIR="$(sed -n 's/^G1_ARCADE_DIR:[A-Z]*=//p' "$CACHE" 2>/dev/null | head -1)"
+  BUILD_STALE=""
+  if [[ "$CACHE" -nt "$G1CTRL" ]]; then BUILD_STALE="CMakeCache.txt 가 g1_ctrl 보다 새것(다시 구성한 뒤 make 안 함)"
+  elif [[ -f "$BINFO" && "$BINFO" -nt "$G1CTRL" ]]; then BUILD_STALE="빌드 정보 헤더가 g1_ctrl 보다 새것(빌드가 끝나지 않음?)"
+  else
+    newer="$(find "$G1DIR/main.cpp" "$G1DIR/CMakeLists.txt" "$G1DIR/src" "$G1DIR/include" "$G1DIR/cmake" "$G1DIR/../../include" \
+               "$ARC_DIR/core/CMakeLists.txt" "$ARC_DIR/core/src" "$ARC_DIR/core/include" "$ARC_DIR/core/vendor" \
+               "$ARC_DIR/host/CMakeLists.txt" "$ARC_DIR/host/src" "$ARC_DIR/host/include" \
+               -type f -newer "$G1CTRL" 2>/dev/null | head -3 | tr '\n' ' ')"
+    [[ -z "$newer" ]] || BUILD_STALE="g1_ctrl 보다 새 소스: $newer"
+  fi
+  c="$(sed -n 's/^#define G1_BUILD_COMMIT "\(.*\)"/\1/p' "$BINFO" 2>/dev/null)"
+  d="$(sed -n 's/^#define G1_BUILD_DIRTY \(.*\)/\1/p' "$BINFO" 2>/dev/null)"
+  head="$(git -C "$G1DIR" rev-parse --short=12 HEAD 2>/dev/null || echo '?')"
+  if [[ -z "$c" ]]; then BUILD_NOTE="빌드 커밋 모름(헤더 없음)"
+  elif ! grep -aqF "$c" "$G1CTRL"; then BUILD_NOTE="빌드 커밋 $c 이 바이너리 안에 없다"; BUILD_STALE="${BUILD_STALE:-빌드 정보 헤더 커밋 $c 이 g1_ctrl 안에 없다}"
+  else BUILD_NOTE="바이너리 안 빌드 커밋 $c · dirty $d · 지금 HEAD $head$([[ "$c" == "$head" && "$d" == 0 ]] || echo ' ⚠ 다름(컴파일 소스는 바이너리보다 새것 없음)')"
+  fi
+}
+
+# 기동 로그 판정 — judge_startup <net> <로그(색 · CR 뗀 것)> <슬롯> <묶음> <manifest md5>. BAD = 🔴 수(⚠ 는 안 셈)
+judge_startup() {
+  local net="$1" L="$2" slot="$3" bundle="$4" md5="$5" seg l_slot l_arc l_pc l_qd l_rl l_ml l_rt l_fault real=0
+  [[ "$net" != lo ]] && real=1
+  BAD=0
+  ok() { echo "  ✅ $*"; }
+  bad() { echo "  🔴 $*"; BAD=$((BAD + 1)); }
+  warn() { echo "  ⚠ $*"; }
+  l_slot="$(grep -m1 -F "[slot] G1_POLICY_SLOT='$slot'" <<< "$L" | msg_of)"
+  # Mimic_Masked 의 안전 줄 = 그 [slot] 줄 뒤 · [arcade] bundle= 줄 앞(다른 Mimic 상태도 [safety] 줄을 찍는다)
+  seg="$(awk -v s="[slot] G1_POLICY_SLOT='$slot'" 'index($0, s) { on = 1; next } on && index($0, "[arcade] bundle=") { exit } on' <<< "$L")"
+  l_pc="$(grep -m1 -F '[safety] pos_clamp ' <<< "$seg" | msg_of)"
+  l_qd="$(grep -m1 -F '[safety] qd_guard ' <<< "$seg" | msg_of)"
+  l_rl="$(grep -m1 -F '[safety] rate_limit ' <<< "$seg" | msg_of)"
+  l_arc="$(grep -m1 -F "[arcade] bundle=$bundle " <<< "$L" | msg_of)"
+  l_ml="$(grep -m1 -F '[arcade] mlockall=' <<< "$L" | msg_of)"
+  l_rt="$(grep -m1 -F '[rt] FSM 1kHz' <<< "$L" | msg_of)"
+  l_fault="$(grep -m1 -F '시험 주입 켜짐' <<< "$L" | msg_of)"
+  echo "[run] ── 기동 로그 다섯 줄 — ①②③⑤ = g1_ctrl 실행 로그에서 본 줄 · ④ = 빌드 캐시에서 읽은 줄(실행 로그 아님) ──"
+  if [[ -n "$l_slot" ]]; then ok "① $l_slot"; else bad "① [slot] G1_POLICY_SLOT='$slot' 줄이 없다"; fi
+  if [[ -n "$l_arc" && "$l_arc" == *"manifest md5 $md5"* ]]; then ok "② $l_arc"
+  else bad "② [arcade] bundle=$bundle … manifest md5 $md5 줄이 없다${l_arc:+ (있는 줄: $l_arc)}"; fi
+  if [[ "$l_pc" == "[safety] pos_clamp ON"* ]]; then ok "③ $l_pc"; else bad "③ Mimic_Masked [safety] pos_clamp 가 ON 이 아니다: ${l_pc:-줄 없음}"; fi
+  if [[ "$l_qd" == "[safety] qd_guard ON"* ]]; then ok "③ $l_qd"; else bad "③ Mimic_Masked [safety] qd_guard 가 ON 이 아니다: ${l_qd:-줄 없음}"; fi
+  if [[ "$BUILD_TYPE" == Release && -z "$BUILD_STALE" ]]; then
+    ok "④ (빌드 캐시 — 실행 로그 아님) [g1_controller] CMAKE_BUILD_TYPE = Release · build/CMakeCache.txt · 캐시 · 컴파일 소스가 g1_ctrl 보다 새것 없음 · $BUILD_NOTE"
+  else bad "④ (빌드 캐시) [g1_controller] CMAKE_BUILD_TYPE = ${BUILD_TYPE:-(없음)}${BUILD_STALE:+ · 낡음: $BUILD_STALE} — Release · 최신 빌드여야 한다"; fi
+  if [[ "$l_ml" == "[arcade] mlockall=ok ("* ]]; then ok "⑤ $l_ml"
+  elif [[ -z "$l_ml" ]]; then bad "⑤ [arcade] mlockall= 판정 줄이 없다"
+  elif [[ $real -eq 1 ]]; then bad "⑤ $l_ml — 실기는 mlockall=ok 여야 한다(memlock 한도 · CAP_IPC_LOCK 확인: setcap cap_sys_nice,cap_ipc_lock+ep g1_ctrl)"
+  else warn "⑤ $l_ml — lo(sim2sim)라 판정 밖, 실기에서는 🔴"; fi
+  if [[ "$l_rt" == "[rt] FSM 1kHz -> SCHED_FIFO prio "* && "$l_rt" != *실패* ]]; then ok "$l_rt"
+  elif [[ $real -eq 1 ]]; then bad "${l_rt:-[rt] FSM 1kHz 줄이 없다} — 실기는 SCHED_FIFO 여야 한다(감시기 «느린 틱 하나 ≈ 80 ms» 예산의 전제 · setcap cap_sys_nice)"
+  else warn "참고(lo): ${l_rt:-[rt] FSM 1kHz 줄이 없다}"; fi
+  if [[ -n "$l_rl" ]]; then echo "  · 참고(판정 밖): $l_rl"; fi
+  if [[ -n "$l_fault" ]]; then warn "참고: $l_fault"; fi
+}
+
+# 중계 확인 — listener_owned_by <pid> <port>: 그 pid 의 fd 가 <port> LISTEN 소켓(/proc/net/tcp · tcp6 의 inode)을 쥐었나
+listener_owned_by() {
+  local pid="$1" hex ino fd
+  hex="$(printf '%04X' "$2")"
+  while read -r ino; do
+    for fd in /proc/"$pid"/fd/*; do
+      [[ "$(readlink "$fd" 2>/dev/null)" == "socket:[$ino]" ]] && return 0
+    done
+  done < <(awk -v p=":$hex" 'substr($2, length($2) - 4) == p && $4 == "0A" { print $10 }' /proc/net/tcp /proc/net/tcp6 2>/dev/null)
+  return 1
+}
+port_listening() {  # port_listening <port> — 누구든 LISTEN 중인가
+  awk -v p=":$(printf '%04X' "$1")" 'substr($2, length($2) - 4) == p && $4 == "0A" { f = 1 } END { exit !f }' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
 
 # ── 창 안에서 도는 쪽(내부 — 사람이 부르지 않는다) ─────────────────────────────────────────────────────
 if [[ "${1:-}" == "__ctrl" ]]; then
   # __ctrl <신호 파일> <net> <묶음> <슬롯> <state csv> <part 0|1> <g1_ctrl> [KEY=VALUE ...]
-  GO="$2" NET="$3" BUNDLE="$4" SLOT="$5" CSV="$6" PART="$7" G1CTRL="$8"
+  GO="$2" NET="$3" BUNDLE="$4" SLOT="$5" CSV="$6" PART="$7" G1BIN="$8"
   shift 8
   wait_flag "$GO" || { echo "[run] 🔴 기동 신호가 10 s 안에 안 왔다 — g1_ctrl 을 띄우지 않는다"; exit 1; }
   for v in "${PASS_VARS[@]}"; do unset "$v"; done
@@ -55,7 +144,7 @@ if [[ "${1:-}" == "__ctrl" ]]; then
   # Ctrl-C · 창 닫힘(HUP)은 g1_ctrl 이 받아 끝나고, 이 셸은 남아 tty 복구 · .part 이름 바꾸기를 한다.
   trap ':' INT HUP
   STTY_SAVE="$(stty -g 2>/dev/null || true)"
-  "$G1CTRL" --network="$NET"
+  "$G1BIN" --network="$NET"
   RC=$?
   if [[ -n "$STTY_SAVE" ]]; then stty "$STTY_SAVE" 2>/dev/null || stty sane 2>/dev/null; fi
   if [[ "$PART" == 1 ]]; then
@@ -66,10 +155,19 @@ if [[ "${1:-}" == "__ctrl" ]]; then
   exit "$RC"
 fi
 if [[ "${1:-}" == "__relay" ]]; then
-  # __relay <신호 파일> <python> <relay 인자 ...>
-  GO="$2"; shift 2
+  # __relay <신호 파일> <pid 파일> <python> <relay 인자 ...> — exec 라 이 셸의 pid($$) = 중계 python 의 pid
+  GO="$2" PIDF="$3"; shift 3
   wait_flag "$GO" || { echo "[run] 🔴 기동 신호가 10 s 안에 안 왔다 — 중계를 띄우지 않는다"; exit 1; }
+  echo "$$" > "$PIDF"
   exec "$@"
+fi
+if [[ "${1:-}" == "__judge" ]]; then
+  # __judge <net> <창 ctrl 로그> <슬롯> <묶음 폴더> <manifest md5> — 저장된 로그를 다시 판정만 한다(시험용, 아무것도 띄우지 않음)
+  [[ $# -eq 6 ]] || { echo "쓰는 법: $0 __judge <net> <로그> <슬롯> <묶음> <manifest md5>" >&2; exit 2; }
+  check_build
+  judge_startup "$2" "$(clean_log "$3")" "$4" "$(cd "$5" && pwd)" "$6"
+  echo "[judge] net=$2 · 🔴 $BAD 개"
+  [[ $BAD -eq 0 ]]; exit $?
 fi
 
 # ── 기동(사람이 부르는 쪽) ──────────────────────────────────────────────────────────────────────────
@@ -96,15 +194,14 @@ command -v python3 >/dev/null || die "python3 가 없다(묶음 md5 대조에 �
 if [[ -n "${G1_ARCADE_FAULT:-}" && "$NET" != lo ]]; then
   die "G1_ARCADE_FAULT=$G1_ARCADE_FAULT 가 설정돼 있다 — 시험 주입은 sim2sim(lo)에서만. 실기에서는 지우고 다시"
 fi
+[[ $RELAY -eq 1 || -z "$RELAY_BIND" ]] || die "--relay-bind 는 --relay 와 같이"
 
 # 빌드: config 는 /proc/self/exe 의 부모(build)의 ../config 에서 읽는다(param.h) — 이 자리의 바이너리만 쓴다
-G1CTRL="$G1DIR/build/g1_ctrl"
-CACHE="$G1DIR/build/CMakeCache.txt"
 [[ -x "$G1CTRL" ]] || die "g1_ctrl 빌드가 없다: $G1CTRL (cmake .. -DCMAKE_BUILD_TYPE=Release -DG1_ARCADE_DIR=<g1_arcade> && make)"
 [[ -f "$CACHE" ]] || die "$CACHE 가 없다 — 빌드 종류 · 아케이드 여부를 확인할 수 없다"
-BUILD_TYPE="$(sed -n 's/^CMAKE_BUILD_TYPE:[A-Z]*=//p' "$CACHE" | head -1)"
-ARC_DIR="$(sed -n 's/^G1_ARCADE_DIR:[A-Z]*=//p' "$CACHE" | head -1)"
+check_build
 [[ -n "$ARC_DIR" ]] || die "이 g1_ctrl 은 아케이드 없이 빌드됐다(CMakeCache 에 G1_ARCADE_DIR 없음) — g1_ctrl 이 G1_ARCADE=1 기동을 거부한다"
+[[ -z "$BUILD_STALE" ]] || die "g1_ctrl 빌드가 낡았다 — $BUILD_STALE. (cd $G1DIR/build && make -j6) 뒤 다시"
 
 # 묶음 · 슬롯(python3 표준 라이브러리만 — 로봇 3.8)
 [[ -f "$BUNDLE/manifest.json" ]] || die "묶음이 없다: $BUNDLE/manifest.json"
@@ -166,23 +263,20 @@ if [[ $RELAY -eq 1 ]]; then
   command -v "$RELAY_PY" >/dev/null || die "중계 인터프리터가 없다: $RELAY_PY (G1_ARCADE_RELAY_PY 로 바꾼다)"
   "$RELAY_PY" -c 'import websockets, msgpack' 2>/dev/null || die "$RELAY_PY 에 websockets · msgpack 이 없다"
   [[ -f "$HERE/arcade_relay2.py" ]] || die "중계 v2 가 없다: $HERE/arcade_relay2.py"
-  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$RELAY_PORT\$"; then
-    die "포트 $RELAY_PORT 를 누가 쓰고 있다(ss -ltnp 로 확인) — 중계 v2 가 이미 떠 있으면 그것을 먼저 끝낼 것"
-  fi
+  port_listening "$RELAY_PORT" && die "포트 $RELAY_PORT 를 누가 쓰고 있다(ss -ltnp 로 확인) — 중계 v2 가 이미 떠 있으면 그것을 먼저 끝낼 것"
   RELAY_ARGS=(--bind "$RELAY_BIND" --port "$RELAY_PORT")
   [[ -n "${G1_ARCADE_STATUS_SHM:-}" ]] && RELAY_ARGS+=(--status-shm "$G1_ARCADE_STATUS_SHM")
   [[ -n "${G1_ARCADE_NAMES:-}" ]] && RELAY_ARGS+=(--names "$G1_ARCADE_NAMES")
-elif [[ -n "$RELAY_BIND" ]]; then
-  die "--relay-bind 는 --relay 와 같이"
 fi
 
-# 로그 폴더 · 마커
+# 로그 폴더(마커는 관문을 다 통과한 뒤 맨 끝에 쓴다)
 LOGDIR="${G1_LOG_DIR:-$HOME/dyros_ws/piene_ws/g1_logs}"
 mkdir -p "$LOGDIR" || die "로그 폴더 $LOGDIR 를 못 만든다"
 LOGDIR="$(cd "$LOGDIR" && pwd)"
-STAMP="$(date +%Y%m%d_%H%M%S)"
+STAMP="$(date +%Y%m%d_%H%M%S)"; STARTED="$(date -Is)"   # 마커 이름 · started= = g1_ctrl 을 띄운 시각(마커를 쓰는 시각이 아니다)
 CTL_LOG="$LOGDIR/arcade_ctl_$STAMP.log"
 RELAY_LOG="$LOGDIR/arcade_relay_$STAMP.log"
+MARK="$LOGDIR/trial_$STAMP.txt"
 if [[ -n "$STATE_CSV" ]]; then
   mkdir -p "$(dirname "$STATE_CSV")" || die "G1_STATE_CSV 폴더를 못 만든다: $STATE_CSV"
   STATE_CSV="$(cd "$(dirname "$STATE_CSV")" && pwd)/$(basename "$STATE_CSV")"; PART=0
@@ -192,24 +286,9 @@ fi
 PASS=()
 for v in "${PASS_VARS[@]}"; do [[ -n "${!v:-}" ]] && PASS+=("$v=${!v}"); done
 REPO="$(cd "$G1DIR/../../.." && pwd)"
-MARK="$LOGDIR/trial_$STAMP.txt"
-{
-  echo "slot=$SLOT"
-  echo "net=$NET"
-  echo "started=$(date -Is)"
-  echo "host=$(hostname)"
-  echo "git=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-  echo "arcade=1"
-  echo "arcade_bundle=$BUNDLE"
-  echo "arcade_manifest_md5=$MANIFEST_MD5"
-  echo "arcade_g1_arcade=$ARC_DIR"
-  echo "state_csv=${STATE_CSV%.part}"
-  echo "relay=$([[ $RELAY -eq 1 ]] && echo "ws://$RELAY_BIND:$RELAY_PORT" || echo off)"
-  if [[ ${#PASS[@]} -gt 0 ]]; then echo "env=${PASS[*]}"; fi
-} > "$MARK" || die "마커 $MARK 를 못 쓴다"
 echo "[run] 묶음 $BUNDLE · manifest md5 $MANIFEST_MD5 · g1_arcade $B_COMMIT · 파일 $B_NFILES · $B_KIND · $B_DIRTY · role [$B_ROLES]"
-echo "[run] 슬롯 $SLOT(가중치 md5 = 꾸러미 onnx_md5) · g1_ctrl $G1CTRL · 빌드 $BUILD_TYPE · core $ARC_DIR"
-echo "[run] 마커 $MARK · 창 ctrl 출력 $CTL_LOG"
+echo "[run] 슬롯 $SLOT(가중치 md5 = 꾸러미 onnx_md5) · g1_ctrl $G1CTRL · 빌드 $BUILD_TYPE · core $ARC_DIR · $BUILD_NOTE"
+echo "[run] 창 ctrl 출력 $CTL_LOG"
 
 # ── 창 ctrl ─────────────────────────────────────────────────────────────────────────────────────
 RUNTMP="$(mktemp -d /tmp/g1_arcade_run.XXXXXX)" || die "임시 폴더를 못 만든다"
@@ -221,14 +300,11 @@ tmux set-option -w -t "$SESSION:ctrl" remain-on-exit on >/dev/null || die "remai
 tmux pipe-pane -t "$SESSION:ctrl" -o "cat >> $(printf '%q' "$CTL_LOG")" || die "pipe-pane 을 못 걸었다"
 touch "$RUNTMP/go_ctrl"
 
-clean_log() { sed -e 's/\x1b\[[0-9;?]*[A-Za-z]//g' -e 's/\r//g' "$1" 2>/dev/null; }
-msg_of() { sed -E 's/^\[[0-9: .-]+\] \[[a-z]+\] //'; }   # spdlog 머리(시각 · 등급)를 뗀다
 pane_alive() { [[ "$(tmux list-panes -t "$SESSION:$1" -F '#{pane_dead}' 2>/dev/null)" == 0 ]]; }
-
 ALIVE=1
-for ((i = 0; i < 600; i++)); do   # 60 s — ORT 세션 · 예열(로봇은 com1 보다 느리다)
+for ((i = 0; i < 600; i++)); do   # 60 s — ORT 세션 · 예열(로봇은 com1 보다 느리다). 끝 표지 = FSM 루프의 [rt] FSM 1kHz 줄(아케이드 줄들 뒤)
   L="$(clean_log "$CTL_LOG")"
-  grep -qF '[arcade] mlockall=' <<< "$L" && break
+  grep -qF '[rt] FSM 1kHz' <<< "$L" && break
   grep -qF '기동 거부' <<< "$L" && break
   if ! pane_alive ctrl; then ALIVE=0; break; fi
   sleep 0.1
@@ -237,61 +313,60 @@ sleep 0.3
 L="$(clean_log "$CTL_LOG")"
 pane_alive ctrl || ALIVE=0
 
-L_SLOT="$(grep -m1 -F "[slot] G1_POLICY_SLOT='$SLOT'" <<< "$L" | msg_of)"
-L_ARC="$(grep -m1 -F "[arcade] bundle=$BUNDLE " <<< "$L" | msg_of)"
-L_SAFE="$(grep -m1 -E '\[safety\] pos_clamp ON' <<< "$L" | msg_of)"
-L_QD="$(grep -m1 -E '\[safety\] qd_guard ON' <<< "$L" | msg_of)"
-L_MLOCK="$(grep -m1 -F '[arcade] mlockall=' <<< "$L" | msg_of)"
-L_BUILD="[g1_controller] CMAKE_BUILD_TYPE = ${BUILD_TYPE:-(없음)}"
-BAD=0
-line() {  # line <좋은가 0|1> <표시할 줄> <없을 때 설명>
-  if [[ "$1" == 1 ]]; then echo "  ✅ $2"; else echo "  🔴 $3"; BAD=$((BAD + 1)); fi
-}
-echo "[run] ── 기동 로그 다섯 줄 (창 $SESSION:ctrl · 전체 $CTL_LOG) ──"
-line "$([[ -n "$L_SLOT" ]] && echo 1 || echo 0)" "$L_SLOT" "[slot] G1_POLICY_SLOT='$SLOT' 줄이 없다"
-line "$([[ -n "$L_ARC" && "$L_ARC" == *"manifest md5 $MANIFEST_MD5"* ]] && echo 1 || echo 0)" "$L_ARC" \
-  "[arcade] bundle=$BUNDLE … manifest md5 $MANIFEST_MD5 줄이 없다${L_ARC:+ (있는 줄: $L_ARC)}"
-line "$([[ -n "$L_SAFE" && -n "$L_QD" ]] && echo 1 || echo 0)" "$L_SAFE" \
-  "[safety] pos_clamp ON · qd_guard ON 이 다 있어야 한다(pos_clamp: ${L_SAFE:-없음} · qd_guard: ${L_QD:-없음})"
-line "$([[ "$BUILD_TYPE" == Release ]] && echo 1 || echo 0)" "$L_BUILD" "$L_BUILD — Release 가 아니면 sim2sim · 실기가 학습 시간 예산을 대표하지 못한다"
-line "$([[ -n "$L_MLOCK" ]] && echo 1 || echo 0)" "$L_MLOCK" "[arcade] mlockall= 판정 줄이 없다"
-L_RT="$(grep -m1 -E '\[rt\].*SCHED_FIFO.*실패' <<< "$L" | msg_of)"
-if [[ -n "$L_RT" ]]; then echo "  ⚠ 참고: $L_RT"; fi
-L_FAULT="$(grep -m1 -F '시험 주입 켜짐' <<< "$L" | msg_of)"
-if [[ -n "$L_FAULT" ]]; then echo "  ⚠ 참고: $L_FAULT"; fi
 if [[ $ALIVE -ne 1 ]] || grep -qF '기동 거부' <<< "$L"; then
-  echo "[run] 🔴 g1_ctrl 이 기동을 거부했거나 끝났다:"
+  judge_startup "$NET" "$L" "$SLOT" "$BUNDLE" "$MANIFEST_MD5"
+  echo "[run] 🔴 g1_ctrl 이 기동을 거부했거나 끝났다(마커 안 씀):"
   grep -E '기동 거부|\[critical\]|\[error\]' <<< "$L" | msg_of | head -8 | sed 's/^/    /'
   echo "[run]    창 출력: tmux attach -t $SESSION (끝난 창은 남아 있다) · 정리: tmux kill-session -t $SESSION"
   exit 1
 fi
+judge_startup "$NET" "$L" "$SLOT" "$BUNDLE" "$MANIFEST_MD5"
 if [[ $BAD -ne 0 ]]; then
-  echo "[run] 🔴 기동 로그 다섯 줄 중 $BAD 개가 없거나 틀리다 — 실기 운용 금지. 중계는 띄우지 않았다."
+  echo "[run] 🔴 기동 로그 판정 🔴 $BAD 개 — $([[ "$NET" != lo ]] && echo "실기 운용 금지, g1_ctrl 을 끌 것. ")중계 안 띄움 · 마커 안 씀."
   echo "[run]    g1_ctrl 은 떠 있다(Passive). 끝내기: tmux attach -t $SESSION → Ctrl-C · 정리: tmux kill-session -t $SESSION"
   exit 1
 fi
 
 # ── 창 relay ────────────────────────────────────────────────────────────────────────────────────
 if [[ $RELAY -eq 1 ]]; then
-  RCMD="$(printf '%q ' bash "$SELF" __relay "$RUNTMP/go_relay" "$RELAY_PY" "$HERE/arcade_relay2.py" "${RELAY_ARGS[@]}")"
+  RCMD="$(printf '%q ' bash "$SELF" __relay "$RUNTMP/go_relay" "$RUNTMP/relay.pid" "$RELAY_PY" "$HERE/arcade_relay2.py" "${RELAY_ARGS[@]}")"
   tmux new-window -d -t "$SESSION:" -n relay "$RCMD" || die "창 relay 를 못 만들었다"
   tmux set-option -w -t "$SESSION:relay" remain-on-exit on >/dev/null || die "창 relay 에 remain-on-exit 를 못 걸었다"
   tmux pipe-pane -t "$SESSION:relay" -o "cat >> $(printf '%q' "$RELAY_LOG")" || die "창 relay 에 pipe-pane 을 못 걸었다"
   touch "$RUNTMP/go_relay"
-  UP=0
-  for ((i = 0; i < 100; i++)); do   # 10 s
-    if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$RELAY_PORT\$"; then UP=1; break; fi
+  UP=0; RPID=""
+  for ((i = 0; i < 100; i++)); do   # 10 s — 이 창에서 띄운 pid 가 :8711 LISTEN 을 쥘 때까지
+    [[ -z "$RPID" && -s "$RUNTMP/relay.pid" ]] && RPID="$(cat "$RUNTMP/relay.pid")"
+    if [[ -n "$RPID" && -d "/proc/$RPID" ]] && tr '\0' ' ' < "/proc/$RPID/cmdline" 2>/dev/null | grep -qF arcade_relay2.py \
+       && listener_owned_by "$RPID" "$RELAY_PORT"; then UP=1; break; fi
     pane_alive relay || break
     sleep 0.1
   done
   if [[ $UP -ne 1 ]]; then
-    echo "[run] 🔴 중계 v2 가 포트 $RELAY_PORT 를 열지 못했다 — 창 relay 출력:"
+    echo "[run] 🔴 이 창의 중계 v2(pid ${RPID:-모름})가 :$RELAY_PORT LISTEN 을 쥐지 못했다(마커 안 씀) — 창 relay 출력:"
     clean_log "$RELAY_LOG" | tail -8 | sed 's/^/    /'
     echo "[run]    g1_ctrl 은 떠 있다(Passive). 정리: tmux kill-session -t $SESSION"
     exit 1
   fi
-  echo "[run] 중계 v2 ws://$RELAY_BIND:$RELAY_PORT (창 relay · 출력 $RELAY_LOG)"
+  echo "[run] 중계 v2 pid $RPID 가 ws://$RELAY_BIND:$RELAY_PORT LISTEN 을 쥠(창 relay · 출력 $RELAY_LOG)"
 fi
-echo "[run] 🟢 떴다. 다음: tmux attach -t $SESSION → 창 ctrl 에서 f → m (사람이 친다)$([[ $RELAY -eq 1 ]] && echo " · 브라우저 ?mode=real2&relay=ws://$RELAY_BIND:$RELAY_PORT")"
+
+# ── 마커(관문을 다 통과한 뒤에만 — run_g1_with_gui.sh 형식 + 아케이드 칸) ─────────────────────────────────────
+{
+  echo "slot=$SLOT"
+  echo "net=$NET"
+  echo "started=$STARTED"
+  echo "host=$(hostname)"
+  echo "git=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  echo "arcade=1"
+  echo "arcade_bundle=$BUNDLE"
+  echo "arcade_manifest_md5=$MANIFEST_MD5"
+  echo "arcade_g1_arcade=$ARC_DIR"
+  echo "state_csv=${STATE_CSV%.part}"
+  echo "relay=$([[ $RELAY -eq 1 ]] && echo "ws://$RELAY_BIND:$RELAY_PORT" || echo off)"
+  if [[ ${#PASS[@]} -gt 0 ]]; then echo "env=${PASS[*]}"; fi
+} > "$MARK.tmp" && mv -f "$MARK.tmp" "$MARK" || echo "[run] ⚠ 마커 $MARK 를 못 썼다 — 대시보드가 이 실험의 슬롯을 모른다"
+echo "[run] 🟢 떴다(마커 $MARK). 다음: tmux attach -t $SESSION → 창 ctrl 에서 f → m (사람이 친다)$([[ $RELAY -eq 1 ]] && echo " · 브라우저 ?mode=real2&relay=ws://$RELAY_BIND:$RELAY_PORT")"
+echo "[run]    m 뒤 창 ctrl 의 [rt] 정책 50Hz -> SCHED_FIFO 줄도 볼 것(FSM 과 같은 권한 — 실기에서 «실패» 면 p)"
 echo "[run]    멈추기: 창 ctrl 에서 p → Ctrl-C · 정리: tmux kill-session -t $SESSION"
 exit 0
