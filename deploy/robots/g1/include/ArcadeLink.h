@@ -9,8 +9,11 @@
 //   · open = State_Mimic 생성자(실시간 스레드 밖). enter = State_Mimic::enter(FSM 스레드, 정책 스레드를 시작하기 «전» —
 //     std::thread 시작이 정책 스레드에 happens-before 를 준다).
 //   · tick · core_safety · write_status = 정책 스레드 하나. 예열 뒤 우리 코드 할당 0(ORT Run 안쪽은 R-B5 가 뺀다) · 시스템 콜 =
-//     의도 칸 읽기 open/read/close 3 개뿐(ArcadeIntent.h 의 명시된 예외) · 락 0.
+//     의도 칸 읽기 open/read/close 3 개뿐(ArcadeIntent.h 의 명시된 예외) · 락 0. 시험 주입 G1_ARCADE_FAULT=stall 이 켜졌을 때만
+//     그 한 틱에 nanosleep 하나(꺼짐 = 미리 읽은 int 분기뿐).
 //   · run_q_des = 1 kHz FSM 스레드(enter 와 같은 스레드 — 직전 q 칸은 이 스레드 것).
+//   · last_tick_ns · fail_streak · policy_dead = 아무 스레드(원자 — FSM 1 kHz 의 감시 검사가 읽는다, ArcadeWatchdog.h).
+//   · dropped_event_* · window_dropped_* = 정책 스레드만(평범한 정수 — 다른 스레드에서 읽지 않는다. exit 요약은 join 뒤).
 #if G1_HAVE_ARCADE
 #include <array>
 #include <atomic>
@@ -23,6 +26,7 @@
 #include "ArcadeHost.h"
 #include "ArcadeIntent.h"
 #include "ArcadeStatus.h"
+#include "ArcadeWatchdog.h"
 
 namespace g1 {
 
@@ -61,9 +65,11 @@ class ArcadeLink {
 
   ArcadeLink();
   // 기동(정책 스레드 밖, 1 회). 실패하면 false + err(기동 거부 이유 — 호출부가 die_startup). 성공하면 summary 에 기동 로그 한 줄.
+  //   시험 주입 G1_ARCADE_FAULT 도 여기서 한 번 읽는다(ArcadeWatchdog.h — 형식이 틀리면 거부, 켜졌으면 fault() 로 호출부가 기동 로그).
   bool open(const OpenArgs& a, std::string& err, std::string& summary);
   // 체류 시작(FSM 스레드, 정책 스레드 전). 측정 자세 q 에 비유한 값이 있으면 false — 체류를 시작하지 않는다(refused() = true,
   // 호출부가 kp 0 · Passive). 그 밖엔 ArcadeHost::enter(측정) · 의도 칸 체류 시작 리셋 · 직전 q 칸 = 측정 q · 상태 칸 틱 0.
+  // 거부든 아니든 먼저: 틱 건강(last 0 · 실패 0 — 첫 틱 전엔 멈춤 판정 안 함) · 버린 이벤트 계수(누적 · 창) · 주입 훅의 남은 창 = 0.
   bool enter(const ArcadeSense& measured, const float* default_q);   // default_q = 슬롯 default_joint_pos(29) — 거부 때 직전 q 의 비유한 칸을 채운다
   bool refused() const noexcept { return refused_.load(std::memory_order_relaxed); }
 
@@ -74,9 +80,23 @@ class ArcadeLink {
   void run_q_des(std::array<float, 29>& out);                   // 1 kHz FSM 스레드 — 할당 0(호출부 버퍼에 복사)
 
   const ArcadeHost& host() const noexcept { return host_; }
-  // 실기에서 안 먹는(INTENT_EV_REAL 밖) 이벤트를 버린 기록 — 비트 OR 와 횟수(정책 스레드가 쓴다).
+  // 실기에서 안 먹는(INTENT_EV_REAL 밖) 이벤트를 버린 기록 — 비트 OR 와 횟수(정책 스레드가 쓴다). 누적 = 이 체류(enter 가 0),
+  // 창 = 정책 루프가 로그 우편함에 실은 뒤 clear_window_dropped() 로 비운다(못 실었으면 다음 창으로 이어 쌓인다).
   uint32_t dropped_event_bits() const noexcept { return dropped_event_bits_; }
   uint32_t dropped_event_count() const noexcept { return dropped_event_count_; }
+  uint32_t window_dropped_bits() const noexcept { return win_drop_bits_; }
+  uint32_t window_dropped_count() const noexcept { return win_drop_count_; }
+  void clear_window_dropped() noexcept { win_drop_bits_ = win_drop_count_ = 0; }
+
+  // 정책 틱 감시(ArcadeWatchdog.h). last_tick_ns = 마지막 tick 이 q_des 잠금 단계를 지난 시각(steady_clock ns, 실패 틱 포함 — enter 가
+  // 0). fail_streak = TickOut.ok == false 연속 수(성공 틱에 0). policy_dead = 100 ms 멈춤 ∨ 실패 5 연속 — FSM 의 등록된 검사가 Passive.
+  int64_t last_tick_ns() const noexcept { return health_.last_tick_ns(); }
+  int fail_streak() const noexcept { return health_.fail_streak(); }
+  bool policy_dead(int64_t now_ns) const noexcept {
+    return arcade_wd::stalled(last_tick_ns(), now_ns) || fail_streak() >= arcade_wd::FAIL_LIMIT;
+  }
+  arcade_wd::Dead dead_verdict(int64_t now_ns) const noexcept { return health_.verdict(now_ns); }
+  const arcade_wd::Fault& fault() const noexcept { return fault_.f; }   // G1_ARCADE_FAULT(open 이 읽음 — 꺼짐 = None)
 
  private:
   ArcadeHost host_;
@@ -86,7 +106,10 @@ class ArcadeLink {
   arcade::Intent intent_{};                    // events 는 open 에서 용량을 잡는다(push_back 이 할당하지 않게)
   arcade::ObservableState obs_{};              // objects 는 늘 빈 채(로봇엔 물체 관측이 없다)
   uint32_t status_tick_ = 0;
-  uint32_t dropped_event_bits_ = 0, dropped_event_count_ = 0;
+  uint32_t dropped_event_bits_ = 0, dropped_event_count_ = 0;   // 이 체류 누적
+  uint32_t win_drop_bits_ = 0, win_drop_count_ = 0;             // 로그 창(우편함에 실은 뒤 비움)
+  arcade_wd::TickHealth health_;                                // 정책 틱 감시(원자 — FSM 이 읽는다)
+  arcade_wd::FaultInjector fault_;                              // G1_ARCADE_FAULT(꺼짐 = 분기 하나)
   std::atomic<bool> refused_{false};
   std::array<float, 29> q_last_{};             // 1 kHz 의 «직전 q» — enter 가 측정 자세로 채운다(0 rad 를 내지 않는다)
 };

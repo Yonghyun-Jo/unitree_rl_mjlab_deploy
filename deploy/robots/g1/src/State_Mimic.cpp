@@ -17,6 +17,8 @@
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #if G1_HAVE_ARCADE
 #include "ArcadeLink.h"            // 아케이드 경로(G1_ARCADE=1): 의도 칸 → core → q_des · 아케이드 상태 칸 (판정 = ArcadeGate.h)
+#include "ArcadeLogMailbox.h"      // 정책 스레드 → 로그 스레드 한 칸 우편함(1 Hz 로그는 정책 스레드 밖)
+#include "ArcadeWatchdog.h"        // 밀린 틱 몰아치기 금지 · 정책 멈춤/추론 실패 감시(FSM 1 kHz 검사 → Passive)
 #endif
 #include <atomic>
 #include <cstdlib>     // getenv (G1_POLICY_SLOT)
@@ -214,6 +216,7 @@ static bool g_commanded_upright() {
 // 돈다(Mimic_Dance1_subject2 는 옛 경로 그대로). 둘 다 생성자(main 스레드)에서 한 번 쓰고, FSM · 정책 스레드는 그 뒤에 읽기만 한다.
 static g1::ArcadeLink* g_arc = nullptr;
 static const State_Mimic* g_arc_owner = nullptr;
+static g1::ArcadeLogMailbox* g_arc_log = nullptr;   // 정책 스레드 → 로그 스레드(arcade_open_ 이 만든다 — 프로세스 끝까지 산다)
 #endif
 
 // Deploy-clean controller (1:1 with mjlab_g1_motion loco_controller.py; golden-verified).
@@ -1278,6 +1281,9 @@ void State_Mimic::mon_log_summary()
         spdlog::info("  arcade     : 최종 role {} (core mode{}) · 정책 틱 {} · tick_us 최대 {} µs",
                      (r >= 0 && r < (int)roles.size()) ? roles[r] : std::string("?"), g_arc->host().info().mode,
                      g_arc->host().ticks(), g_arc->host().max_tick_us());
+        if (g_arc->dropped_event_count() > 0)   // 정책 스레드 계수 — join 뒤라 읽어도 된다
+            spdlog::info("  arcade     : 실기에서 안 먹는 이벤트 0x{:x} 버림 (이 체류 {} 회)", g_arc->dropped_event_bits(),
+                         g_arc->dropped_event_count());
     }
 #endif
     if (mon_clamp_joint_ >= 0)
@@ -2202,6 +2208,18 @@ void State_Mimic::run()
     std::array<float, 29> arc_q;
     std::vector<float> off_q;
     if (arc) g_arc->run_q_des(arc_q); else off_q = env->action_manager->processed_actions();
+    // 정책 감시(ArcadeWatchdog.h): 100 ms 멈춤 ∨ 추론 실패 5 연속이면 래치하고 이 틱 명령부터 kp 0(감쇠만 — Passive 와 같은 꼴). 같은 FSM 틱
+    // 끝의 등록된 검사가 Passive 로 보낸다. 래치는 여기서 — 검사(post_run 뒤)에서 kp 를 바꾸면 exit() 의 join 전에 발행되지 않는다.
+    // 1 kHz — 원자 읽기 셋 · 시계 한 번(vDSO), 할당 · I/O 없음(로그는 검사가).
+    if (arc && !arc_dead_) {
+        const int64_t now = g1::arcade_wd::now_ns();
+        if (const g1::arcade_wd::Dead d = g_arc->dead_verdict(now); d != g1::arcade_wd::Dead::No) {
+            arc_dead_ = static_cast<int>(d);
+            arc_dead_age_ms_ = static_cast<float>(now - g_arc->last_tick_ns()) * 1e-6f;
+            arc_dead_streak_ = g_arc->fail_streak();
+            for (auto& mc : lowcmd->msg_.motor_cmd()) mc.kp() = 0;
+        }
+    }
     const ActView action = arc ? ActView{arc_q.data(), arc_q.size()} : ActView{off_q.data(), off_q.size()};
 #else
     auto action = env->action_manager->processed_actions();   // = raw*scale + offset (target q)
@@ -2289,8 +2307,9 @@ void State_Mimic::run()
 // g_poll_vr — 키보드 이동·모드·자세 키 · GuiCtrl 0x6704/0x6705 · VR · 리모컨 스틱·십자키) · 모드 전환 · slew · 클립 · mode5 · 사지 ·
 // env->step() 을 부르지 않는다(설계 2B §5). FSM 전이(LT+B · p → Passive)는 CtrlFSM 이 그대로 본다.
 // 남는 것: robot->update · z_fk · 기울기 · 넘어짐 관문(core 등급 — ArcadeGate.h) · qd 가드(감시 · crit 래치 · 낮은 자세 Passive) ·
-// 상태 칸 v1(active_mode = core 모드) · 아케이드 상태 칸 · LoopDiag · SafetyLog 1 Hz · run()(1 kHz pos_clamp · NaN 홀드 · q 기록 ·
-// StateDump) · registered_checks · E-stop.
+// 상태 칸 v1(active_mode = core 모드) · 아케이드 상태 칸 · LoopDiag · SafetyLog 1 Hz(둘 다 로그 스레드가 찍는다 — ArcadeLogMailbox.h) ·
+// run()(1 kHz pos_clamp · NaN 홀드 · q 기록 · StateDump) · registered_checks(+ 정책 감시: 100 ms 멈춤 · 추론 실패 5 틱 → Passive,
+// ArcadeWatchdog.h) · E-stop.
 
 // 생성자 끝(PD 를 걸기 전 · 정책 스레드 없음). 실패 = 기동 거부(die_startup — 이유는 critical 로그).
 void State_Mimic::arcade_open_()
@@ -2316,7 +2335,13 @@ void State_Mimic::arcade_open_()
     }
     g_arc = link;
     g_arc_owner = this;
+    g_arc_log = new g1::ArcadeLogMailbox();   // 프로세스 끝까지 산다(g_arc 와 같다)
     spdlog::info("[arcade] {}", summary);
+    if (const g1::arcade_wd::Fault& f = link->fault(); f.kind != g1::arcade_wd::Fault::None)
+        spdlog::critical("[arcade] 🔴 시험 주입 켜짐 G1_ARCADE_FAULT={} — 정책 틱 {} 에서 {} (프로세스에 한 번). 실기 운용 금지 — 지우고 다시 띄울 것",
+                         std::getenv("G1_ARCADE_FAULT"), f.tick,
+                         f.kind == g1::arcade_wd::Fault::Stall ? fmt::format("{} ms 멈춤", f.arg)
+                                                               : fmt::format("{} 틱 추론 실패(ok=false)", f.arg));
     // 묶음 · ORT 세션 · 예열이 끝난 뒤 — 지금 잡힌 쪽(모델 무게 · 세션)을 잠근다. 한도가 모자라면 생략, 실패해도 기동은 계속(R-B7)
     spdlog::info("[arcade] mlockall={}", g1::arcade_try_mlock_current());
     spdlog::warn("[arcade] 아케이드 경로 — 정책 틱 = core(의도 칸 {}). g1_ctrl 키보드 이동·모드·자세 키 · GUI/중계(0x6704/0x6705) · "
@@ -2327,6 +2352,29 @@ void State_Mimic::arcade_open_()
     // 체류 시작 때 측정 자세가 비유한이면(arcade_enter_ 가 거부) 다음 FSM 틱에 Passive
     this->registered_checks.emplace_back(
         std::make_pair([]()->bool{ return g_arc && g_arc->refused(); }, FSMStringMap.right.at("Passive")));
+    // 정책 스레드 감시(2026-11-09 결정): 마지막 정책 틱 뒤 100 ms 새 틱이 안 끝남(policy_stall) ∨ 추론 실패 5 틱 연속(inference_fail)
+    // → Passive. 그동안 1 kHz 는 나이 확인 없이 직전 q_des 를 내고 있었다. 판정 = ArcadeWatchdog.h(첫 틱 전엔 안 봄). 감시용 새 스레드 없음.
+    //    판정 = run()(1 kHz)이 래치(arc_dead_) — 그 틱에 kp 0 을 실어 보낸 뒤 여기서 Passive. 로그 · 사건 줄은 여기(트립 한 번).
+    this->registered_checks.emplace_back(
+        std::make_pair([this]()->bool{
+            if (!arc_dead_) return false;
+            const auto d = static_cast<g1::arcade_wd::Dead>(arc_dead_);
+            if (!mon_exit_reason_) {   // 트립 한 번(이 FSM 틱 뒤 Passive) — 사건 줄은 다른 트립(bad_orientation)과 같은 자리
+                mon_exit_reason_ = g1::arcade_wd::dead_reason(d);
+                if (d == g1::arcade_wd::Dead::Stall) {
+                    spdlog::error("[safety] policy_stall TRIPPED  마지막 정책 틱 뒤 {:.1f} ms (limit {:.0f}) -> kp 0 · Passive",
+                                  arc_dead_age_ms_, g1::arcade_wd::STALL_LIMIT_NS * 1e-6);
+                    g1::SafetyLog::shared().event("policy_stall", -1, "", arc_dead_age_ms_, g1::arcade_wd::STALL_LIMIT_NS * 1e-6f,
+                                                  "-> Passive");
+                } else {
+                    spdlog::error("[safety] inference_fail TRIPPED  추론 실패 {} 틱 연속 (limit {}) -> kp 0 · Passive", arc_dead_streak_,
+                                  g1::arcade_wd::FAIL_LIMIT);
+                    g1::SafetyLog::shared().event("inference_fail", -1, "", static_cast<float>(arc_dead_streak_),
+                                                  static_cast<float>(g1::arcade_wd::FAIL_LIMIT), "-> Passive");
+                }
+            }
+            return true;
+        }, FSMStringMap.right.at("Passive")));
 }
 
 // enter() — env->reset() 이 방금 update() 한 측정 상태로. 정책 스레드 전.
@@ -2334,11 +2382,16 @@ bool State_Mimic::arcade_enter_()
 {
     g1::ArcadeSense m;
     g1::sense_of(env->robot->data, m);
+    arc_dead_ = 0;                // 감시 래치 — 체류마다(ArcadeLink::enter 가 틱 건강도 0 으로)
     if (g_arc->enter(m, env->robot->data.default_joint_pos.data())) {
         const auto& roles = g_arc->host().role_names();
         const int r = g_arc->host().info().role;
         spdlog::info("[arcade] 체류 시작 — role {} · q_des = 측정 자세 · 의도 칸 기준선(재무장 = 축 중립 한 번)",
                      (r >= 0 && r < (int)roles.size()) ? roles[r] : std::string("?"));
+        // 로그 스레드(보통 우선순위 — run_logger 가 SCHED_OTHER 로 내린다). 지난 체류 것은 exit 가 join 했다(혹시 남았으면 먼저 거둔다).
+        arcade_exit_();
+        arcade_log_running_.store(true);
+        arcade_log_thread_ = std::thread([this] { g_arc_log->run_logger(arcade_log_running_); });
         return true;
     }
     // 측정 관절각에 비유한 값 — 체류를 시작하지 않는다. 잡지 않는다(kp 0 — Passive 와 같은 감쇠만), 다음 FSM 틱의 검사가 Passive 로.
@@ -2346,6 +2399,15 @@ bool State_Mimic::arcade_enter_()
     if (!mon_exit_reason_) mon_exit_reason_ = "arcade_nonfinite_pose";
     spdlog::critical("[arcade] 측정 관절각에 비유한 값 — 아케이드 체류를 시작하지 않는다 (kp 0) -> Passive");
     return false;
+}
+
+// exit()(FSM 스레드, 정책 스레드 join 뒤) — 로그 스레드를 깨워(100 ms 를 기다리지 않게) 마지막 창을 찍고 끝나기를 기다린다.
+void State_Mimic::arcade_exit_()
+{
+    if (!arcade_log_thread_.joinable()) return;
+    arcade_log_running_.store(false);
+    g_arc_log->wake();
+    arcade_log_thread_.join();
 }
 
 // 정책 스레드 — 아케이드 qd 가드. 옛 1867-1952 의 감시 · crit 래치 · 낮은 자세 Passive 를 그대로 두고, warn 래치의 풀기 · 처분만
@@ -2394,20 +2456,43 @@ void State_Mimic::arcade_qd_guard_(const g1::arcade_gate::CoreSafety& cs)
 }
 
 // 정책 스레드 본체(enter() 의 정책 스레드가 rtprio 를 올린 직후 부른다). 체류 하나 = 이 함수 한 번.
+// 박자 = arcade_wd::next_deadline — 밀리면(멈춤 · 과부하) 놓친 틱을 몰아 돌리지 않고 «늦게 끝난 시각 + dt» 로 다시 잡는다(놓친 수는
+// 로그). 멈춤 · 연속 추론 실패의 처분은 FSM 1 kHz 의 등록된 검사(arcade_open_ — Passive). 이 스레드는 로그를 찍지 않는다: 창(1 s)이
+// 닫히면 우편함(ArcadeLogMailbox.h)에 넣기만 — spdlog(동기) · SafetyLog(fflush)는 로그 스레드가.
 void State_Mimic::arcade_policy_loop_()
 {
-    using clock = std::chrono::high_resolution_clock;
+    using clock = std::chrono::steady_clock;
     g1::arcade_pretouch_stack();   // 스택 256 KiB 선터치 — 이 스레드 스택은 생성자 mlockall 뒤에 생겨 안 잠겼다(ArcadeLink.h)
     g1::ArcadeLink& A = *g_arc;
-    const auto dt = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(env->step_dt));
-    auto sleepTill = clock::now() + dt;
+    const int64_t dt_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(env->step_dt)).count();
+    int64_t deadline = g1::arcade_wd::now_ns();   // 이번 틱이 깨어나기로 한 시각(첫 틱 = 지금)
     LoopDiag diag(env->step_dt * 1000.0, 1.0);   // 옛 루프와 같은 속도계 — 구간 이름만 아케이드 것으로
     static const char* SEG[6] = {"intent", "safe", "core", "-", "-", "status"};
-    char d_buf[768];
     auto d_prev = clock::now();
     bool d_first = true;
-    int bad_ticks = 0;            // 창(1 s) 안 TickOut.ok == false(추론 실패 · 비유한 q_des — 1 kHz 는 직전 q)
+    int bad_ticks = 0;            // 창 안 TickOut.ok == false(추론 실패 · 비유한 q_des — 1 kHz 는 직전 q). 못 실으면 다음 창으로 이어 쌓는다
+    uint32_t skipped = 0;         // 창 안 밀려서 건너뛴 틱 수(next_deadline). 같은 규칙
     g1::ArcadeSense sense;
+    // 창 하나 = 우편함 항목 하나(할당 · 락 · 시스템 콜 0). 칸이 차 있으면 버리고 계수(bad · skipped · 버린 이벤트)만 다음 창으로 이어 간다.
+    auto post_window = [&] {
+        g1::ArcadeLogItem it{};
+        diag.format(it.diag, sizeof it.diag, SEG);
+        it.overrun = diag.overrun() > 0;
+        it.bad_ticks = bad_ticks;
+        it.skipped_ticks = skipped;
+        it.clamp_ticks = mon_clamp_ticks_; it.clamp_max = mon_clamp_max_; it.clamp_joint = mon_clamp_joint_;
+        it.rate_ticks = mon_rate_ticks_;   it.rate_max = mon_rate_max_;   it.rate_joint = mon_rate_joint_;
+        it.tilt_deg = mon_tilt_max_deg_;
+        it.jname = &jname;
+        it.dropped_event_bits = A.window_dropped_bits();     // 정책 스레드 소유 계수 — 여기(정책 스레드)서 읽는다
+        it.dropped_event_count = A.window_dropped_count();
+        if (g_arc_log->post(it)) {
+            bad_ticks = 0;
+            skipped = 0;
+            A.clear_window_dropped();
+        }
+        diag.reset();
+    };
     while (policy_thread_running)
     {
         const auto d_t0 = clock::now();
@@ -2421,7 +2506,7 @@ void State_Mimic::arcade_policy_loop_()
             orient_gate_.store(g1::arcade_gate::orient_gate(cs, g_recent_high.value()));
         }
         g1::sense_of(rd, sense);
-        const g1::ArcadeLink::Tick t = A.tick(sense);   // 의도 칸 → poll → core begin_tick → ORT → end_tick → q_des 잠금
+        const g1::ArcadeLink::Tick t = A.tick(sense);   // 의도 칸 → poll → core begin_tick → ORT → end_tick → q_des 잠금 · 틱 건강 기록
         ++env->episode_length;                          // 체류 시간(exit 요약) — 옛 경로는 env->step() 이 센다
         if (!t.out.ok) ++bad_ticks;
         const auto d_t_core = clock::now();
@@ -2443,21 +2528,14 @@ void State_Mimic::arcade_policy_loop_()
             diag.seg(5, ms(d_t_safe, d_t1));
             diag.tick(ms(d_t0, d_t1), d_first ? 0.0 : ms(d_prev, d_t0));
             d_prev = d_t0; d_first = false;
-            if (diag.window_closed()) {
-                diag.format(d_buf, sizeof d_buf, SEG);
-                if (diag.overrun() > 0) spdlog::warn("[diag:policy] {}", d_buf + 7);
-                else                    spdlog::info("[diag:policy] {}", d_buf + 7);
-                if (bad_ticks > 0)
-                    spdlog::warn("[arcade] 추론 실패 · 비유한 q_des {} 틱 (지난 1 s) — 그 틱은 q_des 를 바꾸지 않았다", bad_ticks);
-                bad_ticks = 0;
-                g1::SafetyLog::shared().sample(mon_clamp_ticks_, mon_clamp_max_, mon_clamp_joint_,
-                                   mon_rate_ticks_, mon_rate_max_, mon_rate_joint_,
-                                   mon_tilt_max_deg_, &jname);
-                diag.reset();
-            }
+            if (diag.window_closed()) post_window();
         }
-        std::this_thread::sleep_until(sleepTill);
-        sleepTill += dt;
+        if (!policy_thread_running) break;   // exit() 가 기다리는 중 — 한 틱을 더 자지 않는다(FSM 스레드가 join 에서 덜 멈춘다)
+        deadline = g1::arcade_wd::next_deadline(deadline, g1::arcade_wd::now_ns(), dt_ns, skipped);
+        std::this_thread::sleep_until(clock::time_point(std::chrono::duration_cast<clock::duration>(std::chrono::nanoseconds(deadline))));
     }
+    // 체류 끝(감시 Passive · p · E-stop): 닫히지 않은 마지막 창도 싣는다 — 멈춤 · 추론 실패로 끝났다면 그 직전 틱들(늦은 틱의 work ·
+    // period)이 여기 있다. 로그 스레드는 exit 에서 이 스레드 join «뒤» 에 마지막으로 칸을 비운다.
+    if (diag.ticks() > 0) post_window();
 }
 #endif  // G1_HAVE_ARCADE

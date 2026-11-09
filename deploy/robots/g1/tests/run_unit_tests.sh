@@ -64,6 +64,9 @@ ARCADE_DIR="${G1_ARCADE_DIR:-$(cd .. && pwd)/third_party/g1_arcade}"
 ARCADE_SHM_FLAGS=()
 [ -f "$ARCADE_DIR/core/include/arcade/types.h" ] && ARCADE_SHM_FLAGS=(-DG1_HAVE_ARCADE -I"$ARCADE_DIR/core/include")
 [ -f test_arcade_shm.cpp ] && run test_arcade_shm -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include "${ARCADE_SHM_FLAGS[@]}" -pthread test_arcade_shm.cpp
+# 아케이드 정책 스레드 감시(ArcadeWatchdog.h — 밀린 틱 몰아치기 금지 · 100 ms 멈춤 · 추론 실패 5 틱 · G1_ARCADE_FAULT 훅) + 로그 우편함
+# (ArcadeLogMailbox.h — 정책 스레드 post 할당 · syscall 0). 헤더 온리라 늘 돈다. 릴리스 빌드와 같은 -O3 -DNDEBUG.
+[ -f test_arcade_watchdog.cpp ] && run test_arcade_watchdog -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include -pthread test_arcade_watchdog.cpp
 # 아케이드 경로 판정(ArcadeGate.h — 넘어짐 관문 · qd_warn 처분을 core 등급으로) + 아케이드 FSM 설정(ArcadeConfig.h — 실제 config.yaml
 # 에서 위험 전이를 지운 노드, yaml-cpp) 대조. 헤더 온리라 늘 돈다 —
 # 한 정책 틱의 malloc 수준 할당 0(ArcadeLink · 묶음)은 아래 아케이드 CMake 갈래의 같은 시험 타깃이 더한다.

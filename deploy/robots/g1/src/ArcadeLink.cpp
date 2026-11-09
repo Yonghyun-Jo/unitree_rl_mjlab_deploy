@@ -1,11 +1,16 @@
 // ArcadeLink — 머리 설명은 include/ArcadeLink.h. CMake 가 G1_ARCADE_DIR 이 있을 때만 이 파일을 넣는다(ArcadeHost.cpp 와 같다).
 #if G1_HAVE_ARCADE
 #include "ArcadeLink.h"
+#include "ArcadeLogMailbox.h"
+#include "SafetyLog.h"
 
+#include <spdlog/spdlog.h>
 #include <yaml-cpp/yaml.h>
 
 #include "arcade_host/bundle_loader.h"  // arcade::md5_file(묶음 manifest md5 — 기동 로그)
 
+#include <pthread.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -14,7 +19,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <thread>
 
 namespace g1 {
 
@@ -27,6 +34,12 @@ bool ArcadeLink::open(const OpenArgs& a, std::string& err, std::string& summary)
   }
   if (a.bundle_dir.empty()) {
     err = "G1_ARCADE_BUNDLE(아케이드 묶음 폴더 — g1_arcade tools/arcade bundle 이 만든 것)이 없다";
+    return false;
+  }
+  // 시험 주입 훅(V2) — 기동 때 한 번만 읽는다(틱 경로는 미리 읽은 값의 분기뿐). 오타로 주입 없이 시험이 돌지 않게 틀린 형식은 거부.
+  fault_ = arcade_wd::FaultInjector{};
+  if (const char* fe = std::getenv("G1_ARCADE_FAULT"); !arcade_wd::parse_fault(fe, fault_.f)) {
+    err = std::string("G1_ARCADE_FAULT='") + fe + "' 형식이 틀렸다 — stall:<tick>:<ms> | fail:<tick>:<n> (tick ≥ 0 · ms/n ≥ 1), 끄려면 지울 것";
     return false;
   }
   // 아케이드 상태 칸(0x6708) — 열기 · flock 이 실패하면 거부(HUD 없이 뜨지 않는다, 검토 M10). 묶음 · ORT 를 싣기 전에(빨리 거부).
@@ -91,6 +104,10 @@ std::string bundle_manifest_info(const std::string& bundle_dir) {
 }
 
 bool ArcadeLink::enter(const ArcadeSense& m, const float* default_q) {
+  health_.reset();          // 첫 틱이 끝나기 전엔 멈춤 판정 안 함(지난 체류의 마지막 틱 시각이 남지 않게 — 거부여도)
+  fault_.enter();           // 주입 훅의 남은 실패 창을 새 체류로 넘기지 않는다
+  dropped_event_bits_ = dropped_event_count_ = 0;   // 버린 이벤트 — 이 체류 누적 · 로그 창
+  win_drop_bits_ = win_drop_count_ = 0;
   bool finite = true;
   for (int i = 0; i < 29; ++i) finite = finite && std::isfinite(m.q[i]);
   refused_.store(!finite, std::memory_order_relaxed);
@@ -114,6 +131,8 @@ bool ArcadeLink::enter(const ArcadeSense& m, const float* default_q) {
 
 ArcadeLink::Tick ArcadeLink::tick(const ArcadeSense& s) noexcept {
   Tick t;
+  const int k = host_.ticks();  // 이 틱 번호(체류 안 0 부터) — 주입 훅만 쓴다
+  if (const int ms = fault_.stall_ms(k)) std::this_thread::sleep_for(std::chrono::milliseconds(ms));  // G1_ARCADE_FAULT=stall(꺼짐 = 0)
   const auto t0 = std::chrono::steady_clock::now();
   ArcadeIntentFrame f{};
   t.frame = read_intent_file(intent_path_.c_str(), f);
@@ -124,9 +143,11 @@ ArcadeLink::Tick ArcadeLink::tick(const ArcadeSense& s) noexcept {
   intent_.move.run = t.in.run != 0;
   intent_.events.clear();  // 용량은 그대로 — 아래 push_back 은 할당하지 않는다
   static constexpr uint32_t kBits[] = {INTENT_EV_JUMP, INTENT_EV_CRAWL, INTENT_EV_GETUP, INTENT_EV_POSTURE_Z, INTENT_EV_POSTURE_N};
-  if (t.in.dropped_events) {  // 실기에서 안 먹는 이벤트 — 센다만(로그는 정책 스레드 밖) · 할당 0 · 시스템 콜 0
+  if (t.in.dropped_events) {  // 실기에서 안 먹는 이벤트 — 센다만(로그 = 정책 루프가 우편함으로 → 로그 스레드) · 할당 0 · 시스템 콜 0
     dropped_event_bits_ |= t.in.dropped_events;
     ++dropped_event_count_;
+    win_drop_bits_ |= t.in.dropped_events;
+    ++win_drop_count_;
   }
   for (uint32_t b : kBits)
     if ((t.in.events & b) && intent_.events.size() < intent_.events.capacity())
@@ -140,6 +161,8 @@ ArcadeLink::Tick ArcadeLink::tick(const ArcadeSense& s) noexcept {
   const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
   t.poll_us = static_cast<int>(us);
   t.out = host_.tick(obs_, intent_);  // obs_.t 는 ArcadeHost 가 틱 번호 × step_dt 로 채운다
+  t.out.ok = fault_.filter_ok(k, t.out.ok);  // G1_ARCADE_FAULT=fail(꺼짐 = 그대로)
+  health_.on_tick(t.out.ok, arcade_wd::now_ns());  // q_des 잠금 단계를 지난 시각 · 연속 실패 수(FSM 감시가 읽는다)
   return t;
 }
 
@@ -221,6 +244,51 @@ std::string arcade_try_mlock_current() {
     return std::string(buf) + basis + ") — 잠그지 않고 계속" + vm_tail();
   }
   return std::string("ok (MCL_CURRENT · ") + basis + " · MCL_FUTURE 안 씀)" + vm_tail();
+}
+
+// ── 로그 스레드(ArcadeLogMailbox.h — 정책 스레드가 창마다 넣은 항목을 찍는다) ─────────────────────────────────────────────────
+// 항목 하나 = 옛 정책 루프의 1 Hz 블록과 같은 줄([diag:policy] · 추론 실패 · SafetyLog 표본) + 건너뛴 틱 · 버린 이벤트 · 못 실은 창.
+static void arcade_log_emit(const ArcadeLogItem& it, uint32_t posts_dropped_new) {
+  const char* d = it.diag;
+  if (std::strncmp(d, "[diag] ", 7) == 0) d += 7;
+  if (it.overrun) spdlog::warn("[diag:policy] {}", d);
+  else spdlog::info("[diag:policy] {}", d);
+  if (it.skipped_ticks > 0)
+    spdlog::warn("[arcade] 밀린 정책 틱 {} 개를 몰아 돌리지 않고 건너뛰었다(다음 틱 = 늦게 끝난 시각 + dt)", it.skipped_ticks);
+  if (it.bad_ticks > 0)
+    spdlog::warn("[arcade] 추론 실패 · 비유한 q_des {} 틱 (지난 창) — 그 틱은 q_des 를 바꾸지 않았다", it.bad_ticks);
+  if (it.dropped_event_count > 0)
+    spdlog::warn("[arcade] 실기에서 안 먹는 이벤트 0x{:x} 버림 ({} 회, 지난 창)", it.dropped_event_bits, it.dropped_event_count);
+  if (posts_dropped_new > 0)
+    spdlog::warn("[arcade] 로그 창 {} 개를 못 실었다(로그 스레드가 1 s 넘게 못 돎) — 그 창들의 [diag] 줄은 없고, 틱 · 이벤트 계수는 "
+                 "이 줄에 합쳤다",
+                 posts_dropped_new);
+  SafetyLog::shared().sample(it.clamp_ticks, it.clamp_max, it.clamp_joint, it.rate_ticks, it.rate_max, it.rate_joint, it.tilt_deg,
+                             it.jname);
+}
+
+void ArcadeLogMailbox::run_logger(std::atomic<bool>& running) {
+  // FSM 스레드(SCHED_FIFO)에서 띄웠으면 그 우선순위를 물려받는다 — 보통(SCHED_OTHER) 으로 내린다(내리기는 권한이 필요 없다).
+  sched_param sp{};
+  sp.sched_priority = 0;
+  if (const int rc = pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp); rc != 0)
+    spdlog::warn("[arcade] 로그 스레드를 SCHED_OTHER 로 못 내렸다: {} — 띄운 스레드의 우선순위로 돈다", std::strerror(rc));
+  uint32_t seen_dropped = posts_dropped();
+  ArcadeLogItem it;
+  for (;;) {
+    {
+      std::unique_lock<std::mutex> lk(m_);
+      cv_.wait_for(lk, std::chrono::milliseconds(kLoggerPeriodMs), [&] { return !running.load(std::memory_order_acquire); });
+    }
+    // running 을 내리는 쪽(exit)은 정책 스레드를 먼저 join 한다 — 내려간 것을 봤다면 그 마지막 post 도 보인다(아래 take 가 마지막 창).
+    const bool stop = !running.load(std::memory_order_acquire);
+    if (take(it)) {
+      const uint32_t pd = posts_dropped();
+      arcade_log_emit(it, pd - seen_dropped);
+      seen_dropped = pd;
+    }
+    if (stop) return;
+  }
 }
 
 // 정책 스레드 스택 선터치(최종 검토 I7) — 머리 설명은 ArcadeLink.h. 따로 된 함수(noinline)라 돌아온 뒤 그 자리를 뒤 호출

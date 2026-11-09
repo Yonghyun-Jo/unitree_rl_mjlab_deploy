@@ -16,6 +16,7 @@
 //      정보(manifest md5 · board · g1_arcade 커밋 · dirty, 없으면 «?» — U5) · enter 의 측정 자세 비유한 = 거부 · enter 직후 run_q_des = 측정 q(0 rad 창 없음) · 한 정책 틱
 //      (의도 칸 읽기 → poll → core 등급 · 관문 · qd 판정 → ArcadeHost::tick → 상태 칸 쓰기)의 우리 코드 malloc · calloc · realloc ·
 //      operator new · free · delete 0(예열 뒤, 걷기 · Space 점프 포함) — glibc 안쪽(open 등)까지 malloc 수준으로 센다.
+//      그 틱들이 기록한 감시 계수기(ArcadeWatchdog.h — last_tick_ns · fail_streak · policy_dead, enter 직후 0)도 대조.
 //      ORT Run 안쪽(부른 곳 = libonnxruntime)은 R-B5 대로 따로 세어 찍기만.
 //   g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include test_arcade_gate.cpp -lyaml-cpp -o /tmp/t && /tmp/t   (①~④)
 //   ⑤ = cmake -S .. -B /tmp/a -DG1_ARCADE_DIR=/home/piene/g1_arcade_2b && cmake --build /tmp/a --target test_arcade_gate &&
@@ -604,6 +605,9 @@ static void arcade_link_tick_allocates_nothing() {
   bool same_q = true;
   for (int i = 0; same_q && i < 29; ++i) same_q = q0[i] == s.q[i];
   chk(same_q, "⑤ enter 직후 run_q_des = 측정 자세(첫 추론 전 0 rad 없음)");
+  chk(link.last_tick_ns() == 0 && link.fail_streak() == 0 && !link.policy_dead(g1::arcade_wd::now_ns() + 10'000'000'000LL),
+      "⑤ enter 직후 틱 건강 0 — 첫 틱 전엔 멈춤 판정 안 함(ArcadeWatchdog.h)");
+  chk(link.fault().kind == g1::arcade_wd::Fault::None, "⑤ G1_ARCADE_FAULT 없음 = 주입 꺼짐");
 
   const mode_table::Row& fb = mode_table::row(1);
   g1::safety::RecentHigh rh;
@@ -654,6 +658,13 @@ static void arcade_link_tick_allocates_nothing() {
   chk(jump_ticks > 0, "⑤ 측정 구간이 점프 role 을 지났다");
   chk(frames == 400 && ok_ticks == 400 && gate_on == 400, "⑤ 프레임 400 · 추론 ok 400 · 관문(걷기 · 점프 = UprightOnly) 늘 켜짐");
   chk(ort_total > 0, "⑤ 대조: 계수기가 ORT Run 안쪽 할당을 본다(살아 있음)");
+  {  // 감시 계수기(같은 실제 틱이 기록했다 — 위 할당 0 에 포함): 성공 틱 뒤 fail 0 · last = 마지막 틱 · 100 ms 넘으면 멈춤
+    const int64_t lt = link.last_tick_ns();
+    chk(lt > 0 && link.fail_streak() == 0, "⑤ 성공 틱 뒤 last_tick_ns > 0 · fail_streak 0");
+    chk(!link.policy_dead(lt + 99'000'000) && link.policy_dead(lt + 100'000'001) &&
+            link.dead_verdict(lt + 100'000'001) == g1::arcade_wd::Dead::Stall,
+        "⑤ policy_dead: 마지막 틱 뒤 99 ms = 살아 있음 · 100 ms 넘음 = Stall");
+  }
 
   // 상태 칸 한 줄 — 칸 대응(core 표 번호 · 안전층 래치 · 의도)
   g1::arcade_status::ArcadeStatusWriter& sw = g1::arcade_status::ArcadeStatusWriter::shared();

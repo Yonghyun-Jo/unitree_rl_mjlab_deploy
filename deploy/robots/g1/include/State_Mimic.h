@@ -29,6 +29,9 @@ public:
         if (policy_thread.joinable()) {
             policy_thread.join();
         }
+#if G1_HAVE_ARCADE
+        arcade_exit_();   // 아케이드 로그 스레드 join — 정책 스레드 «뒤»(그 마지막 창까지 찍고 끝난다)
+#endif
         status_exit_frame_();   // 상태 칸 마지막 줄(active_mode 0) — join 뒤라 쓰는 쪽은 여전히 하나. 원자 저장만(syscall 0)
         mon_log_summary();   // join 이후라 policy_thread 가 쓴 mon_* 가 전부 보인다(경합 없음)
     }
@@ -136,6 +139,16 @@ private:
     bool arcade_enter_();        // enter(): 측정 자세로 체류 시작. false = 측정 비유한 → kp 0 · 다음 FSM 틱에 Passive
     void arcade_policy_loop_();  // 정책 스레드 본체
     void arcade_qd_guard_(const g1::arcade_gate::CoreSafety& cs);   // 감시 · crit 래치 · 낮은 자세 Passive (폴백 모드 강제 없음)
+    void arcade_exit_();         // exit(): 로그 스레드를 깨워 join (정책 스레드 join 뒤 — 없으면 아무것도 안 한다)
+    // 로그 스레드(보통 우선순위 — ArcadeLogMailbox.h): 정책 스레드가 창(1 s)마다 우편함에 넣은 [diag:policy] · 추론 실패 · 건너뛴 틱 ·
+    // 버린 이벤트 · SafetyLog 표본을 찍는다. arcade_enter_ 가 띄우고 arcade_exit_ 가 join(체류 하나 = 스레드 하나, 정책 스레드와 같은 수명).
+    std::thread arcade_log_thread_;
+    std::atomic<bool> arcade_log_running_{false};
+    // 정책 감시 트립 래치(FSM 스레드만 — run() 이 세우고 같은 FSM 틱 끝의 등록된 검사가 Passive 로). 0 = 살아 있음. run() 이 세우는 그
+    // 틱에 kp 0 을 싣는다 — exit() 가 멈춘 정책 스레드를 join 하느라 FSM 이 묶여도 마지막으로 나간 명령은 감쇠뿐이게.
+    int arc_dead_ = 0;                 // g1::arcade_wd::Dead 값
+    float arc_dead_age_ms_ = 0.f;      // 트립 때 마지막 정책 틱 뒤 경과(로그용)
+    int arc_dead_streak_ = 0;          // 트립 때 연속 추론 실패 수(로그용)
 #endif
 };
 
