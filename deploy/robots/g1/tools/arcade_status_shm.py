@@ -23,6 +23,7 @@ import struct
 from typing import Optional
 
 SHM_PATH = "/dev/shm/g1_arcade_status"
+NAMES_PATH = "/dev/shm/g1_arcade_names.json"   # 이름표 파일(g1_ctrl 이 기동 때 한 번 씀 — ArcadeLink.cpp). env G1_ARCADE_NAMES 로 경로가 바뀐다(쓰는 쪽)
 MAGIC = 0x6708          # 0x6701 gui v1 · 0x6702 vr · 0x6703 estop · 0x6704 gui v2 · 0x6705 relay · 0x6706 상태 칸 · 0x6707 의도 칸 과 다르다
 # < little-endian, packed. 이름 순서 = ArcadeStatus.h 칸 순서.
 FMT = "<iIIiiiiiiiiiiiiiIfffff"
@@ -71,6 +72,18 @@ def read(path: str = SHM_PATH) -> Optional[dict]:
         return None
     finally:
         os.close(fd)
+
+
+def read_names(path: str = NAMES_PATH) -> Optional[dict]:
+    """이름표 파일 {proto, boot_id, slot, bundle, roles, skills, notices} 또는 None(없음 · 깨짐 · dict 아님).
+    role · skill · notice 번호를 이름으로 바꾸는 표 — 중계가 boot_id 가 바뀔 때만 다시 읽는다."""
+    import json
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
 
 
 if __name__ == "__main__":

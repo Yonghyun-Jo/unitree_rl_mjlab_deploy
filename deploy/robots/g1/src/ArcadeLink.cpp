@@ -21,11 +21,51 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <thread>
 
 namespace g1 {
 
 ArcadeLink::ArcadeLink() = default;
+
+namespace {
+// 이름표 파일(기동 때 한 번 — open · FSM 스레드, 정책 틱 경로 아님). 상태 칸(0x6708)은 role · skill · notice 를 core 표 번호로만 싣는다 —
+// 중계가 이 표로 이름을 붙인다. G1_ARCADE_NAMES: 없음 = /dev/shm/g1_arcade_names.json · "0" = 안 씀 · 그 밖 = 그 경로(시험).
+// tmp(<경로>.tmp.<pid>)에 쓰고 rename(읽는 쪽이 반쯤 쓴 파일을 보지 않는다). 실패는 기동을 거부하지 않는다 — 경고 한 줄(summary 에 붙는다).
+constexpr const char* kNamesDefaultPath = "/dev/shm/g1_arcade_names.json";
+std::string write_names_file(const ArcadeHost& host, const std::string& slot, const std::string& bundle_dir) {
+  const char* env = std::getenv("G1_ARCADE_NAMES");
+  const std::string path = (env && *env) ? env : kNamesDefaultPath;
+  if (path == "0") return "이름표 (off — G1_ARCADE_NAMES=0)";
+  std::string md5;
+  if (!arcade::md5_file(bundle_dir + "/manifest.json", md5)) md5 = "?";
+  nlohmann::json j;
+  j["proto"] = 2;
+  j["boot_id"] = std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+  j["slot"] = slot;
+  j["bundle"] = md5;
+  j["roles"] = host.role_names();
+  j["skills"] = host.skill_names();
+  nlohmann::json notices = nlohmann::json::object();
+  for (int c = 0; c < arcade::kNoticeCount; ++c) notices[std::to_string(c)] = arcade::notice_text(c);
+  j["notices"] = notices;
+  const std::string tmp = path + ".tmp." + std::to_string(static_cast<long>(::getpid()));
+  bool ok = false;
+  {
+    std::ofstream f(tmp, std::ios::out | std::ios::trunc);
+    if (f) {
+      f << j.dump() << '\n';
+      f.flush();
+      ok = f.good();
+    }
+  }
+  if (ok && std::rename(tmp.c_str(), path.c_str()) == 0) return "이름표 " + path;
+  std::remove(tmp.c_str());
+  const std::string w = "경고: 이름표 파일 " + path + " 을 못 썼다(" + std::strerror(errno) + ") — 중계는 번호로 보낸다";
+  spdlog::warn("[arcade] {}", w);
+  return w;
+}
+}  // namespace
 
 bool ArcadeLink::open(const OpenArgs& a, std::string& err, std::string& summary) {
   if (!arcade_gate::ids_identity(a.joint_ids_map)) {
@@ -79,6 +119,7 @@ bool ArcadeLink::open(const OpenArgs& a, std::string& err, std::string& summary)
                 a.bundle_dir.c_str(), host_.session_count(), role_list.c_str(), a.slot_name.c_str(), host_.session_count(),
                 intent_path_.c_str(), sw.on() ? sw.path() : "(off — G1_ARCADE_STATUS_SHM=0)");
   summary = std::string(buf) + " · " + bundle_manifest_info(a.bundle_dir);  // 묶음 출처(정보만 — 거부 조건 아님, 검토 M4)
+  summary += " · " + write_names_file(host_, a.slot_name, a.bundle_dir);     // 이름표 파일(기동 때 한 번 · 실패해도 기동은 계속)
   return true;
 }
 

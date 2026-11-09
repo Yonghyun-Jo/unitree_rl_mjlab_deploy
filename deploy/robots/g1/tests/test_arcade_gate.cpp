@@ -38,6 +38,10 @@
 #endif
 
 #include <yaml-cpp/yaml.h>
+#if G1_HAVE_ARCADE
+#include <fstream>
+#include <iterator>
+#endif
 
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -506,6 +510,8 @@ static void arcade_link_tick_allocates_nothing() {
   const std::string base = "/dev/shm/g1_arcade_gate_test_" + std::to_string(getpid());
   const std::string ipath = base + "_intent", spath = base + "_status";
   setenv("G1_ARCADE_STATUS_SHM", spath.c_str(), 1);
+  const std::string npath = base + "_names.json";   // 이름표 파일(Task 3) — 실제 /dev/shm/g1_arcade_names.json 을 건드리지 않는다
+  setenv("G1_ARCADE_NAMES", npath.c_str(), 1);
 
   // 묶음의 처음 role 슬롯 → 그 슬롯 deploy.yaml 의 게인 · joint_ids_map(State_Mimic 이 env->robot->data 에서 읽는 값과 같은 원천)
   std::string slot, err, summary;
@@ -587,6 +593,39 @@ static void arcade_link_tick_allocates_nothing() {
   std::printf("  · open: %s\n", summary.c_str());
   chk(summary.find("manifest md5 ") != std::string::npos && summary.find("status " + spath) != std::string::npos,
       "U5 기동 요약 한 줄에 묶음 정보 · 상태 칸 경로");
+
+  {  // 이름표 파일(Task 3): open 이 한 번 쓴다 — roles · skills = core 표 순서 그대로 · notices 에 code 0 = "" · 상태 칸 배치는 그대로
+    std::string md5;
+    arcade::md5_file(std::string(bundle) + "/manifest.json", md5);
+    nlohmann::json j;
+    {
+      std::ifstream nf(npath);
+      const std::string txt((std::istreambuf_iterator<char>(nf)), std::istreambuf_iterator<char>());
+      chk(nlohmann::json::accept(txt), "names_file: 파일이 있고 JSON");
+      j = nlohmann::json::parse(txt, nullptr, false);
+      if (j.is_discarded()) j = nlohmann::json::object();
+    }
+    chk(j.value("proto", 0) == 2 && j.value("slot", "") == slot && j.value("bundle", "") == md5, "names_file: proto 2 · slot · bundle md5");
+    chk(j.contains("boot_id") && j["boot_id"].is_string() && !j["boot_id"].get<std::string>().empty() &&
+            j["boot_id"].get<std::string>().find_first_not_of("0123456789") == std::string::npos,
+        "names_file: boot_id = 십진 ns 문자열");
+    chk(j.contains("roles") && j["roles"].get<std::vector<std::string>>() == link.host().role_names(), "names_file: roles == role_names()");
+    chk(j.contains("skills") && j["skills"].get<std::vector<std::string>>() == link.host().skill_names(), "names_file: skills == skill_names()");
+    bool nt = j.contains("notices") && j["notices"].is_object() && (int)j["notices"].size() == arcade::kNoticeCount &&
+              j["notices"].value("0", "x") == "";
+    for (int c = 0; nt && c < arcade::kNoticeCount; ++c) nt = j["notices"].value(std::to_string(c), "?") == arcade::notice_text(c);
+    chk(nt, "names_file: notices 0..kNoticeCount-1 == notice_text(code) · code 0 은 \"\"");
+    // "0" → 안 쓴다 · 쓰기 실패(없는 폴더)는 기동을 거부하지 않는다
+    std::remove(npath.c_str());
+    setenv("G1_ARCADE_NAMES", "0", 1);
+    { g1::ArcadeLink l1; std::string e1, s1;
+      chk(l1.open(a, e1, s1) && ::access(npath.c_str(), F_OK) != 0, "names_file: G1_ARCADE_NAMES=0 → 안 쓰고 기동 성공"); }
+    setenv("G1_ARCADE_NAMES", "/nonexistent_g1_arcade_gate_dir/names.json", 1);
+    { g1::ArcadeLink l2; std::string e2, s2;
+      chk(l2.open(a, e2, s2) && s2.find("이름표") != std::string::npos, "names_file: 쓰기 실패 → 기동 성공 + 요약에 경고 한 줄"); }
+    setenv("G1_ARCADE_NAMES", npath.c_str(), 1);
+    std::remove(npath.c_str());
+  }
 
   // 서 있는 상태(슬롯 기본 자세 · 직립 · 속도 0)
   FakeData fd;
