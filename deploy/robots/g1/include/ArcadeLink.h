@@ -74,6 +74,9 @@ class ArcadeLink {
   void run_q_des(std::array<float, 29>& out);                   // 1 kHz FSM 스레드 — 할당 0(호출부 버퍼에 복사)
 
   const ArcadeHost& host() const noexcept { return host_; }
+  // 실기에서 안 먹는(INTENT_EV_REAL 밖) 이벤트를 버린 기록 — 비트 OR 와 횟수(정책 스레드가 쓴다).
+  uint32_t dropped_event_bits() const noexcept { return dropped_event_bits_; }
+  uint32_t dropped_event_count() const noexcept { return dropped_event_count_; }
 
  private:
   ArcadeHost host_;
@@ -83,6 +86,7 @@ class ArcadeLink {
   arcade::Intent intent_{};                    // events 는 open 에서 용량을 잡는다(push_back 이 할당하지 않게)
   arcade::ObservableState obs_{};              // objects 는 늘 빈 채(로봇엔 물체 관측이 없다)
   uint32_t status_tick_ = 0;
+  uint32_t dropped_event_bits_ = 0, dropped_event_count_ = 0;
   std::atomic<bool> refused_{false};
   std::array<float, 29> q_last_{};             // 1 kHz 의 «직전 q» — enter 가 측정 자세로 채운다(0 rad 를 내지 않는다)
 };

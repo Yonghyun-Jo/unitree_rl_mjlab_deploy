@@ -101,12 +101,12 @@ static void event_applied_once_per_event_seq() {
     f.seq = ++seq;                                                  // 같은 event_seq 로 하트비트만
     r = poll_intent(&f, st);
     chk(r.events == 0, "같은 event_seq 는 다시 안 먹는다");
-    f = mk(++seq, 0, 0, 0, 0, INTENT_EV_CRAWL | INTENT_EV_BOX, 42, 0);
+    f = mk(++seq, 0, 0, 0, 0, INTENT_EV_CRAWL | INTENT_EV_POSTURE_Z, 42, 0);
     r = poll_intent(&f, st);
-    chk(r.events == (INTENT_EV_CRAWL | INTENT_EV_BOX), "새 event_seq 의 비트 묶음");
-    f = mk(++seq, 0, 0, 0, 0, 0x80 | INTENT_EV_LIE, 43, 0);
+    chk(r.events == (INTENT_EV_CRAWL | INTENT_EV_POSTURE_Z), "새 event_seq 의 비트 묶음");
+    f = mk(++seq, 0, 0, 0, 0, 0x8000 | INTENT_EV_POSTURE_N, 43, 0);
     r = poll_intent(&f, st);
-    chk(r.events == INTENT_EV_LIE, "모르는 비트는 거른다");
+    chk(r.events == INTENT_EV_POSTURE_N, "모르는 비트는 거른다");
     // 체류 시작 직후 처음 보는 프레임의 event_seq 는 기준선만(체류 전에 눌린 이벤트가 재생되지 않는다)
     IntentPollState s2; reset_for_stay_start(s2);
     f = mk(1, 0, 0, 0, 0, INTENT_EV_GETUP, 9, 10);
@@ -269,11 +269,31 @@ static void read_intent_file_allocates_nothing() {
     std::remove(p.c_str()); ::rmdir(dir);
 }
 
+// 실기 마스크 — 서기(1)·눕기(3)만 통과, F · b/h/c · 상자 · 옛 눕기는 버리고 센다(로그는 Task 2 의 우편함 몫)
+static void intent_real_mask() {
+    chk(INTENT_EV_REAL == 327, "INTENT_EV_REAL == 327");
+    IntentPollState st; uint32_t seq = arm(st, 10);
+    ArcadeIntentFrame f = mk(++seq, 0, 0, 0, 0, 0, 40);
+    poll_intent(&f, st);
+    f = mk(++seq, 0, 0, 0, 0, 32 | 128 | 16 | 8, 41, 0);
+    IntentApply r = poll_intent(&f, st);
+    chk(r.events == 0, "32|128|16|8 만 실린 프레임 = 적용 이벤트 0");
+    chk(r.dropped_events == (32u | 128u | 16u | 8u), "버린 비트가 dropped_events 에 남는다");
+    f = mk(++seq, 0, 0, 0, 0, 64 | 512 | 1024, 42, 0);
+    r = poll_intent(&f, st);
+    chk(r.events == 64 && r.dropped_events == (512u | 1024u), "posture z 통과 · h/c 버림");
+    f = mk(++seq, 0, 0, 0, 0, 256, 43, 0);
+    r = poll_intent(&f, st);
+    chk(r.events == 256 && r.dropped_events == 0, "posture n(눕기) 통과");
+}
+
 static void event_bits_match_core() {
 #ifdef G1_HAVE_ARCADE
     chk(INTENT_EV_JUMP == static_cast<uint32_t>(arcade::Event::Jump) && INTENT_EV_CRAWL == static_cast<uint32_t>(arcade::Event::Crawl) &&
         INTENT_EV_GETUP == static_cast<uint32_t>(arcade::Event::Getup) && INTENT_EV_LIE == static_cast<uint32_t>(arcade::Event::Lie) &&
         INTENT_EV_BOX == static_cast<uint32_t>(arcade::Event::Box), "event 비트 == core arcade::Event");
+    chk(INTENT_EV_POSTURE_Z == static_cast<uint32_t>(arcade::Event::PostureZ), "INTENT_EV_POSTURE_Z == core PostureZ");
+    chk(INTENT_EV_POSTURE_N == static_cast<uint32_t>(arcade::Event::PostureN), "INTENT_EV_POSTURE_N == core PostureN");
 #else
     std::printf("  skip event_bits_match_core (core 없음 — G1_HAVE_ARCADE 아님)\n");
 #endif
@@ -410,6 +430,7 @@ int main() {
     sticky_event_read_rules();
     stay_start_first_frame_is_baseline();
     event_bits_match_core();
+    intent_real_mask();
     read_intent_file_allocates_nothing();
     read_intent_file_roundtrip();
     status_open_failure_reasons();

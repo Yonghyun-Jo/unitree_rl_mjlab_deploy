@@ -92,9 +92,22 @@ def test_magics_match_and_differ():
 def test_event_bits_match_cpp():
     import arcade_intent_shm as i
     src = _src("ArcadeIntent.h")
-    for name, val in (("JUMP", i.EV_JUMP), ("CRAWL", i.EV_CRAWL), ("GETUP", i.EV_GETUP), ("LIE", i.EV_LIE), ("BOX", i.EV_BOX)):
+    assert i.EVENT_BITS == {"jump": 1, "crawl": 2, "getup": 4, "posture:z": 64, "posture:n": 256}
+    for name, val in (("JUMP", 1), ("CRAWL", 2), ("GETUP", 4), ("POSTURE_Z", 64), ("POSTURE_N", 256)):
         assert int(re.search(r"INTENT_EV_" + name + r"\s*=\s*(\d+)", src).group(1)) == val, name
-    assert [i.EV_JUMP, i.EV_CRAWL, i.EV_GETUP, i.EV_LIE, i.EV_BOX] == [1, 2, 4, 8, 16]
+    assert [i.EV_JUMP, i.EV_CRAWL, i.EV_GETUP] == [1, 2, 4]
+
+
+def test_python_real_mask_matches_header():
+    import arcade_intent_shm as i
+    src = _src("ArcadeIntent.h")
+    consts = {m.group(1): int(m.group(2)) for m in re.finditer(r"INTENT_EV_([A-Z_]+)\s*=\s*(\d+)", src)}
+    expr = re.search(r"INTENT_EV_REAL\s*=\s*([^;]+);", src).group(1)
+    val = 0
+    for tok in re.findall(r"INTENT_EV_([A-Z_]+)", expr):
+        val |= consts[tok]
+    assert val == i.REAL_EVENT_MASK == 327
+    assert "INTENT_EV_ALL" not in src
 
 
 def test_intent_write_read_roundtrip():
@@ -111,9 +124,9 @@ def test_intent_write_read_roundtrip():
         m.write_intent(0.5, -0.25, 1.0, 1, 0, 0, path=p)
         b = m.read(p)
         assert b["seq"] == (a["seq"] + 1) & 0xFFFFFFFF and b["event_seq"] == a["event_seq"], "값이 같아도 seq 는 +1 · 이벤트 없으면 event_seq 그대로"
-        m.write_intent(0, 0, 0, 0, m.EV_JUMP | m.EV_BOX, 30, path=p)
+        m.write_intent(0, 0, 0, 0, m.EV_JUMP | m.EVENT_BITS["posture:z"], 30, path=p)
         c = m.read(p)
-        assert c["events"] == 17 and c["event_age_ms"] == 30 and c["event_seq"] == (a["event_seq"] + 1) & 0xFFFFFFFF
+        assert c["events"] == 65 and c["event_age_ms"] == 30 and c["event_seq"] == (a["event_seq"] + 1) & 0xFFFFFFFF
         assert c["seq"] == (b["seq"] + 1) & 0xFFFFFFFF
         assert m.tmp_path(p) == "%s.%d.tmp" % (p, os.getpid()), "임시 파일 = <dst>.<pid>.tmp(쓰는 쪽이 둘이면 서로 안 덮는다)"
         assert not os.path.exists(m.tmp_path(p)) and not os.path.exists(p + ".tmp"), "os.replace 로 교체하면 임시 파일이 남지 않는다"
@@ -129,7 +142,7 @@ def test_intent_write_read_roundtrip():
         m.write_intent(0, 0, 0, path=p)
         assert m.read(p)["seq"] == 0
         m.write_intent(0, 0, 0, path=p)                                   # seq 0 을 지나도 끈적한 이벤트가 지워지지 않는다
-        assert m.read(p)["events"] == 17
+        assert m.read(p)["events"] == 65
         m.write_intent(float("nan"), 0, 0, path=p)
         assert m.read(p)["fwd"] == 0.0
         m.write_intent(float("inf"), float("-inf"), 0.3, path=p)           # ±inf 는 ±1 이 아니라 0
@@ -168,9 +181,9 @@ def test_event_is_sticky_and_age_grows():
             ages.append(r["event_age_ms"])
         assert ages == [50, 70, 90, 110, 130], ages
         clock[0] += 0.02
-        m.write_intent(0, 0, 0, 0, m.EV_BOX, 0, path=p)                   # 새 이벤트
+        m.write_intent(0, 0, 0, 0, m.EVENT_BITS["posture:n"], 0, path=p)                   # 새 이벤트
         r2 = m.read(p)
-        assert r2["events"] == 16 and r2["event_seq"] == (r1["event_seq"] + 1) & 0xFFFFFFFF and r2["event_age_ms"] == 0
+        assert r2["events"] == 256 and r2["event_seq"] == (r1["event_seq"] + 1) & 0xFFFFFFFF and r2["event_age_ms"] == 0
         m.write_intent(0, 0, 0, 0, m.EV_JUMP, 1 << 40, path=p)            # 감지 말고 포화
         assert m.read(p)["event_age_ms"] == 0xFFFFFFFF
     finally:

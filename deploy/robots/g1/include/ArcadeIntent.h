@@ -49,9 +49,11 @@ static constexpr uint32_t INTENT_EVENT_MAX_AGE_MS = 500;
 static constexpr float    INTENT_NEUTRAL_EPS = 0.05f;
 static constexpr const char* ARCADE_INTENT_PATH = "/dev/shm/g1_arcade_intent";
 
-// core 의 arcade::Event 와 같은 값(types.h: Jump 1 · Crawl 2 · Getup 4 · Lie 8 · Box 16)
+// core 의 arcade::Event 와 같은 값(types.h: Jump 1 · Crawl 2 · Getup 4 · Lie 8 · Box 16 · Interact 32 · PostureZ 64 · PostureB 128 · PostureN 256 …)
 static constexpr uint32_t INTENT_EV_JUMP = 1, INTENT_EV_CRAWL = 2, INTENT_EV_GETUP = 4, INTENT_EV_LIE = 8, INTENT_EV_BOX = 16;
-static constexpr uint32_t INTENT_EV_ALL = INTENT_EV_JUMP | INTENT_EV_CRAWL | INTENT_EV_GETUP | INTENT_EV_LIE | INTENT_EV_BOX;
+static constexpr uint32_t INTENT_EV_POSTURE_Z = 64, INTENT_EV_POSTURE_N = 256;   // 숫자 1(서기) · 숫자 3(눕기)
+// 실기에서 정책에 넘기는 이벤트 = 점프 · 포복 · 일어서기 + 서기(z) · 눕기(n). F(interact 32) · 자세 b/h/c · 상자(16) · 옛 눕기(8)는 버린다(사용자 결정 11-09).
+static constexpr uint32_t INTENT_EV_REAL = INTENT_EV_JUMP | INTENT_EV_CRAWL | INTENT_EV_GETUP | INTENT_EV_POSTURE_Z | INTENT_EV_POSTURE_N;
 
 struct IntentPollState {
     bool     have_frame = false;    // 이 체류에서 유효 프레임을 본 적 있나(없으면 첫 프레임의 event_seq 는 기준선만)
@@ -68,6 +70,7 @@ struct IntentApply {
     float    fwd = 0.f, side = 0.f, turn = 0.f;   // core 에 넘길 값(재무장 전 · 끊김 중 = 0)
     int32_t  run = 0;
     uint32_t events = 0;                          // 이 틱에 core 로 보낼 이벤트 비트(대개 0)
+    uint32_t dropped_events = 0;                  // 새 이벤트 틱에 INTENT_EV_REAL 밖이라 버린 비트(대개 0)
     bool     stale = false;                       // 끊김 중(상태 칸 intent_stale)
     bool     rearmed = false;                     // 재무장 완료 상태(상태 칸 rearmed)
 };
@@ -99,7 +102,10 @@ inline IntentApply poll_intent(const ArcadeIntentFrame* f, IntentPollState& st) 
         st.have_frame = true;
         st.last_event_seq = f->event_seq;               // 적용·버림 모두 소비
         if (ev_changed && !r.stale && f->event_age_ms <= INTENT_EVENT_MAX_AGE_MS)
-            r.events = f->events & INTENT_EV_ALL;
+        {
+            r.events = f->events & INTENT_EV_REAL;
+            r.dropped_events = f->events & ~INTENT_EV_REAL;
+        }
     }
 
     if (valid && !r.stale) {

@@ -54,7 +54,7 @@ bool ArcadeLink::open(const OpenArgs& a, std::string& err, std::string& summary)
   for (size_t i = 0; i < roles.size(); ++i)
     if (roles[i] == "bridge") bridge_role_ = static_cast<int>(i);
   intent_.events.clear();
-  intent_.events.reserve(8);  // 이벤트 비트 5 종(ArcadeIntent.h INTENT_EV_*) — 틱의 push_back 이 이 용량 안
+  intent_.events.reserve(8);  // 이벤트 비트 5 종(ArcadeIntent.h INTENT_EV_REAL) — 틱의 push_back 이 이 용량 안
   obs_ = arcade::ObservableState{};
 
   std::string role_list;
@@ -123,7 +123,11 @@ ArcadeLink::Tick ArcadeLink::tick(const ArcadeSense& s) noexcept {
   intent_.move.turn = t.in.turn;
   intent_.move.run = t.in.run != 0;
   intent_.events.clear();  // 용량은 그대로 — 아래 push_back 은 할당하지 않는다
-  static constexpr uint32_t kBits[] = {INTENT_EV_JUMP, INTENT_EV_CRAWL, INTENT_EV_GETUP, INTENT_EV_LIE, INTENT_EV_BOX};
+  static constexpr uint32_t kBits[] = {INTENT_EV_JUMP, INTENT_EV_CRAWL, INTENT_EV_GETUP, INTENT_EV_POSTURE_Z, INTENT_EV_POSTURE_N};
+  if (t.in.dropped_events) {  // 실기에서 안 먹는 이벤트 — 센다만(로그는 정책 스레드 밖) · 할당 0 · 시스템 콜 0
+    dropped_event_bits_ |= t.in.dropped_events;
+    ++dropped_event_count_;
+  }
   for (uint32_t b : kBits)
     if ((t.in.events & b) && intent_.events.size() < intent_.events.capacity())
       intent_.events.push_back(static_cast<arcade::Event>(b));

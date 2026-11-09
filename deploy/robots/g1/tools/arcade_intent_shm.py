@@ -27,7 +27,11 @@ MAGIC = 0x6707          # 0x6701 gui v1 · 0x6702 vr · 0x6703 estop · 0x6704 g
 FMT = "<iIfffiIII"
 FIELDS = ("magic", "seq", "fwd", "side", "turn", "run", "events", "event_seq", "event_age_ms")
 SIZE = 36
-EV_JUMP, EV_CRAWL, EV_GETUP, EV_LIE, EV_BOX = 1, 2, 4, 8, 16   # = core arcade::Event
+# 실기에서 정책에 넘어가는 이벤트(= C++ INTENT_EV_REAL, core arcade::Event 와 같은 값). F · posture b/h/c · 상자 · 옛 눕기는 실기에서 버린다.
+EVENT_BITS = {"jump": 1, "crawl": 2, "getup": 4, "posture:z": 64, "posture:n": 256}
+REAL_EVENT_MASK = 327
+EV_JUMP, EV_CRAWL, EV_GETUP = EVENT_BITS["jump"], EVENT_BITS["crawl"], EVENT_BITS["getup"]
+assert REAL_EVENT_MASK == sum(EVENT_BITS.values())
 
 assert struct.calcsize(FMT) == SIZE and len(FIELDS) == len(FMT) - 1
 
