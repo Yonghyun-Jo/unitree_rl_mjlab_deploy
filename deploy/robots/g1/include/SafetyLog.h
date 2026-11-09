@@ -92,6 +92,15 @@ public:
                      wall_now(), t, ev, joint, jname ? jname : "", value, limit, detail);
         std::fflush(f_);   // 발산 직전일 수 있다 — 버퍼에 남기지 않는다
     }
+    // 같은 한 줄이되 사건 시각(wall = wall_now() 시계)을 넘겨받는다 — 아케이드 경로는 정책 스레드가 사건을 우편함(ArcadeLogMailbox.h)
+    // 에 넣고 로그 스레드가 ≤ 100 ms 뒤에 쓰므로, wall_time 열이 g1_logger CSV 와 같은 시간축에 붙으려면 «난 순간» 이어야 한다.
+    void event_at(double wall, const char* ev, int joint, const char* jname,
+                  float value, float limit, const char* detail = "") {
+        if (!f_) return;
+        std::fprintf(f_, "%.6f,%.4f,edge,%s,%d,%s,%.5f,%.5f,%s\n",
+                     wall, wall - t0_, ev, joint, jname ? jname : "", value, limit, detail);
+        std::fflush(f_);
+    }
 
     // ── 체류 시작: State_Mimic::enter() 가 정책 스레드를 띄우기 «전» 에 한 번 부른다 ─────────
     // stay_enter 사건 한 줄 + 1 Hz 표본의 기준을 새로 잡는다. State_Mimic::mon_reset() 이 체류마다 누적값

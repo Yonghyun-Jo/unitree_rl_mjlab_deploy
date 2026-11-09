@@ -18,6 +18,10 @@
 //      operator new · free · delete 0(예열 뒤, 걷기 · Space 점프 포함) — glibc 안쪽(open 등)까지 malloc 수준으로 센다.
 //      그 틱들이 기록한 감시 계수기(ArcadeWatchdog.h — last_tick_ns · fail_streak · policy_dead, enter 직후 0)도 대조.
 //      ORT Run 안쪽(부른 곳 = libonnxruntime)은 R-B5 대로 따로 세어 찍기만.
+//   ⑥ (G1_HAVE_ARCADE 빌드만) arcade_logger_drains_events_in_order — 로그 스레드 본체(ArcadeLogMailbox::run_logger, 정의 =
+//      src/ArcadeLink.cpp)를 실제로 돌린다: 안전 사건 4 종(qd_crit · qd_warn Passive/보류 · qd_warn_lowpose) + 창 하나를 넣고
+//      running=false 로 마지막 비우기 → SafetyLog CSV 에 사건이 들어온 순서대로 · wall_time = 사건 시각(event_at) · 이름 · 처분 글 ·
+//      관절 · 값 · 임계 그대로, spdlog 형식 오류 0(오류 처리기로 센다).
 //   g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include test_arcade_gate.cpp -lyaml-cpp -o /tmp/t && /tmp/t   (①~④)
 //   ⑤ = cmake -S .. -B /tmp/a -DG1_ARCADE_DIR=/home/piene/g1_arcade_2b && cmake --build /tmp/a --target test_arcade_gate &&
 //       G1_ARCADE_BUNDLE=/home/piene/g1_arcade_2b/build/bundle_bt5 /tmp/a/test_arcade_gate   (tests/run_unit_tests.sh 가 돌린다)
@@ -25,7 +29,10 @@
 #include "ArcadeGate.h"
 #if G1_HAVE_ARCADE
 #include "ArcadeLink.h"
+#include "ArcadeLogMailbox.h"
+#include "SafetyLog.h"
 #include "arcade_host/bundle_loader.h"  // arcade::md5_file(U5 시험)
+#include <spdlog/spdlog.h>
 #include <onnxruntime_cxx_api.h>
 #include <Eigen/Dense>
 #endif
@@ -678,6 +685,86 @@ static void arcade_link_tick_allocates_nothing() {
   std::remove(ipath.c_str());
   std::remove(spath.c_str());
 }
+
+// ── ⑥ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+static void arcade_logger_drains_events_in_order() {
+  const std::string csv = "/tmp/g1_arcade_gate_safety_" + std::to_string(getpid()) + ".csv";
+  setenv("G1_SAFETY_CSV", csv.c_str(), 1);
+  g1::SafetyLog::shared().open_from_env();
+  unsetenv("G1_SAFETY_CSV");
+  if (!g1::SafetyLog::shared().enabled()) { chk(false, "⑥ SafetyLog 열기"); return; }
+  static int spdlog_errors = 0;
+  spdlog::set_error_handler([](const std::string& m) { ++spdlog_errors; std::printf("  · ⑥ spdlog 오류: %s\n", m.c_str()); });
+  static const char* const kJ[3] = {"L_knee", "R_hip_pitch", "waist_yaw"};
+  struct In { int kind; const char* name; const char* verdict; int joint; float value, limit; double wall; };
+  const In ins[4] = {{g1::ArcadeSafetyEvent::QdCrit, "qd_crit", "-> Passive", 3, 21.25f, 19.f, 1700000000.125},
+                     {g1::ArcadeSafetyEvent::QdWarnHold, "qd_warn", "-> 처분 보류(아케이드)", 6, 12.5f, 12.f, 1700000000.250},
+                     {g1::ArcadeSafetyEvent::QdWarnPassive, "qd_warn", "-> Passive. 복귀=p→f→m", 12, 13.5f, 12.f, 1700000000.375},
+                     {g1::ArcadeSafetyEvent::QdWarnLowpose, "qd_warn_lowpose", "-> Passive. 복귀=p→f→m", 3, 14.75f, 12.f, 1700000000.500}};
+  g1::ArcadeLogMailbox mb;
+  for (int i = 0; i < 4; ++i) {
+    g1::ArcadeSafetyEvent e{};
+    e.kind = ins[i].kind;
+    g1::arcade_copy_text(e.name, ins[i].name);
+    g1::arcade_copy_text(e.verdict, ins[i].verdict);
+    e.joint = ins[i].joint;
+    e.jname = kJ[i % 3];
+    e.value = ins[i].value;
+    e.limit = ins[i].limit;
+    e.over_ticks = 5;
+    e.mode = 7;
+    e.safety_class = 1;
+    e.holds_qd = true;
+    e.z_fk = 0.42f;
+    e.tilt_deg = 61.f;
+    e.wall = ins[i].wall;
+    e.mono_ns = g1::arcade_wd::now_ns();
+    chk(mb.post_event(e), "⑥ post_event");
+  }
+  g1::ArcadeLogItem it{};
+  std::snprintf(it.diag, sizeof it.diag, "[diag] 50.0Hz  work p50=1.0 (시험)");
+  it.bad_ticks = 2;
+  it.skipped_ticks = 3;
+  it.dropped_event_bits = 0x220u;
+  it.dropped_event_count = 1;
+  chk(mb.post(it), "⑥ post(창)");
+  std::atomic<bool> running{false};   // 이미 내려감 = 한 번 비우고 끝(멈출 때의 마지막 비우기와 같은 길)
+  mb.run_logger(running);
+  g1::ArcadeLogItem left{};
+  g1::ArcadeSafetyEvent left_e{};
+  chk(!mb.take(left) && !mb.take_event(left_e), "⑥ run_logger 가 칸 · 고리를 다 비웠다");
+  g1::SafetyLog::shared().close();
+  std::vector<std::vector<std::string>> rows;
+  if (std::FILE* f = std::fopen(csv.c_str(), "r")) {
+    char line[512];
+    while (std::fgets(line, sizeof line, f)) {
+      std::vector<std::string> cols;
+      std::string cur;
+      for (const char* p = line; *p && *p != '\n'; ++p) {
+        if (*p == ',') { cols.push_back(cur); cur.clear(); } else cur.push_back(*p);
+      }
+      cols.push_back(cur);
+      if (cols.size() >= 9 && cols[2] == "edge") rows.push_back(cols);
+    }
+    std::fclose(f);
+  }
+  std::remove(csv.c_str());
+  chk(rows.size() == 4, "⑥ SafetyLog edge 줄 4 개");
+  for (size_t i = 0; i < rows.size() && i < 4; ++i) {
+    char wall[32], val[32], lim[32];
+    std::snprintf(wall, sizeof wall, "%.6f", ins[i].wall);
+    std::snprintf(val, sizeof val, "%.5f", ins[i].value);
+    std::snprintf(lim, sizeof lim, "%.5f", ins[i].limit);
+    char what[160];
+    std::snprintf(what, sizeof what, "⑥ %zu 번째 줄 = 들어온 순서 · wall_time = 사건 시각 · %s · 관절 %d · 값 · 임계 · 처분 글", i + 1, ins[i].name,
+                  ins[i].joint);
+    chk(rows[i][0] == wall && rows[i][3] == ins[i].name && rows[i][4] == std::to_string(ins[i].joint) && rows[i][5] == kJ[i % 3] &&
+            rows[i][6] == val && rows[i][7] == lim && rows[i][8] == ins[i].verdict,
+        what);
+  }
+  chk(spdlog_errors == 0, "⑥ spdlog 형식 오류 0(사건 4 종 · 창 줄)");
+  spdlog::set_error_handler(nullptr);
+}
 #endif
 
 int main() {
@@ -696,6 +783,9 @@ int main() {
   f0 = fail;
   arcade_link_tick_allocates_nothing();
   std::printf("%s arcade_link_tick_allocates_nothing\n", fail > f0 ? "FAIL" : "ok  ");
+  f0 = fail;
+  arcade_logger_drains_events_in_order();
+  std::printf("%s arcade_logger_drains_events_in_order\n", fail > f0 ? "FAIL" : "ok  ");
 #else
   std::printf("skip arcade_link_tick_allocates_nothing (아케이드 없는 빌드 — CMake 타깃 test_arcade_gate 가 돈다)\n");
 #endif

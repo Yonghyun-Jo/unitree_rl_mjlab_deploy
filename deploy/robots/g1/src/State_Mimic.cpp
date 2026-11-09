@@ -2412,6 +2412,8 @@ void State_Mimic::arcade_exit_()
 
 // 정책 스레드 — 아케이드 qd 가드. 옛 1867-1952 의 감시 · crit 래치 · 낮은 자세 Passive 를 그대로 두고, warn 래치의 풀기 · 처분만
 // core 등급으로 판정한다(ArcadeGate.h qd_warn_verdict). g_mode.force · g_m5.press 는 부르지 않는다.
+// 로그 · SafetyLog 사건은 여기서 쓰지 않는다(spdlog 동기 · fprintf+fflush = write syscall — 100 ms 감시기 아래 거짓 policy_stall 이 될
+// 수 있다): 사건 칸을 채워 우편함 고리에 넣고(할당 · 시스템 콜 0) 로그 스레드가 같은 줄을 찍는다(ArcadeLink.cpp arcade_event_emit).
 void State_Mimic::arcade_qd_guard_(const g1::arcade_gate::CoreSafety& cs)
 {
     const auto& jv = env->robot->data.joint_vel;
@@ -2425,34 +2427,40 @@ void State_Mimic::arcade_qd_guard_(const g1::arcade_gate::CoreSafety& cs)
     const bool crit_before = crit_l;
     js_qd_step(sev, js_over_ticks_, js_warn_run_, js_crit_run_, js_qd_warn_latched_, crit_l);
     if (crit_l) js_qd_crit_latched_.store(true);   // registered_check 가 Passive 로(하드 보호, 등급 무관)
+    // 사건 한 건 → 우편함 고리(이름 · 처분 글 = 고정 칸, 관절 이름 = 정적 표 포인터, 시각 = 지금). 고리가 차면 버리고 계수만.
+    auto post = [&](g1::ArcadeSafetyEvent::Kind kind, const char* name, const char* verdict, float limit) {
+        g1::ArcadeSafetyEvent e{};
+        e.kind = kind;
+        g1::arcade_copy_text(e.name, name);
+        g1::arcade_copy_text(e.verdict, verdict);
+        e.joint = qd_j;
+        e.jname = jname(qd_j);
+        e.value = qd_now;
+        e.limit = limit;
+        e.over_ticks = js_over_ticks_;
+        e.mode = cs.mode;
+        e.safety_class = cs.safety_class;
+        e.holds_qd = cs.holds_qd;
+        e.z_fk = g_z_fk;
+        e.tilt_deg = g_tilt.value();
+        e.wall = g1::SafetyLog::wall_now();          // system_clock — vDSO
+        e.mono_ns = g1::arcade_wd::now_ns();         // steady_clock — vDSO
+        (void)g_arc_log->post_event(e);
+    };
     if (!crit_before && crit_l) {
         const float lim = (qd_j >= 0 && qd_j < 29) ? js_qd_crit_v_[qd_j] : js_qd_crit_;
-        spdlog::error("[safety] qd_crit LATCHED  |qd|={:.2f} rad/s @ {} {} (crit {:.1f} 을 {}틱 연속 초과) -> Passive",
-                      qd_now, qd_j, jname(qd_j), lim, js_over_ticks_);
-        g1::SafetyLog::shared().event("qd_crit", qd_j, jname(qd_j), qd_now, lim, "-> Passive");
+        post(g1::ArcadeSafetyEvent::QdCrit, "qd_crit", "-> Passive", lim);
     }
     if (!js_qd_warn_latched_) return;
     const g1::arcade_gate::QdWarn v = g1::arcade_gate::qd_warn_verdict(cs, mode_table::row(fallback_mode_), g_z_fk, g_tilt.value());
     if (v == g1::arcade_gate::QdWarn::Release) { js_qd_warn_latched_ = false; return; }   // core 가 걷기(폴백 모드)로 돌아왔다
     const bool to_passive = (v == g1::arcade_gate::QdWarn::Passive);
     if (!warn_before) {
-        if (to_passive) {
-            spdlog::error("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과)  core mode{} 등급 {} "
-                          "z_fk={:.2f} 기울기={:.0f}° -> Passive. 복귀=p→f→m",
-                          qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_, cs.mode, cs.safety_class, g_z_fk, g_tilt.value());
-            g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
-        } else {
-            spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과)  core mode{}{} -> 처분 보류"
-                         "(아케이드 — 모드 강제 없음). core 가 걷기로 돌아오면 풀린다",
-                         qd_now, qd_j, jname(qd_j), js_qd_warn_, js_over_ticks_, cs.mode, cs.holds_qd ? " (점프·브리지)" : "");
-            g1::SafetyLog::shared().event("qd_warn", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> 처분 보류(아케이드)");
-        }
+        if (to_passive) post(g1::ArcadeSafetyEvent::QdWarnPassive, "qd_warn", "-> Passive. 복귀=p→f→m", js_qd_warn_);
+        else            post(g1::ArcadeSafetyEvent::QdWarnHold, "qd_warn", "-> 처분 보류(아케이드)", js_qd_warn_);
     }
-    if (to_passive && !js_lowpose_passive_.exchange(true) && warn_before) {
-        spdlog::error("[safety] qd_warn 래치 중 (core mode{} z_fk={:.2f} 기울기={:.0f}°) -> Passive. 복귀=p→f→m",
-                      cs.mode, g_z_fk, g_tilt.value());
-        g1::SafetyLog::shared().event("qd_warn_lowpose", qd_j, jname(qd_j), qd_now, js_qd_warn_, "-> Passive. 복귀=p→f→m");
-    }
+    if (to_passive && !js_lowpose_passive_.exchange(true) && warn_before)
+        post(g1::ArcadeSafetyEvent::QdWarnLowpose, "qd_warn_lowpose", "-> Passive. 복귀=p→f→m", js_qd_warn_);
 }
 
 // 정책 스레드 본체(enter() 의 정책 스레드가 rtprio 를 올린 직후 부른다). 체류 하나 = 이 함수 한 번.

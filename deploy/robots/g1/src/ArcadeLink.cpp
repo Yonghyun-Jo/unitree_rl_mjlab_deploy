@@ -267,14 +267,46 @@ static void arcade_log_emit(const ArcadeLogItem& it, uint32_t posts_dropped_new)
                              it.jname);
 }
 
+// 안전 사건 하나(정책 스레드 arcade_qd_guard_ 의 래치 에지) — 옛날 그 자리의 spdlog 줄과 같은 글 + «n ms 뒤에 찍음», SafetyLog 는
+// 사건 시각(event_at). 콘솔 줄 모양은 kind 로(State_Mimic.cpp arcade_qd_guard_ 가 채우는 칸과 짝).
+static void arcade_event_emit(const ArcadeSafetyEvent& e) {
+  const double late_ms = static_cast<double>(arcade_wd::now_ns() - e.mono_ns) * 1e-6;
+  const char* jn = e.jname ? e.jname : "?";
+  switch (e.kind) {
+    case ArcadeSafetyEvent::QdCrit:
+      spdlog::error("[safety] qd_crit LATCHED  |qd|={:.2f} rad/s @ {} {} (crit {:.1f} 을 {}틱 연속 초과) -> Passive  [{:.0f} ms 뒤에 찍음]",
+                    e.value, e.joint, jn, e.limit, e.over_ticks, late_ms);
+      break;
+    case ArcadeSafetyEvent::QdWarnPassive:
+      spdlog::error("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과)  core mode{} 등급 {} "
+                    "z_fk={:.2f} 기울기={:.0f}° -> Passive. 복귀=p→f→m  [{:.0f} ms 뒤에 찍음]",
+                    e.value, e.joint, jn, e.limit, e.over_ticks, e.mode, e.safety_class, e.z_fk, e.tilt_deg, late_ms);
+      break;
+    case ArcadeSafetyEvent::QdWarnHold:
+      spdlog::warn("[safety] qd_warn LATCHED  |qd|={:.2f} rad/s @ {} {} (warn {:.1f} 을 {}틱 연속 초과)  core mode{}{} -> 처분 보류"
+                   "(아케이드 — 모드 강제 없음). core 가 걷기로 돌아오면 풀린다  [{:.0f} ms 뒤에 찍음]",
+                   e.value, e.joint, jn, e.limit, e.over_ticks, e.mode, e.holds_qd ? " (점프·브리지)" : "", late_ms);
+      break;
+    case ArcadeSafetyEvent::QdWarnLowpose:
+      spdlog::error("[safety] qd_warn 래치 중 (core mode{} z_fk={:.2f} 기울기={:.0f}°) -> Passive. 복귀=p→f→m  [{:.0f} ms 뒤에 찍음]",
+                    e.mode, e.z_fk, e.tilt_deg, late_ms);
+      break;
+    default:
+      spdlog::error("[safety] {} (kind {}) |qd|={:.2f} @ {} {} limit {:.1f} {}  [{:.0f} ms 뒤에 찍음]", e.name, e.kind, e.value, e.joint,
+                    jn, e.limit, e.verdict, late_ms);
+  }
+  SafetyLog::shared().event_at(e.wall, e.name, e.joint, e.jname ? e.jname : "", e.value, e.limit, e.verdict);
+}
+
 void ArcadeLogMailbox::run_logger(std::atomic<bool>& running) {
   // FSM 스레드(SCHED_FIFO)에서 띄웠으면 그 우선순위를 물려받는다 — 보통(SCHED_OTHER) 으로 내린다(내리기는 권한이 필요 없다).
   sched_param sp{};
   sp.sched_priority = 0;
   if (const int rc = pthread_setschedparam(pthread_self(), SCHED_OTHER, &sp); rc != 0)
     spdlog::warn("[arcade] 로그 스레드를 SCHED_OTHER 로 못 내렸다: {} — 띄운 스레드의 우선순위로 돈다", std::strerror(rc));
-  uint32_t seen_dropped = posts_dropped();
+  uint32_t seen_dropped = posts_dropped(), seen_ev_dropped = events_dropped();
   ArcadeLogItem it;
+  ArcadeSafetyEvent ev;
   for (;;) {
     {
       std::unique_lock<std::mutex> lk(m_);
@@ -282,6 +314,12 @@ void ArcadeLogMailbox::run_logger(std::atomic<bool>& running) {
     }
     // running 을 내리는 쪽(exit)은 정책 스레드를 먼저 join 한다 — 내려간 것을 봤다면 그 마지막 post 도 보인다(아래 take 가 마지막 창).
     const bool stop = !running.load(std::memory_order_acquire);
+    while (take_event(ev)) arcade_event_emit(ev);   // 사건 먼저(대개 아래 창 안에서 났다) — 들어온 순서
+    if (const uint32_t ed = events_dropped(); ed != seen_ev_dropped) {
+      spdlog::error("[arcade] 안전 사건 {} 건을 못 실었다(고리 {} 칸이 참 — 로그 스레드가 못 돎). 콘솔 · SafetyLog 에 빠졌다",
+                    ed - seen_ev_dropped, kEventCap);
+      seen_ev_dropped = ed;
+    }
     if (take(it)) {
       const uint32_t pd = posts_dropped();
       arcade_log_emit(it, pd - seen_dropped);

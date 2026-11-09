@@ -7,7 +7,10 @@
 //   ④ stalled_after_limit          — 마지막 틱 뒤 100 ms 까지는 살아 있음, 그 뒤는 멈춤
 //   ⑤ fail_streak_trips_at_five    — 추론 실패(TickOut.ok false) 4 연속 = 살아 있음, 5 번째 = 죽음(inference_fail), 성공 한 번 = 0
 //   ⑥ mailbox_post_full_drops      — 비우지 않은 칸에 두 번째 post = false · 첫 항목 그대로 · 버린 수 1
-//   ⑦ mailbox_post_rt_safe         — post(정책 스레드 쪽)가 할당 0 · read/write 계열 syscall 0
+//   ⑦ mailbox_post_rt_safe         — post · post_event(정책 스레드 쪽)가 할당 0 · read/write 계열 syscall 0
+//   ⑨ mailbox_event_ring_order_and_drop — 안전 사건 고리: 들어온 순서 · 16 칸이 차면 버림 + 계수 · 넘침(wrap) · 고정 칸 글 자르기
+//   ⑩ mailbox_event_ring_spsc_threads   — 두 스레드(정책 · 로그 흉내)가 동시에 20 만 건(찬 고리면 보내는 쪽이 다시 시도 — 모두 건넌다):
+//      빠짐 · 겹침 없는 연속 순서 · 칸 찢김 없음
 //   ⑧ fault_hook_parse_and_apply   — G1_ARCADE_FAULT 형식(stall:<tick>:<ms> · fail:<tick>:<n>) · 적용(프로세스에 한 번)
 //   g++ -std=gnu++17 -O3 -DNDEBUG -Wall -Wextra -I../include -pthread test_arcade_watchdog.cpp -o /tmp/t && /tmp/t
 #include "ArcadeLogMailbox.h"
@@ -18,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <thread>
 
 static int fail = 0;
 static void chk(bool ok, const char* what) {
@@ -89,7 +93,7 @@ static void watchdog_not_armed_before_first_tick() {
 }
 
 static void stalled_after_limit() {
-  static_assert(wd::STALL_LIMIT_NS == 100'000'000, "100 ms = 정책 5 틱");
+  static_assert(wd::STALL_LIMIT_NS == 100'000'000, "100 ms(틱 끝 → 틱 끝) — 느린 틱 하나의 실제 예산은 ≈ 100 − dt ≈ 80 ms");
   chk(!wd::stalled(1'000'000'000, 1'099'000'000), "④ 99 ms = 살아 있음");
   chk(!wd::stalled(1'000'000'000, 1'100'000'000), "④ 정확히 100 ms = 살아 있음(엄격히 넘어야)");
   chk(wd::stalled(1'000'000'000, 1'100'000'001), "④ 100 ms + 1 ns = 멈춤");
@@ -151,9 +155,24 @@ static void mailbox_post_full_drops() {
   chk(mb.post(b) && mb.take(out) && std::strcmp(out.diag, "[diag] second") == 0, "⑥ 비운 뒤 다시 post · take");
 }
 
+static g1::ArcadeSafetyEvent event_with(int seq) {
+  g1::ArcadeSafetyEvent e{};
+  e.kind = seq % 4;
+  g1::arcade_copy_text(e.name, seq % 2 ? "qd_warn" : "qd_crit");
+  g1::arcade_copy_text(e.verdict, "-> Passive. 복귀=p→f→m");
+  e.joint = seq % 29;
+  e.value = static_cast<float>(seq);
+  e.limit = static_cast<float>(seq) * 2.f;
+  e.mono_ns = seq;
+  e.wall = static_cast<double>(seq) * 0.5;
+  return e;
+}
+
 static void mailbox_post_rt_safe() {
   g1::ArcadeLogMailbox mb;
   const g1::ArcadeLogItem a = item_with("[diag] rt", 0);
+  const g1::ArcadeSafetyEvent ev = event_with(7);
+  g1::ArcadeSafetyEvent ev_out{};
   g1::ArcadeLogItem out{};
   long w0, r0, w1, r1, wb0, rb0, wb1, rb1;
   io_pair(wb0, rb0);  // 재는 일 자체(fopen · fscanf)의 syscall 기준선
@@ -161,24 +180,97 @@ static void mailbox_post_rt_safe() {
   const long base_w = wb1 - wb0, base_r = rb1 - rb0;
   io_pair(w0, r0);
   g_count = true;
-  int ok = 0, dropped = 0;
+  int ok = 0, dropped = 0, ev_ok = 0, ev_dropped = 0;
   for (int i = 0; i < 1000; ++i) {
     if (mb.post(a)) ++ok; else ++dropped;  // 정책 스레드 쪽만 잰다(가득 찬 칸 = 버림 경로도 지난다)
     if (mb.post(a)) ++ok; else ++dropped;
+    for (int k = 0; k < 20; ++k)            // 사건 고리 16 칸 + 넘침 4(버림 경로)
+      if (mb.post_event(ev)) ++ev_ok; else ++ev_dropped;
     g_count = false;
     (void)mb.take(out);                     // 로그 스레드 쪽(재지 않는다)
+    while (mb.take_event(ev_out)) {}
     g_count = true;
   }
   g_count = false;
   io_pair(w1, r1);
   const bool io_ok = w0 >= 0 && r0 >= 0 && w1 >= 0 && r1 >= 0;
   const long dw = io_ok ? (w1 - w0) - base_w : 1000000, dr = io_ok ? (r1 - r0) - base_r : 1000000;
-  std::printf("  · ⑦ post 2000 번(실음 %d · 버림 %d): 할당 %ld · write syscall %ld · read syscall %ld\n", ok, dropped,
-              g_allocs.load(), dw, dr);
+  std::printf("  · ⑦ post 2000 번(실음 %d · 버림 %d) + post_event 20000 번(실음 %d · 버림 %d): 할당 %ld · write syscall %ld · "
+              "read syscall %ld\n",
+              ok, dropped, ev_ok, ev_dropped, g_allocs.load(), dw, dr);
   chk(ok == 1000 && dropped == 1000, "⑦ 비운 뒤 첫 post 는 실리고 둘째는 버려진다");
+  chk(ev_ok == 16000 && ev_dropped == 4000 && mb.events_dropped() == 4000, "⑦ 사건 고리 16 칸까지 실리고 넘침은 버림 + 계수");
   chk(g_allocs.load() == 0, "⑦ post 할당 0");
   chk(dw <= 0 && dr <= 0, "⑦ post read/write syscall 0");
   static_assert(std::atomic<int>::is_always_lock_free, "칸 상태는 lock-free 원자");
+}
+
+static void mailbox_event_ring_order_and_drop() {
+  g1::ArcadeLogMailbox mb;
+  g1::ArcadeSafetyEvent out{};
+  chk(!mb.take_event(out), "⑨ 빈 고리 take_event = false");
+  for (int i = 0; i < 3; ++i) chk(mb.post_event(event_with(i)), "⑨ 빈 고리에 post_event = true");
+  bool order = true;
+  for (int i = 0; i < 3; ++i)
+    order = order && mb.take_event(out) && out.value == float(i) && out.kind == i % 4 && out.joint == i % 29 &&
+            std::strcmp(out.name, i % 2 ? "qd_warn" : "qd_crit") == 0 && std::strcmp(out.verdict, "-> Passive. 복귀=p→f→m") == 0;
+  chk(order && !mb.take_event(out), "⑨ 들어온 순서 · 칸 그대로 · 다 비면 false");
+  static_assert(g1::ArcadeLogMailbox::kEventCap == 16, "고리 16 칸");
+  for (int i = 0; i < 16; ++i) chk(mb.post_event(event_with(100 + i)), "⑨ 16 칸까지 실린다");
+  chk(!mb.post_event(event_with(999)) && mb.events_dropped() == 1, "⑨ 17 번째 = 버림 · 계수 1");
+  bool full_order = true;
+  for (int i = 0; i < 16; ++i) full_order = full_order && mb.take_event(out) && out.value == float(100 + i);
+  chk(full_order && !mb.take_event(out), "⑨ 찬 고리를 순서대로 다 비운다(버린 999 는 없다)");
+  // 넘침(wrap): 5 넣고 5 빼기를 많이 — 인덱스가 칸 수를 수천 번 돈다
+  bool wrap = true;
+  int seq = 0, got = 0;
+  for (int c = 0; c < 4000 && wrap; ++c) {
+    for (int k = 0; k < 5; ++k) wrap = wrap && mb.post_event(event_with(seq++));
+    for (int k = 0; k < 5; ++k) wrap = wrap && mb.take_event(out) && out.value == float(got++);
+  }
+  chk(wrap && got == 20000, "⑨ 2 만 건 넘침 — 순서 · 값 그대로");
+  // 고정 칸 글 자르기: 넘치는 글은 잘리고 늘 NUL
+  g1::ArcadeSafetyEvent e{};
+  g1::arcade_copy_text(e.name, "0123456789012345678901234567890123456789");
+  chk(std::strlen(e.name) == sizeof(e.name) - 1 && e.name[sizeof(e.name) - 1] == '\0', "⑨ 긴 이름 = 23 자로 잘림 · NUL");
+  g1::arcade_copy_text(e.name, nullptr);
+  chk(e.name[0] == '\0', "⑨ nullptr = 빈 글");
+}
+
+static void mailbox_event_ring_spsc_threads() {
+  g1::ArcadeLogMailbox mb;
+  constexpr int kN = 200000;
+  std::atomic<bool> done{false};
+  int received = 0, last = -1;
+  bool ok = true;
+  std::thread consumer([&] {
+    g1::ArcadeSafetyEvent out{};
+    for (;;) {
+      const bool fin = done.load(std::memory_order_acquire);
+      while (mb.take_event(out)) {
+        const int s = static_cast<int>(out.value);
+        // 연속 순서(빠짐 · 겹침 없음) · 찢김 없음(칸끼리 같은 seq 에서 나온 값)
+        ok = ok && s == last + 1 && out.limit == float(s) * 2.f && out.mono_ns == s && out.joint == s % 29 && out.kind == s % 4 &&
+             out.wall == double(s) * 0.5;
+        last = s;
+        ++received;
+      }
+      if (fin) break;
+    }
+  });
+  long full = 0;
+  for (int i = 0; i < kN; ++i) {
+    const g1::ArcadeSafetyEvent e = event_with(i);
+    while (!mb.post_event(e)) {   // 찬 고리 = 받는 쪽이 비울 때까지 다시(정책 스레드는 이러지 않는다 — 시험만)
+      ++full;
+      std::this_thread::yield();
+    }
+  }
+  done.store(true, std::memory_order_release);
+  consumer.join();
+  std::printf("  · ⑩ 보냄 %d · 받음 %d · 찬 고리 만남 %ld 번\n", kN, received, full);
+  chk(ok, "⑩ 연속 순서(빠짐 · 겹침 없음) · 칸 찢김 없음");
+  chk(received == kN, "⑩ 받은 수 = 보낸 수");
 }
 
 static void fault_hook_parse_and_apply() {
@@ -248,6 +340,8 @@ int main() {
       {fail_streak_trips_at_five, "fail_streak_trips_at_five"},
       {mailbox_post_full_drops, "mailbox_post_full_drops"},
       {mailbox_post_rt_safe, "mailbox_post_rt_safe"},
+      {mailbox_event_ring_order_and_drop, "mailbox_event_ring_order_and_drop"},
+      {mailbox_event_ring_spsc_threads, "mailbox_event_ring_spsc_threads"},
       {fault_hook_parse_and_apply, "fault_hook_parse_and_apply"},
   };
   for (const T& t : tests) {

@@ -22,7 +22,11 @@
 namespace g1 {
 namespace arcade_wd {
 
-// 마지막 정책 틱이 끝난 뒤 이만큼 새 틱이 안 끝나면 «멈춤»(100 ms = 50 Hz 정책 5 틱).
+// 마지막 정책 틱이 «끝난» 뒤 이만큼 새 틱이 안 «끝나면» 멈춤.
+// 🔴 느린 틱 하나가 실제로 쓸 수 있는 시간은 100 ms 가 아니라 ≈ STALL_LIMIT − dt ≈ 80 ms(50 Hz)다: last_tick_ns 는 틱 «끝» 에
+//   찍히고, 다음 틱은 자기 예정 시각(≈ 앞 틱 시작 + dt) 전엔 시작하지 않는다. 그래서 그 틱이 끝나는 순간의 나이 ≈ (dt − 앞 틱 일) +
+//   이 틱 일 — 이 틱 일이 대략 80 ms(+ 앞 틱 일)를 넘으면 트립한다. «정책 5 틱 = 100 ms» 로 읽으면 여유를 20 ms 크게 본다.
+//   (com1 sim2sim 실측: 80 ms 주입 멈춤 → 틱 간격 94 ms · 트립 없음. 값 · 정의는 Ruling Q2 대로 100 ms 고정.)
 constexpr int64_t STALL_LIMIT_NS = 100'000'000;
 // 추론 실패(TickOut.ok == false) 연속 이만큼이면 «죽음»(5 틱 = 0.1 s — 그동안 1 kHz 는 직전 q_des).
 constexpr int FAIL_LIMIT = 5;
