@@ -1,0 +1,3 @@
+[submodule "deploy/robots/g1/third_party/g1_arcade"]
+	path = deploy/robots/g1/third_party/g1_arcade
+	url = git@github.com:Yonghyun-Jo/g1_arcade.git
