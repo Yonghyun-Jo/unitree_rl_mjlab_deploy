@@ -19,6 +19,9 @@
 #   창 ctrl 로 넘기는 환경 변수(있을 때만, 없으면 창에서 지움): G1_ARCADE_FAULT(시험 주입 — lo 에서만, 실기면 거부) ·
 #   G1_ARCADE_STATUS_SHM · G1_ARCADE_NAMES(중계에도 같은 경로를 준다) · G1_SAFETY_CSV.
 #   (tmux 창은 이 스크립트가 아니라 tmux 서버의 환경을 받는다 — 그래서 필요한 것만 이 스크립트가 직접 넘긴다.)
+#   🔴 창 ctrl 의 G1_* 는 허용 목록만 남긴다: 이 스크립트가 넣는 G1_ARCADE · G1_ARCADE_BUNDLE · G1_POLICY_SLOT · G1_STATE_CSV +
+#   위 넷 중 넘긴 것. 그 밖 G1_*(실험용 덮어쓰기 G1_IMU_CAL_DEG · G1_FOOTZ_SRC · G1_OBS_CSV · G1_NO_RT · G1_DIAG_LOAD …)는 tmux
+#   서버 환경에 남아 있어도 지우고, 지운 이름을 창 ctrl 첫 줄 «[run] 창 ctrl 환경 G1_* …» 에 보인다(기동 판정이 다시 찍는다).
 #
 # 거부(아무것도 띄우지 않고 끝 코드 1): 묶음 파일 md5 ≠ manifest · --slot ≠ 묶음 처음 role(walk) 꾸러미의 슬롯 · 슬롯
 #   exported/policy.onnx 가 없거나 md5 ≠ 그 꾸러미 skill.json onnx_md5 · g1_ctrl 빌드 없음 · 아케이드 없이 빌드(G1_ARCADE_DIR 없음) ·
@@ -96,7 +99,10 @@ judge_startup() {
   l_ml="$(grep -m1 -F '[arcade] mlockall=' <<< "$L" | msg_of)"
   l_rt="$(grep -m1 -F '[rt] FSM 1kHz' <<< "$L" | msg_of)"
   l_fault="$(grep -m1 -F '시험 주입 켜짐' <<< "$L" | msg_of)"
+  l_env="$(grep -m1 -F '[run] 창 ctrl 환경 G1_* — ' <<< "$L")"
   echo "[run] ── 기동 로그 다섯 줄 — ①②③⑤ = g1_ctrl 실행 로그에서 본 줄 · ④ = 빌드 캐시에서 읽은 줄(실행 로그 아님) ──"
+  if [[ -n "$l_env" ]]; then echo "  · ${l_env#\[run\] }"
+  else bad "창 ctrl 환경 정리 줄(«[run] 창 ctrl 환경 G1_* — …»)이 없다 — 허용 목록 밖 G1_* 가 g1_ctrl 에 남았는지 모른다"; fi
   if [[ -n "$l_slot" ]]; then ok "① $l_slot"; else bad "① [slot] G1_POLICY_SLOT='$slot' 줄이 없다"; fi
   if [[ -n "$l_arc" && "$l_arc" == *"manifest md5 $md5"* ]]; then ok "② $l_arc"
   else bad "② [arcade] bundle=$bundle … manifest md5 $md5 줄이 없다${l_arc:+ (있는 줄: $l_arc)}"; fi
@@ -137,9 +143,24 @@ if [[ "${1:-}" == "__ctrl" ]]; then
   GO="$2" NET="$3" BUNDLE="$4" SLOT="$5" CSV="$6" PART="$7" G1BIN="$8"
   shift 8
   wait_flag "$GO" || { echo "[run] 🔴 기동 신호가 10 s 안에 안 왔다 — g1_ctrl 을 띄우지 않는다"; exit 1; }
-  for v in "${PASS_VARS[@]}"; do unset "$v"; done
+  # 허용 목록 = 아래 export 넷(KEEP) + launcher 가 KEY=VALUE 로 넘긴 PASS_VARS. 넘긴 KEY 가 PASS_VARS 밖이면 띄우지 않는다.
+  KEEP=(G1_ARCADE G1_ARCADE_BUNDLE G1_POLICY_SLOT G1_STATE_CSV)
+  PASSED=()
+  for kv in "$@"; do
+    k="${kv%%=*}"
+    if [[ "$kv" != *=* || " ${PASS_VARS[*]} " != *" $k "* ]]; then
+      echo "[run] 🔴 창 ctrl 로 넘길 수 없는 값 '$kv' — 넘길 수 있는 것: ${PASS_VARS[*]}. g1_ctrl 을 띄우지 않는다"; exit 1
+    fi
+    PASSED+=("$k")
+  done
+  GONE=()
+  while IFS= read -r v; do   # 창 환경(= tmux 서버 환경)의 G1_* 를 모두 지우고, 다시 넣지 않을 이름만 모은다
+    unset "$v"
+    [[ " ${KEEP[*]} ${PASSED[*]} " == *" $v "* ]] || GONE+=("$v")
+  done < <(compgen -e | grep -E '^G1_' | sort)
   for kv in "$@"; do export "${kv?}"; done   # KEY=VALUE 를 그대로 export
   export G1_ARCADE=1 G1_ARCADE_BUNDLE="$BUNDLE" G1_POLICY_SLOT="$SLOT" G1_STATE_CSV="$CSV"
+  echo "[run] 창 ctrl 환경 G1_* — 허용 목록(${KEEP[*]}${PASSED[*]:+ ${PASSED[*]}}) 밖 지움: ${GONE[*]:-없음}"
   echo "[run] g1_ctrl --network=$NET · G1_ARCADE=1 · G1_ARCADE_BUNDLE=$BUNDLE · G1_POLICY_SLOT=$SLOT · G1_STATE_CSV=$CSV${*:+ · $*}"
   # Ctrl-C · 창 닫힘(HUP)은 g1_ctrl 이 받아 끝나고, 이 셸은 남아 tty 복구 · .part 이름 바꾸기를 한다.
   trap ':' INT HUP

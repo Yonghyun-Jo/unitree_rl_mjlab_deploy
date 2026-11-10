@@ -78,6 +78,13 @@ bool ArcadeLink::open(const OpenArgs& a, std::string& err, std::string& summary)
   }
   // 시험 주입 훅(V2) — 기동 때 한 번만 읽는다(틱 경로는 미리 읽은 값의 분기뿐). 오타로 주입 없이 시험이 돌지 않게 틀린 형식은 거부.
   fault_ = arcade_wd::FaultInjector{};
+  // 🔴 실기 NIC(lo 가 아님)에서는 설정돼 있기만 해도 거부 — 형식 판정보다 먼저(틀린 값이어도 «lo 에서만» 이 이유)
+  if (const char* fe = std::getenv("G1_ARCADE_FAULT"); fe && a.network_iface != "lo") {
+    err = std::string("G1_ARCADE_FAULT='") + fe + "' 가 설정돼 있는데 --network=" +
+          (a.network_iface.empty() ? std::string("(모름)") : a.network_iface) +
+          " — 시험 주입은 sim2sim(--network=lo)에서만. 실기에서는 G1_ARCADE_FAULT 를 지우고 다시 띄울 것";
+    return false;
+  }
   if (const char* fe = std::getenv("G1_ARCADE_FAULT"); !arcade_wd::parse_fault(fe, fault_.f)) {
     err = std::string("G1_ARCADE_FAULT='") + fe + "' 형식이 틀렸다 — stall:<tick>:<ms> | fail:<tick>:<n> (tick ≥ 0 · ms/n ≥ 1), 끄려면 지울 것";
     return false;

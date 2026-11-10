@@ -725,6 +725,45 @@ static void arcade_link_tick_allocates_nothing() {
   std::remove(spath.c_str());
 }
 
+// ── ⑦ 시험 주입은 lo 에서만(최종 검토 C7) — 묶음 없이 돈다: 거부는 묶음 · 상태 칸을 열기 전 ──────────────────────────────────
+static void arcade_link_refuses_fault_off_lo() {
+  const char* had_status = std::getenv("G1_ARCADE_STATUS_SHM");
+  const std::string keep_status = had_status ? had_status : "";
+  setenv("G1_ARCADE_STATUS_SHM", "0", 1);   // lo 갈래가 거부 뒤로 넘어가도 진짜 상태 칸을 안 건드린다
+  g1::ArcadeLink::OpenArgs a;
+  a.bundle_dir = "/nonexistent_g1_arcade_gate_bundle";   // lo 갈래는 여기서(묶음 열기) 실패해야 한다 = 주입 검사를 지났다
+  a.slot_name = "s";
+  a.joint_ids_map.resize(29);
+  for (int i = 0; i < 29; ++i) a.joint_ids_map[i] = static_cast<float>(i);
+  std::string err, summary;
+  const char* const off_lo = "시험 주입은 sim2sim(--network=lo)에서만";
+  for (const char* v : {"stall:10:200", "fail:3:5", "", "typo"}) {
+    setenv("G1_ARCADE_FAULT", v, 1);
+    for (const char* net : {"eth0", "enp3s0", ""}) {
+      g1::ArcadeLink l;
+      a.network_iface = net;
+      const bool opened = l.open(a, err, summary);
+      char what[200];
+      std::snprintf(what, sizeof what, "⑦ G1_ARCADE_FAULT='%s' · --network=%s → 기동 거부 + «lo 에서만»", v, *net ? net : "(빈 값)");
+      chk(!opened && err.find(off_lo) != std::string::npos && err.find(std::string("G1_ARCADE_FAULT='") + v + "'") != std::string::npos,
+          what);
+    }
+    g1::ArcadeLink l;
+    a.network_iface = "lo";
+    chk(!l.open(a, err, summary) && err.find(off_lo) == std::string::npos,
+        (std::string("⑦ G1_ARCADE_FAULT='") + v + "' · lo → 주입 검사는 지난다(뒤 단계에서 실패: " + err + ")").c_str());
+  }
+  unsetenv("G1_ARCADE_FAULT");
+  {
+    g1::ArcadeLink l;
+    a.network_iface = "eth0";
+    chk(!l.open(a, err, summary) && err.find(off_lo) == std::string::npos,
+        ("⑦ G1_ARCADE_FAULT 없음 · eth0 → 주입 거부 아님(묶음 단계에서 실패: " + err + ")").c_str());
+  }
+  if (had_status) setenv("G1_ARCADE_STATUS_SHM", keep_status.c_str(), 1);
+  else unsetenv("G1_ARCADE_STATUS_SHM");
+}
+
 // ── ⑥ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 static void arcade_logger_drains_events_in_order() {
   const std::string csv = "/tmp/g1_arcade_gate_safety_" + std::to_string(getpid()) + ".csv";
@@ -825,6 +864,9 @@ int main() {
   f0 = fail;
   arcade_logger_drains_events_in_order();
   std::printf("%s arcade_logger_drains_events_in_order\n", fail > f0 ? "FAIL" : "ok  ");
+  f0 = fail;
+  arcade_link_refuses_fault_off_lo();
+  std::printf("%s arcade_link_refuses_fault_off_lo\n", fail > f0 ? "FAIL" : "ok  ");
 #else
   std::printf("skip arcade_link_tick_allocates_nothing (아케이드 없는 빌드 — CMake 타깃 test_arcade_gate 가 돈다)\n");
 #endif

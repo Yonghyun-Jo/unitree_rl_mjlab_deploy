@@ -49,6 +49,9 @@ for t in test_height_estimator test_motion_preview test_safety_policy; do   # Ei
   [ -f $t.cpp ] && run $t -std=gnu++17 -O2 -Wall -Wextra -Werror=switch -I../include -I/usr/include/eigen3 $t.cpp
 done
 [ -f test_no_mode_ordinals.sh ] && { bash test_no_mode_ordinals.sh && echo "ok   no_mode_ordinals" || { echo "FAIL no_mode_ordinals"; fail=1; }; }
+# 아케이드 기동 스크립트 창 ctrl 환경 — 허용 목록 밖 G1_*(실험용 덮어쓰기)가 g1_ctrl 에 닿지 않는가(tmux · g1_ctrl 없이)
+[ -f test_run_g1_arcade_env.sh ] && { bash test_run_g1_arcade_env.sh >"$OUT/run_env.out" 2>&1 && echo "ok   run_g1_arcade_env" \
+  || { echo "FAIL run_g1_arcade_env"; tail -8 "$OUT/run_env.out"; fail=1; }; }
 # shm 바이트 배치(C++ 구조체 ↔ python FMT) + policy_slot push 게이트 + 헤드리스 도구의 t=0 판정 — 표준 라이브러리만 쓴다(uv 불필요)
 for t in test_gui_shm_layout test_status_shm_layout test_arcade_shm_layout test_vr_shm_layout test_policy_slot_gate test_headless_pre_t0 test_masked_gui_posture_rows test_gui_clip_order; do
   [ -f $t.py ] && { python3 $t.py >"$OUT/$t.out" 2>&1 && echo "ok   $t" || { echo "FAIL $t"; tail -5 "$OUT/$t.out"; fail=1; }; }

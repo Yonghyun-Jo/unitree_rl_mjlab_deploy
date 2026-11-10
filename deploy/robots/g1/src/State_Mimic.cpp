@@ -29,7 +29,7 @@
 #include <optional>    // g_commanded_upright → SafetyPolicy.h commanded_upright
 #include <string>
 
-extern std::string g_network_iface;   // main.cpp — 진단 부하 인터록 전용 (조작 경로 아님)
+extern std::string g_network_iface;   // main.cpp — 진단 부하 · 아케이드 시험 주입 인터록 전용 (조작 경로 아님)
 #include <string>
 #include <cstdint>     // GUI shared-memory struct
 #include <cstdio>      // printf (base_vel command readout)
@@ -2326,6 +2326,7 @@ void State_Mimic::arcade_open_()
     a.slot_name = slot_name_;
     for (int i = 0; i < 29; ++i) { a.kp[i] = rd.joint_stiffness[i]; a.kd[i] = rd.joint_damping[i]; }
     a.joint_ids_map = rd.joint_ids_map;
+    a.network_iface = g_network_iface;   // lo 가 아니면 ArcadeLink::open 이 G1_ARCADE_FAULT 를 거부한다(실기 주입 금지)
     std::string err, summary;
     auto* link = new g1::ArcadeLink();   // 프로세스 끝까지 산다(지우지 않는다 — env 와 같다)
     if (!link->open(a, err, summary)) {

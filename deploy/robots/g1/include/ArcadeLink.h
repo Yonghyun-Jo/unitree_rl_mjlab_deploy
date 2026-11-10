@@ -55,6 +55,7 @@ class ArcadeLink {
     std::array<float, 29> kp{}, kd{};      // 슬롯 deploy.yaml(env->robot->data.joint_stiffness/damping)
     std::vector<float> joint_ids_map;      // 슬롯 deploy.yaml — 0..28 항등이어야 한다
     std::string intent_path = ARCADE_INTENT_PATH;
+    std::string network_iface;             // g1_ctrl --network(main.cpp g_network_iface) — "lo" 가 아니면 G1_ARCADE_FAULT 거부
   };
   struct Tick {
     ArcadeHost::TickOut out{};   // ok · tick_us · info(이 틱 end_tick 뒤)
@@ -66,6 +67,8 @@ class ArcadeLink {
   ArcadeLink();
   // 기동(정책 스레드 밖, 1 회). 실패하면 false + err(기동 거부 이유 — 호출부가 die_startup). 성공하면 summary 에 기동 로그 한 줄.
   //   시험 주입 G1_ARCADE_FAULT 도 여기서 한 번 읽는다(ArcadeWatchdog.h — 형식이 틀리면 거부, 켜졌으면 fault() 로 호출부가 기동 로그).
+  //   🔴 network_iface 가 "lo"(sim2sim)가 아니면 G1_ARCADE_FAULT 가 설정돼 있기만 해도(값 무관) 거부 — 손으로 띄운 실기 g1_ctrl 에서
+  //   주입이 돌지 않게(기동 스크립트의 같은 거부는 스크립트를 거칠 때만 막는다).
   bool open(const OpenArgs& a, std::string& err, std::string& summary);
   // 체류 시작(FSM 스레드, 정책 스레드 전). 측정 자세 q 에 비유한 값이 있으면 false — 체류를 시작하지 않는다(refused() = true,
   // 호출부가 kp 0 · Passive). 그 밖엔 ArcadeHost::enter(측정) · 의도 칸 체류 시작 리셋 · 직전 q 칸 = 측정 q · 상태 칸 틱 0.
